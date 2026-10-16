@@ -86,6 +86,7 @@ func ingest(args []string) {
 	collection := fs.String("collection", "", "collection name")
 	file := fs.String("file", "", "geojson FeatureCollection file")
 	chunkSize := fs.Int("chunk-size", 50000, "features per chunk")
+	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
 	fs.Parse(args)
 	if *collection == "" || *file == "" {
 		fs.Usage()
@@ -97,6 +98,11 @@ func ingest(args []string) {
 		fatal(err)
 	}
 	defer st.Close()
+	if *runMigrations {
+		if err := st.Migrate(ctx); err != nil {
+			fatal(err)
+		}
+	}
 	if err := st.EnsureCollection(ctx, *collection); err != nil {
 		fatal(err)
 	}
