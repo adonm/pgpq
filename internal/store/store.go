@@ -53,6 +53,13 @@ type ChunkRow struct {
 	Data         []byte
 }
 
+type ChunkMeta struct {
+	ID           int64
+	FeatureCount int
+	MinX, MinY   float64
+	MaxX, MaxY   float64
+}
+
 type CollectionInfo struct {
 	Name         string
 	ChunkCount   int64
@@ -61,7 +68,7 @@ type CollectionInfo struct {
 	MaxX, MaxY   *float64
 }
 
-type TextMatch struct {
+type FeatureMatch struct {
 	ChunkID int64
 	Ord     int
 }
@@ -178,6 +185,22 @@ func (s *Store) PutChunkText(ctx context.Context, chunkID int64, docs []string) 
 	return err
 }
 
+func (s *Store) PutChunkProps(ctx context.Context, chunkID int64, docs []string) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	ords := make([]int32, len(docs))
+	for i := range ords {
+		ords[i] = int32(i)
+	}
+	_, err := s.Pool.Exec(ctx, `
+		insert into chunk_props (chunk_id, feature_ord, props)
+		select $1, ord, doc::jsonb
+		from unnest($2::int[], $3::text[]) as input(ord, doc)
+		where doc <> '' and doc <> '{}' and doc <> 'null'`, chunkID, ords, docs)
+	return err
+}
+
 func bboxPredicate(bbox *[4]float64, next int) (string, []any) {
 	if bbox == nil {
 		return "", nil
@@ -199,6 +222,31 @@ func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64,
 	query += fmt.Sprintf(` order by id limit $%d`, len(args)+1)
 	args = append(args, limit)
 	return s.scanChunks(ctx, query, args...)
+}
+
+func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit int) ([]ChunkMeta, error) {
+	query := `select id, feature_count, minx, miny, maxx, maxy from chunks where collection = $1`
+	args := []any{collection}
+	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
+		query += fragment
+		args = append(args, extra...)
+	}
+	query += fmt.Sprintf(` order by id limit $%d`, len(args)+1)
+	args = append(args, limit)
+	rows, err := s.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChunkMeta
+	for rows.Next() {
+		var meta ChunkMeta
+		if err := rows.Scan(&meta.ID, &meta.FeatureCount, &meta.MinX, &meta.MinY, &meta.MaxX, &meta.MaxY); err != nil {
+			return nil, err
+		}
+		out = append(out, meta)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ChunksByIDs(ctx context.Context, ids []int64) ([]ChunkRow, error) {
@@ -226,26 +274,44 @@ func (s *Store) scanChunks(ctx context.Context, query string, args ...any) ([]Ch
 	return out, rows.Err()
 }
 
-func (s *Store) TextMatches(ctx context.Context, collection, query string, bbox *[4]float64, limit int) ([]TextMatch, error) {
-	sql := `select ct.chunk_id, ct.feature_ord
-		from chunk_text ct
-		join chunks ch on ch.id = ct.chunk_id
-		where ch.collection = $1 and ct.tsv @@ websearch_to_tsquery('simple', $2)`
-	args := []any{collection, query}
+func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64, query, filter string, limit, offset int) ([]FeatureMatch, error) {
+	if query == "" && filter == "" {
+		return nil, nil
+	}
+	sql := `select m.chunk_id, m.feature_ord from `
+	args := []any{collection}
+	switch {
+	case query != "" && filter != "":
+		sql += `chunk_text m
+			join chunk_props p on p.chunk_id = m.chunk_id and p.feature_ord = m.feature_ord
+			join chunks ch on ch.id = m.chunk_id
+			where ch.collection = $1 and m.tsv @@ websearch_to_tsquery('simple', $2) and p.props @> $3::jsonb`
+		args = append(args, query, filter)
+	case query != "":
+		sql += `chunk_text m
+			join chunks ch on ch.id = m.chunk_id
+			where ch.collection = $1 and m.tsv @@ websearch_to_tsquery('simple', $2)`
+		args = append(args, query)
+	default:
+		sql += `chunk_props m
+			join chunks ch on ch.id = m.chunk_id
+			where ch.collection = $1 and m.props @> $2::jsonb`
+		args = append(args, filter)
+	}
 	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
 		sql += fragment
 		args = append(args, extra...)
 	}
-	sql += fmt.Sprintf(` order by ct.chunk_id, ct.feature_ord limit $%d`, len(args)+1)
-	args = append(args, limit)
+	sql += fmt.Sprintf(` order by m.chunk_id, m.feature_ord limit $%d offset $%d`, len(args)+1, len(args)+2)
+	args = append(args, limit, offset)
 	rows, err := s.Pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []TextMatch
+	var out []FeatureMatch
 	for rows.Next() {
-		var match TextMatch
+		var match FeatureMatch
 		if err := rows.Scan(&match.ChunkID, &match.Ord); err != nil {
 			return nil, err
 		}

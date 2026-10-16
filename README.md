@@ -10,6 +10,8 @@ Goal: the smallest Go package that provides performant 1000x scaling of the spat
 - Chunk bounds are plain float columns plus an S2 cell covering stored as an `int8multirange`; a GiST index prunes candidate chunks with one range-overlap predicate.
 - The app computes the S2 coverings in Go, so the database only compares ranges and floats: no geometry parsing, no PostGIS. Real spatial work happens in memory, over the FlatGeobuf Hilbert R-trees.
 - Fulltext lives in a sidecar table (`tsvector`/GIN) populated at ingest; `?q=` intersects text matches with chunk and feature level spatial filtering.
+- Attribute equality filters live in a `jsonb`/GIN sidecar (`chunk_props`); any non-reserved query parameter becomes a containment filter intersected with the spatial and text paths.
+- Responses page with `links` (`rel=next`), so GDAL and other OGC clients walk the entire collection.
 - The server is one small Go binary: huma for the OGC metadata endpoints, streaming handlers for items, tiles, and raw chunks.
 
 The core path needs zero PostgreSQL extensions and runs on plain Amazon Aurora PostgreSQL (16–18); optional accelerators are discovered at startup via `pg_available_extensions`.
@@ -29,6 +31,7 @@ just serve          # http://localhost:8080
 curl localhost:8080/collections
 curl "localhost:8080/collections/bench/items?bbox=-10,45,10,55&limit=100"
 curl 'localhost:8080/collections/bench/items?q="feature-42"'
+curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
 ```
 
 ## Endpoints
@@ -39,10 +42,10 @@ curl 'localhost:8080/collections/bench/items?q="feature-42"'
 | `/conformance` | OGC API Features conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&q=` | GeoJSON features, bbox and fulltext filtered |
+| `/collections/{id}/items?bbox=&limit=&offset=&q=&{property}=` | GeoJSON features: bbox, fulltext, property equality filters, paged |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile |
-| `/openapi.json` | OpenAPI definition |
+| `/api` | OpenAPI 3.1 definition (OGC content type) |
 
 ## Benchmarks
 
@@ -55,7 +58,7 @@ curl 'localhost:8080/collections/bench/items?q="feature-42"'
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext sidecar (`?q=`), OGC API Features, MVT tiles, capability probing, hk git hooks. Next: attribute filter pushdown via a `jsonb`/GIN sidecar, Aurora benchmark numbers.
+Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext (`?q=`) and property filter (`jsonb`/GIN) sidecars, OGC API Features with next-link paging, MVT tiles, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, bbox page ~2s, tiles ~0.6s. Next: CQL2 range filters, Aurora client numbers.
 
 ## License
 

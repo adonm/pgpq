@@ -6,7 +6,7 @@ The smallest Go package that provides performant 1000x scaling of the spatial re
 
 ## Development setup
 
-Requirements: [mise](https://mise.jdx.dev) (installs Go, just and hk per `mise.toml`), Docker, and optionally GDAL (`apt install gdal-bin`) for benchmarks.
+Requirements: [mise](https://mise.jdx.dev) (installs Go, just and hk per `mise.toml`) and Docker. Benchmarks use GDAL: a local install, or the bench script pulls `ghcr.io/osgeo/gdal:alpine-small-latest`.
 
 ```sh
 mise install

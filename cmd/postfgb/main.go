@@ -192,6 +192,17 @@ func putChunk(ctx context.Context, st *store.Store, collection string, batch []c
 	if err := st.PutChunkText(ctx, id, docs); err != nil {
 		fatal(err)
 	}
+	props := make([]string, len(batch))
+	for i := range batch {
+		body, err := json.Marshal(batch[i].Properties)
+		if err != nil {
+			fatal(err)
+		}
+		props[i] = string(body)
+	}
+	if err := st.PutChunkProps(ctx, id, props); err != nil {
+		fatal(err)
+	}
 }
 
 func genFeatures(args []string) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,6 +42,15 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
+	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
+		body, err := api.OpenAPI().MarshalJSON()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.1")
+		w.Write(body)
+	})
 	return mux
 }
 
@@ -67,7 +77,7 @@ func (s *Server) landing(context.Context, *struct{}) (*landingOutput, error) {
 		Description: "OGC API Features over FlatGeobuf chunks stored in PostgreSQL",
 		Links: []link{
 			{Href: "/", Rel: "self", Type: "application/json", Title: "This document"},
-			{Href: "/openapi.json", Rel: "service-desc", Type: "application/vnd.oai.openapi+json;version=3.1", Title: "API definition"},
+			{Href: "/api", Rel: "service-desc", Type: "application/vnd.oai.openapi+json;version=3.1", Title: "API definition"},
 			{Href: "/conformance", Rel: "conformance", Type: "application/json", Title: "Conformance classes"},
 			{Href: "/collections", Rel: "data", Type: "application/json", Title: "Collections"},
 		},
@@ -161,6 +171,10 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 	return body
 }
 
+var reservedParams = map[string]bool{
+	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
+}
+
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
@@ -181,31 +195,61 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/geo+json")
-	fw := newFeatureWriter(w, limit)
-	if query := r.URL.Query().Get("q"); query != "" {
-		s.streamText(ctx, fw, id, bbox, query)
-	} else {
-		s.streamBBox(ctx, fw, id, bbox)
-	}
-	fw.close()
-}
-
-func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64) {
-	rows, err := s.Store.Chunks(ctx, id, bbox, s.MaxChunks)
+	offset, err := parseOffset(r)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	for _, row := range rows {
-		c, err := chunk.Open(row.Data)
+	filter, err := filterDocument(parseFilters(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/geo+json")
+	fw := newFeatureWriter(w, limit)
+	if query := r.URL.Query().Get("q"); query != "" || filter != "" {
+		s.streamMatches(ctx, fw, id, bbox, query, filter, offset)
+	} else {
+		s.streamBBox(ctx, fw, id, bbox, offset)
+	}
+	fw.close(pageLink(r, limit, offset, fw.count))
+}
+
+func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, offset int) {
+	metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks)
+	if err != nil {
+		slog.Error("chunk metas query failed", "collection", id, "error", err)
+		return
+	}
+	skipped := 0
+	for _, meta := range metas {
+		if fw.count >= fw.limit {
+			return
+		}
+		if bbox == nil && skipped+meta.FeatureCount <= offset {
+			skipped += meta.FeatureCount
+			continue
+		}
+		data, err := s.Store.ChunkByID(ctx, id, meta.ID)
 		if err != nil {
+			slog.Error("chunk load failed", "chunk", meta.ID, "error", err)
+			continue
+		}
+		c, err := chunk.Open(data)
+		if err != nil {
+			slog.Error("chunk open failed", "chunk", meta.ID, "error", err)
 			continue
 		}
 		features, err := c.SearchOptional(bbox)
 		if err != nil {
+			slog.Error("chunk search failed", "chunk", meta.ID, "error", err)
 			continue
 		}
 		for _, f := range features {
+			if skipped < offset {
+				skipped++
+				continue
+			}
 			if !fw.add(c.GeoJSON(f)) {
 				return
 			}
@@ -213,9 +257,10 @@ func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, id string, b
 	}
 }
 
-func (s *Server) streamText(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, query string) {
-	matches, err := s.Store.TextMatches(ctx, id, query, bbox, fw.limit)
+func (s *Server) streamMatches(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, query, filter string, offset int) {
+	matches, err := s.Store.Matches(ctx, id, bbox, query, filter, fw.limit, offset)
 	if err != nil {
+		slog.Error("matches query failed", "collection", id, "error", err)
 		return
 	}
 	byChunk := map[int64]map[int]bool{}
@@ -234,15 +279,18 @@ func (s *Server) streamText(ctx context.Context, fw *featureWriter, id string, b
 	}
 	rows, err := s.Store.ChunksByIDs(ctx, ids)
 	if err != nil {
+		slog.Error("chunks by ids failed", "collection", id, "error", err)
 		return
 	}
 	for _, row := range rows {
 		c, err := chunk.Open(row.Data)
 		if err != nil {
+			slog.Error("chunk open failed", "chunk", row.ID, "error", err)
 			continue
 		}
 		features, err := c.SearchAll()
 		if err != nil {
+			slog.Error("chunk search failed", "chunk", row.ID, "error", err)
 			continue
 		}
 		ords := byChunk[row.ID]
@@ -291,11 +339,66 @@ func (fw *featureWriter) add(f *chunk.Feature) bool {
 	return fw.count < fw.limit
 }
 
-func (fw *featureWriter) close() {
+func (fw *featureWriter) close(next string) {
 	fw.out.WriteString(`],"numberReturned":`)
 	fw.out.WriteString(strconv.Itoa(fw.count))
+	if next != "" {
+		body, err := json.Marshal(next)
+		if err == nil {
+			fw.out.WriteString(`,"links":[{"href":`)
+			fw.out.Write(body)
+			fw.out.WriteString(`,"rel":"next","type":"application/geo+json"}]`)
+		}
+	}
 	fw.out.WriteString("}")
 	fw.out.Flush()
+}
+
+func pageLink(r *http.Request, limit, offset, count int) string {
+	if count < limit {
+		return ""
+	}
+	query := r.URL.Query()
+	query.Set("limit", strconv.Itoa(limit))
+	query.Set("offset", strconv.Itoa(offset+count))
+	return r.URL.Path + "?" + query.Encode()
+}
+
+func parseFilters(r *http.Request) map[string]string {
+	filters := map[string]string{}
+	for name, values := range r.URL.Query() {
+		if reservedParams[name] || len(values) == 0 {
+			continue
+		}
+		filters[name] = values[0]
+	}
+	return filters
+}
+
+func filterDocument(filters map[string]string) (string, error) {
+	if len(filters) == 0 {
+		return "", nil
+	}
+	doc := make(map[string]any, len(filters))
+	for name, value := range filters {
+		switch {
+		case value == "true":
+			doc[name] = true
+		case value == "false":
+			doc[name] = false
+		default:
+			if n, err := strconv.ParseFloat(value, 64); err == nil {
+				doc[name] = n
+			} else {
+				doc[name] = value
+			}
+		}
+	}
+	body, err := json.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
@@ -408,6 +511,18 @@ func parseLimit(r *http.Request, fallback int) (int, error) {
 	n, err := strconv.Atoi(value)
 	if err != nil || n < 1 || n > 100000 {
 		return 0, errors.New("invalid limit")
+	}
+	return n, nil
+}
+
+func parseOffset(r *http.Request) (int, error) {
+	value := r.URL.Query().Get("offset")
+	if value == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return 0, errors.New("invalid offset")
 	}
 	return n, nil
 }
