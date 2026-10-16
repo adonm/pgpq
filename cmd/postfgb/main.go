@@ -1,0 +1,212 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"math/rand"
+	"net/http"
+	"os"
+
+	"github.com/adonm/postfgb/internal/api"
+	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/store"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	switch os.Args[1] {
+	case "serve":
+		serve(os.Args[2:])
+	case "ingest":
+		ingest(os.Args[2:])
+	case "gen":
+		genFeatures(os.Args[2:])
+	default:
+		usage()
+		os.Exit(2)
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage: postfgb <serve|ingest|gen> [flags]")
+}
+
+func fatal(err error) {
+	slog.Error(err.Error())
+	os.Exit(1)
+}
+
+func serve(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	addr := fs.String("addr", ":8080", "listen address")
+	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
+	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
+	fs.Parse(args)
+	ctx := context.Background()
+	st, err := store.Open(ctx, *dsn)
+	if err != nil {
+		fatal(err)
+	}
+	defer st.Close()
+	if *runMigrations {
+		if err := st.Migrate(ctx); err != nil {
+			fatal(err)
+		}
+	}
+	caps, err := st.Capabilities(ctx)
+	if err != nil {
+		fatal(err)
+	}
+	for _, name := range store.TrackedExtensions {
+		if caps[name] {
+			slog.Info("extension available", "name", name)
+		}
+	}
+	slog.Info("listening", "addr", *addr)
+	fatal(http.ListenAndServe(*addr, api.New(st)))
+}
+
+type rawFeature struct {
+	Type       string                     `json:"type"`
+	Geometry   chunk.RawGeometry          `json:"geometry"`
+	Properties map[string]json.RawMessage `json:"properties"`
+}
+
+func ingest(args []string) {
+	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
+	collection := fs.String("collection", "", "collection name")
+	file := fs.String("file", "", "geojson FeatureCollection file")
+	chunkSize := fs.Int("chunk-size", 50000, "features per chunk")
+	fs.Parse(args)
+	if *collection == "" || *file == "" {
+		fs.Usage()
+		os.Exit(2)
+	}
+	ctx := context.Background()
+	st, err := store.Open(ctx, *dsn)
+	if err != nil {
+		fatal(err)
+	}
+	defer st.Close()
+	if err := st.EnsureCollection(ctx, *collection); err != nil {
+		fatal(err)
+	}
+	f, err := os.Open(*file)
+	if err != nil {
+		fatal(err)
+	}
+	defer f.Close()
+	dec := json.NewDecoder(bufio.NewReaderSize(f, 1<<20))
+	tok, err := dec.Token()
+	if err != nil {
+		fatal(err)
+	}
+	if tok != json.Delim('{') {
+		fatal(errors.New("expected a GeoJSON FeatureCollection object"))
+	}
+	batch := make([]chunk.InputFeature, 0, *chunkSize)
+	total, chunks := 0, 0
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			fatal(err)
+		}
+		if key != "features" {
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				fatal(err)
+			}
+			continue
+		}
+		if _, err := dec.Token(); err != nil {
+			fatal(err)
+		}
+		for dec.More() {
+			var rf rawFeature
+			if err := dec.Decode(&rf); err != nil {
+				fatal(err)
+			}
+			batch = append(batch, chunk.InputFeature{Geometry: rf.Geometry, Properties: rf.Properties})
+			total++
+			if len(batch) == *chunkSize {
+				putChunk(ctx, st, *collection, batch)
+				chunks++
+				slog.Info("chunk stored", "features", total, "chunks", chunks)
+				batch = batch[:0]
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			fatal(err)
+		}
+	}
+	if len(batch) > 0 {
+		putChunk(ctx, st, *collection, batch)
+		chunks++
+	}
+	slog.Info("done", "features", total, "chunks", chunks)
+}
+
+func putChunk(ctx context.Context, st *store.Store, collection string, batch []chunk.InputFeature) {
+	data, err := chunk.Encode(collection, batch)
+	if err != nil {
+		fatal(err)
+	}
+	c, err := chunk.Open(data)
+	if err != nil {
+		fatal(err)
+	}
+	env, ok := c.Envelope()
+	if !ok {
+		fatal(errors.New("chunk missing envelope"))
+	}
+	payload := store.Payload{
+		Data:  data,
+		Count: c.Count(),
+		MinX:  env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
+	}
+	if err := st.PutChunks(ctx, collection, []store.Payload{payload}); err != nil {
+		fatal(err)
+	}
+}
+
+func genFeatures(args []string) {
+	fs := flag.NewFlagSet("gen", flag.ExitOnError)
+	n := fs.Int("n", 1000000, "feature count")
+	out := fs.String("out", "features.geojson", "output file")
+	minX := fs.Float64("minx", -180, "minimum longitude")
+	minY := fs.Float64("miny", -85, "minimum latitude")
+	maxX := fs.Float64("maxx", 180, "maximum longitude")
+	maxY := fs.Float64("maxy", 85, "maximum latitude")
+	seed := fs.Int64("seed", 42, "random seed")
+	fs.Parse(args)
+	f, err := os.Create(*out)
+	if err != nil {
+		fatal(err)
+	}
+	defer f.Close()
+	w := bufio.NewWriterSize(f, 1<<20)
+	defer w.Flush()
+	rng := rand.New(rand.NewSource(*seed))
+	w.WriteString(`{"type":"FeatureCollection","features":[`)
+	for i := 0; i < *n; i++ {
+		x := *minX + rng.Float64()*(*maxX-*minX)
+		y := *minY + rng.Float64()*(*maxY-*minY)
+		if i > 0 {
+			w.WriteByte(',')
+		}
+		fmt.Fprintf(w,
+			`{"type":"Feature","geometry":{"type":"Point","coordinates":[%g,%g]},"properties":{"i":%d,"name":"feature-%d"}}`,
+			x, y, i, i)
+	}
+	w.WriteString(`]}`)
+	slog.Info("generated", "features", *n, "file", *out)
+}

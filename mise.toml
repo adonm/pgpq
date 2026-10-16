@@ -1,0 +1,8 @@
+[tools]
+go = "1.27.2"
+just = "latest"
+
+[env]
+POSTFGB_DSN = "postgres://postgres:postgres@localhost:5432/postfgb?sslmode=disable"
+GOFLAGS = "-p=2"
+GOMEMLIMIT = "2GiB"

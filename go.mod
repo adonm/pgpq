@@ -1,0 +1,22 @@
+module github.com/adonm/postfgb
+
+go 1.27
+
+require (
+	github.com/danielgtaylor/huma/v2 v2.39.1
+	github.com/flatgeobuf/flatgeobuf/src/go v0.0.0-20261010111732-d8b6d6afcfe2
+	github.com/google/flatbuffers v25.12.19+incompatible
+	github.com/jackc/pgx/v5 v5.11.0
+	github.com/paulmach/orb v0.13.0
+)
+
+require (
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/paulmach/protoscan v0.2.1 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.8.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
+)
