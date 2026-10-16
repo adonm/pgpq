@@ -1,4 +1,6 @@
 dsn := env("POSTFGB_DSN", "postgres://postgres:postgres@localhost:5432/postfgb?sslmode=disable")
+url := env("POSTFGB_URL", "http://localhost:8080")
+gdal := "ghcr.io/osgeo/gdal:ubuntu-full-latest"
 
 default:
     @just --list
@@ -36,6 +38,12 @@ serve:
     go run ./cmd/postfgb serve --dsn "{{dsn}}"
 
 demo: pg-up gen ingest
+
+export coll format out:
+    docker run --rm --network host -v "{{justfile_directory()}}:/work" -w /work {{gdal}} ogr2ogr -f "{{format}}" "/work/{{out}}" "OAPIF:{{url}}" "{{coll}}"
+
+tiles coll maxzoom="3":
+    docker run --rm --network host -v "{{justfile_directory()}}:/work" -w /work {{gdal}} bash -c "ogr2ogr -f MVT /work/{{coll}}.mbtiles -dsco MAXZOOM={{maxzoom}} OAPIF:{{url}} {{coll}} && ogr2ogr -f PMTiles /work/{{coll}}.pmtiles /work/{{coll}}.mbtiles"
 
 bench:
     bench/run.sh

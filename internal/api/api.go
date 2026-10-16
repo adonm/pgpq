@@ -16,6 +16,7 @@ import (
 	"github.com/paulmach/orb/encoding/mvt"
 	orbgeojson "github.com/paulmach/orb/geojson"
 	"github.com/paulmach/orb/maptile"
+	"github.com/paulmach/orb/simplify"
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
@@ -44,12 +45,12 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
-		body, err := api.OpenAPI().MarshalJSON()
+		body, err := api.OpenAPI().Downgrade()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.1")
+		w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.0")
 		w.Write(body)
 	})
 	return mux
@@ -78,7 +79,7 @@ func (s *Server) landing(context.Context, *struct{}) (*landingOutput, error) {
 		Description: "OGC API Features over FlatGeobuf chunks stored in PostgreSQL",
 		Links: []link{
 			{Href: "/", Rel: "self", Type: "application/json", Title: "This document"},
-			{Href: "/api", Rel: "service-desc", Type: "application/vnd.oai.openapi+json;version=3.1", Title: "API definition"},
+			{Href: "/api", Rel: "service-desc", Type: "application/vnd.oai.openapi+json;version=3.0", Title: "API definition"},
 			{Href: "/conformance", Rel: "conformance", Type: "application/json", Title: "Conformance classes"},
 			{Href: "/collections", Rel: "data", Type: "application/json", Title: "Collections"},
 		},
@@ -485,6 +486,9 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	}
 	layer := mvt.NewLayer(id, collection)
 	layer.ProjectToTile(tile)
+	layer.Clip(mvt.MapboxGLDefaultExtentBound)
+	layer.Simplify(simplify.DouglasPeucker(1.0))
+	layer.RemoveEmpty(1.0, 2.0)
 	data, err := mvt.MarshalGzipped(mvt.Layers{layer})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

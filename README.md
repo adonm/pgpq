@@ -33,6 +33,7 @@ curl localhost:8080/collections
 curl "localhost:8080/collections/bench/items?bbox=-10,45,10,55&limit=100"
 curl 'localhost:8080/collections/bench/items?q="feature-42"'
 curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
+curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i between 5 and 7 and name like 'feature-6%'"
 ```
 
 ## Endpoints
@@ -43,7 +44,7 @@ curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
 | `/conformance` | OGC API Features conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&offset=&q=&{property}=` | GeoJSON features: bbox, fulltext, property equality filters, paged |
+| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=` | GeoJSON features: bbox, fulltext, CQL2-text filters, paged |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile |
 | `/api` | OpenAPI 3.1 definition (OGC content type) |
@@ -57,9 +58,21 @@ curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
 - `ogrinfo -so -al -spat -10 45 10 55 "OAPIF:http://localhost:8080" bench` — server-side bbox filter
 - `gdalinfo "/vsicurl/http://localhost:8080/collections/bench/tiles/WebMercatorQuad/0/0/0.mvt"` — vector tile
 
+## Exports
+
+Single-tile MVT is generated in-process (pure Go, clipped and simplified). For bulk conversion the server stays cgo-free and GDAL runs as a sidecar container:
+
+```sh
+just export demo FlatGeobuf demo.fgb    # OAPIF -> any OGR format: GPKG, KML, Shapefile, GeoParquet, ...
+just export bench GPKG bench.gpkg
+just tiles bench 4                      # whole MVT tileset, packed as bench.pmtiles
+```
+
+The tiles recipe chains GDAL's MVT writer into the PMTiles driver (MBTiles as the intermediate container, copied tile-for-tile). PMTiles archives are static files: host them on any object store and they serve without a tile backend.
+
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext (`?q=`) and property filter (`jsonb`/GIN) sidecars, OGC API Features with next-link paging, MVT tiles, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, bbox page ~2s, tiles ~0.6s. Next: CQL2 range filters, Aurora client numbers.
+Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text `filter=` clauses, OGC API Features with next-link paging, MVT tiles, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, bbox page ~2s, tiles ~0.6s. Next: CQL2-JSON, CQL2 spatial operators, Aurora client numbers.
 
 ## License
 
