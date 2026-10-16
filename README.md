@@ -44,7 +44,7 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 | `/conformance` | OGC API Features conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=` | GeoJSON features: bbox, fulltext, CQL2-text filters, paged |
+| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2-text filters, paged; `f=flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile |
 | `/api` | OpenAPI 3.1 definition (OGC content type) |
@@ -70,10 +70,10 @@ just tiles bench 4                      # whole MVT tileset, packed as bench.pmt
 
 The tiles recipe chains GDAL's MVT writer into the PMTiles driver (MBTiles as the intermediate container, copied tile-for-tile). PMTiles archives are static files: host them on any object store and they serve without a tile backend.
 
-Keep filtering on the server side: GDAL evaluates `-where` clauses against OAPIF sources client-side (it downloads the whole collection), while server-side `filter=` goes through chunk pruning and the jsonb sidecar. Point GDAL at the filtered items URL instead:
+Keep filtering on the server side: GDAL evaluates `-where` clauses against OAPIF sources client-side (it downloads the whole collection), while server-side `filter=` goes through chunk pruning and the jsonb sidecar. Ask for `f=flatgeobuf` and the server assembles one filtered FlatGeobuf (spatial index included) that GDAL reads directly:
 
 ```sh
-ogr2ogr filtered.gpkg "/vsicurl/http://localhost:8080/collections/bench/items?filter=i%3E999990"
+ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/bench/items?f=flatgeobuf&filter=i%3E999990"
 ```
 
 ## Status

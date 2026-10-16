@@ -9,20 +9,7 @@ import (
 )
 
 func TestEncodeSearchRoundTrip(t *testing.T) {
-	features := make([]InputFeature, 100)
-	for i := range features {
-		coords, err := json.Marshal([]float64{float64(i % 10), float64(i / 10)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		features[i] = InputFeature{
-			Geometry: RawGeometry{Type: "Point", Coordinates: coords},
-			Properties: map[string]json.RawMessage{
-				"i":    json.RawMessage(strconv.Itoa(i)),
-				"name": json.RawMessage(strconv.Quote("feature-" + strconv.Itoa(i))),
-			},
-		}
-	}
+	features := sampleFeatures(100)
 	data, err := Encode("test", features)
 	if err != nil {
 		t.Fatal(err)
@@ -101,5 +88,63 @@ func TestText(t *testing.T) {
 	}
 	if got, want := Text(props), "road Main Street 7"; got != want {
 		t.Fatalf("text = %q, want %q", got, want)
+	}
+}
+
+func sampleFeatures(n int) []InputFeature {
+	features := make([]InputFeature, n)
+	for i := range features {
+		coords, _ := json.Marshal([]float64{float64(i % 10), float64(i / 10)})
+		features[i] = InputFeature{
+			Geometry: RawGeometry{Type: "Point", Coordinates: coords},
+			Properties: map[string]json.RawMessage{
+				"i":    json.RawMessage(strconv.Itoa(i)),
+				"name": json.RawMessage(strconv.Quote("feature-" + strconv.Itoa(i))),
+			},
+		}
+	}
+	return features
+}
+
+func TestEncodeFeaturesRoundTrip(t *testing.T) {
+	source, err := Encode("test", sampleFeatures(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := c.SearchAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(in) != 100 {
+		t.Fatalf("source features = %d, want 100", len(in))
+	}
+	out, err := EncodeFeatures("copy", c.Header(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := copied.Count(); got != 100 {
+		t.Fatalf("copied count = %d, want 100", got)
+	}
+	hits, err := copied.Search(0, 0, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 4 {
+		t.Fatalf("copied search hits = %d, want 4", len(hits))
+	}
+	g := copied.GeoJSON(hits[0])
+	if g.Geometry == nil || g.Geometry.Type != "Point" {
+		t.Fatalf("copied feature geometry = %+v", g.Geometry)
+	}
+	if _, ok := g.Properties["i"].(int64); !ok {
+		t.Fatalf("copied property i = %T, want int64", g.Properties["i"])
 	}
 }

@@ -18,6 +18,8 @@ import (
 	"github.com/paulmach/orb/maptile"
 	"github.com/paulmach/orb/simplify"
 
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/store"
@@ -208,9 +210,14 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	query := r.URL.Query().Get("q")
+	if r.URL.Query().Get("f") == "flatgeobuf" {
+		s.writeFGB(ctx, w, id, bbox, query, filter, offset, limit)
+		return
+	}
 	w.Header().Set("Content-Type", "application/geo+json")
 	fw := newFeatureWriter(w, limit)
-	if query := r.URL.Query().Get("q"); query != "" || filter != nil {
+	if query != "" || filter != nil {
 		s.streamMatches(ctx, fw, id, bbox, query, filter, offset)
 	} else {
 		s.streamBBox(ctx, fw, id, bbox, offset)
@@ -426,6 +433,146 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
+func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit int) {
+	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, offset, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(features) == 0 {
+		w.Header().Set("Content-Type", "application/geo+json")
+		fw := newFeatureWriter(w, limit)
+		fw.close("")
+		return
+	}
+	data, err := chunk.EncodeFeatures(id, header, features)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/flatgeobuf")
+	w.Write(data)
+}
+
+func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+	if query != "" || filter != nil {
+		return s.collectMatches(ctx, id, bbox, query, filter, offset, limit)
+	}
+	metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks)
+	if err != nil {
+		return nil, nil, err
+	}
+	var features []*flattypes.Feature
+	var header *flattypes.Header
+	skipped := 0
+	for _, meta := range metas {
+		if len(features) >= limit {
+			break
+		}
+		if bbox == nil && skipped+meta.FeatureCount <= offset {
+			skipped += meta.FeatureCount
+			continue
+		}
+		data, err := s.Store.ChunkByID(ctx, id, meta.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		c, err := chunk.Open(data)
+		if err != nil {
+			return nil, nil, err
+		}
+		if header == nil {
+			header = c.Header()
+		} else if !sameColumns(header, c.Header()) {
+			return nil, nil, errors.New("collection chunks have differing schemas")
+		}
+		feats, err := c.SearchOptional(bbox)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, f := range feats {
+			if skipped < offset {
+				skipped++
+				continue
+			}
+			if len(features) >= limit {
+				break
+			}
+			features = append(features, f)
+		}
+	}
+	return features, header, nil
+}
+
+func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+	matches, err := s.Store.Matches(ctx, id, bbox, query, filter, limit, offset)
+	if err != nil {
+		return nil, nil, err
+	}
+	byChunk := map[int64]map[int]bool{}
+	var ids []int64
+	for _, m := range matches {
+		ords := byChunk[m.ChunkID]
+		if ords == nil {
+			if len(ids) >= s.MaxChunks {
+				break
+			}
+			ords = map[int]bool{}
+			byChunk[m.ChunkID] = ords
+			ids = append(ids, m.ChunkID)
+		}
+		ords[m.Ord] = true
+	}
+	rows, err := s.Store.ChunksByIDs(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	var features []*flattypes.Feature
+	var header *flattypes.Header
+	for _, row := range rows {
+		c, err := chunk.Open(row.Data)
+		if err != nil {
+			return nil, nil, err
+		}
+		if header == nil {
+			header = c.Header()
+		} else if !sameColumns(header, c.Header()) {
+			return nil, nil, errors.New("collection chunks have differing schemas")
+		}
+		feats, err := c.SearchAll()
+		if err != nil {
+			return nil, nil, err
+		}
+		ords := byChunk[row.ID]
+		for i, f := range feats {
+			if !ords[i] {
+				continue
+			}
+			if !inBounds(c.GeoJSON(f), bbox) {
+				continue
+			}
+			features = append(features, f)
+		}
+	}
+	return features, header, nil
+}
+
+func sameColumns(a, b *flattypes.Header) bool {
+	if a.ColumnsLength() != b.ColumnsLength() {
+		return false
+	}
+	for i := 0; i < a.ColumnsLength(); i++ {
+		var ca, cb flattypes.Column
+		if !a.Columns(&ca, i) || !b.Columns(&cb, i) {
+			return false
+		}
+		if string(ca.Name()) != string(cb.Name()) || ca.Type() != cb.Type() {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 	chunkID, err := strconv.ParseInt(r.PathValue("chunkID"), 10, 64)
 	if err != nil {
@@ -524,7 +671,7 @@ func parseLimit(r *http.Request, fallback int) (int, error) {
 		return fallback, nil
 	}
 	n, err := strconv.Atoi(value)
-	if err != nil || n < 1 || n > 100000 {
+	if err != nil || n < 1 || n > 1000000 {
 		return 0, errors.New("invalid limit")
 	}
 	return n, nil
