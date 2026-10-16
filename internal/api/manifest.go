@@ -31,7 +31,15 @@ type manifestOutput struct {
 	}
 }
 
-func (s *Server) manifest(ctx context.Context, in *collectionInput) (*manifestOutput, error) {
+type manifestInput struct {
+	ID            string `path:"id"`
+	Authorization string `header:"Authorization"`
+}
+
+func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutput, error) {
+	if !s.adminOK(in.Authorization) {
+		return nil, huma.Error401Unauthorized("unauthorized")
+	}
 	info, err := s.Store.Collection(ctx, in.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, huma.Error404NotFound("collection not found")

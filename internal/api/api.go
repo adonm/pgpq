@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -29,6 +30,7 @@ type Server struct {
 	Store        *store.Store
 	MaxChunks    int
 	DefaultLimit int
+	AdminToken   string
 }
 
 type link struct {
@@ -40,9 +42,13 @@ type link struct {
 }
 
 func New(st *store.Store) http.Handler {
+	return NewWithToken(st, "")
+}
+
+func NewWithToken(st *store.Store, adminToken string) http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("postfgb", "0.1.0"))
-	s := &Server{Store: st, MaxChunks: 64, DefaultLimit: 1000}
+	s := &Server{Store: st, MaxChunks: 64, DefaultLimit: 1000, AdminToken: adminToken}
 	s.register(api)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
@@ -181,6 +187,7 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 		Links: []link{
 			{Href: "/collections/" + info.Name, Rel: "self", Type: "application/json"},
 			{Href: "/collections/" + info.Name + "/items", Rel: "items", Type: "application/geo+json"},
+			{Href: "/collections/" + info.Name + "/items?f=flatgeobuf", Rel: "alternate", Type: "application/flatgeobuf", Title: "Items (FlatGeobuf)"},
 			{Href: "/collections/" + info.Name + "/tiles", Rel: "http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector", Type: "application/json"},
 		},
 	}
@@ -228,7 +235,9 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("q")
-	if r.URL.Query().Get("f") == "flatgeobuf" {
+	flatgeobuf := r.URL.Query().Get("f") == "flatgeobuf" ||
+		strings.Contains(r.Header.Get("Accept"), "application/flatgeobuf")
+	if flatgeobuf {
 		s.writeFGB(ctx, w, id, bbox, query, filter, offset, limit)
 		return
 	}
@@ -596,7 +605,20 @@ func sameColumns(a, b *flattypes.Header) bool {
 	return true
 }
 
+func (s *Server) adminOK(auth string) bool {
+	if s.AdminToken == "" {
+		return true
+	}
+	token := strings.TrimPrefix(auth, "Bearer ")
+	return token != auth && subtle.ConstantTimeCompare([]byte(token), []byte(s.AdminToken)) == 1
+}
+
 func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOK(r.Header.Get("Authorization")) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	chunkID, err := strconv.ParseInt(r.PathValue("chunkID"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid chunk id", http.StatusBadRequest)

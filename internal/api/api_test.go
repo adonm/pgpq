@@ -34,6 +34,23 @@ func TestPageLink(t *testing.T) {
 	}
 }
 
+func TestAdminOK(t *testing.T) {
+	s := &Server{AdminToken: "secret"}
+	if s.adminOK("") {
+		t.Fatal("expected unauthorized without token")
+	}
+	if s.adminOK("Bearer wrong") {
+		t.Fatal("expected unauthorized with wrong token")
+	}
+	if !s.adminOK("Bearer secret") {
+		t.Fatal("expected authorized")
+	}
+	open := &Server{}
+	if !open.adminOK("") {
+		t.Fatal("expected open server to allow")
+	}
+}
+
 func TestParseFilters(t *testing.T) {
 	r := httptest.NewRequest("GET", "/collections/demo/items?bbox=1,2,3,4&q=road&kind=highway&limit=5&filter=i%3E1", nil)
 	filters := parseFilters(r)

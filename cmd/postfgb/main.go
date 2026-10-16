@@ -51,6 +51,7 @@ func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
+	adminToken := fs.String("admin-token", os.Getenv("POSTFGB_ADMIN_TOKEN"), "bearer token for the manifest and chunk endpoints")
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
 	fs.Parse(args)
 	ctx := context.Background()
@@ -74,7 +75,7 @@ func serve(args []string) {
 		}
 	}
 	slog.Info("listening", "addr", *addr)
-	fatal(http.ListenAndServe(*addr, api.New(st)))
+	fatal(http.ListenAndServe(*addr, api.NewWithToken(st, *adminToken)))
 }
 
 type rawFeature struct {
