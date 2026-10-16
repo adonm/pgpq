@@ -6,10 +6,11 @@ The smallest Go package that provides performant 1000x scaling of the spatial re
 
 ## Development setup
 
-Requirements: [mise](https://mise.jdx.dev) (installs Go and just per `mise.toml`), Docker, and optionally GDAL (`apt install gdal-bin`) for benchmarks.
+Requirements: [mise](https://mise.jdx.dev) (installs Go, just and hk per `mise.toml`), Docker, and optionally GDAL (`apt install gdal-bin`) for benchmarks.
 
 ```sh
 mise install
+hk install --mise   # wire the pre-commit hook
 just pg-up
 just ci
 ```
@@ -23,7 +24,7 @@ Run `just` for the full list. The common ones:
 | Recipe | Purpose |
 | --- | --- |
 | `just ci` | gofmt check, vet, unit tests |
-| `just pg-up` / `just pg-down` | local PostGIS via docker compose |
+| `just pg-up` / `just pg-down` | PostgreSQL 18 via docker compose |
 | `just gen` | generate 1M synthetic features into `bench/features.geojson` |
 | `just ingest` | chunk and load the generated file |
 | `just serve` | run the OGC API server on `:8080` |
@@ -34,7 +35,7 @@ Run `just` for the full list. The common ones:
 
 - No comments. Names and small functions carry the meaning.
 - Smallest reasonable implementation; stdlib first, one dependency must justify itself.
-- Keep the core path within the Amazon Aurora PostgreSQL extension allowlist: `postgis`, `pg_trgm`, `pg_bigm`, `unaccent`, `btree_gin`, `btree_gist`, `bloom`, `hll`, `pg_roaringbitmap` (PG18 only), `pgvector`, `h3-pg`. Anything outside that list must be an optional accelerator discovered at runtime via `pg_available_extensions` (see `store.Capabilities`), never a hard requirement.
+- The core path uses no PostgreSQL extensions: chunk pruning is an S2 cell `int8multirange` overlap plus scalar float comparisons. Never push geometry parsing or spatial library functions into the query path — real spatial work happens in Go over FlatGeobuf chunks. Optional accelerators (`pg_roaringbitmap`, `hll`, `pg_trgm`, ...) must be discovered at runtime via `pg_available_extensions` (see `store.Capabilities`) and never required.
 - Chunk sizing, property encoding, and the FlatGeobuf wire format must stay interoperable with GDAL, QGIS, and the reference implementations. When in doubt, verify with `ogrinfo`.
 
 ## Testing

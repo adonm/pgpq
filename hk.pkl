@@ -1,0 +1,13 @@
+amends "package://github.com/jdx/hk/releases/download/v2.6.0/hk@2.6.0#/Config.pkl"
+
+import "package://github.com/jdx/hk/releases/download/v2.6.0/hk@2.6.0#/Builtins.pkl"
+
+steps {
+  ["go-fmt"] = Builtins.go_fmt
+  ["go-vet"] = Builtins.go_vet
+  ["go-mod-tidy"] = Builtins.gomod_tidy
+  ["go-test"] = new Step {
+    glob = List("**/*.go", "go.mod", "go.sum")
+    check = "go test -timeout 120s ./..."
+  }
+}
