@@ -18,6 +18,7 @@ import (
 	"github.com/paulmach/orb/maptile"
 
 	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -173,6 +174,7 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 
 var reservedParams = map[string]bool{
 	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
+	"filter": true, "filter-lang": true,
 }
 
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
@@ -200,14 +202,14 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	filter, err := filterDocument(parseFilters(r))
+	filter, err := requestFilter(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
 	fw := newFeatureWriter(w, limit)
-	if query := r.URL.Query().Get("q"); query != "" || filter != "" {
+	if query := r.URL.Query().Get("q"); query != "" || filter != nil {
 		s.streamMatches(ctx, fw, id, bbox, query, filter, offset)
 	} else {
 		s.streamBBox(ctx, fw, id, bbox, offset)
@@ -257,7 +259,7 @@ func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, id string, b
 	}
 }
 
-func (s *Server) streamMatches(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, query, filter string, offset int) {
+func (s *Server) streamMatches(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, query string, filter cql.Expr, offset int) {
 	matches, err := s.Store.Matches(ctx, id, bbox, query, filter, fw.limit, offset)
 	if err != nil {
 		slog.Error("matches query failed", "collection", id, "error", err)
@@ -375,30 +377,39 @@ func parseFilters(r *http.Request) map[string]string {
 	return filters
 }
 
-func filterDocument(filters map[string]string) (string, error) {
-	if len(filters) == 0 {
-		return "", nil
+func requestFilter(r *http.Request) (cql.Expr, error) {
+	var expr cql.Expr
+	for name, value := range parseFilters(r) {
+		expr = cql.And(expr, &cql.Compare{Prop: name, Op: "=", Value: typedLiteral(value)})
 	}
-	doc := make(map[string]any, len(filters))
-	for name, value := range filters {
-		switch {
-		case value == "true":
-			doc[name] = true
-		case value == "false":
-			doc[name] = false
-		default:
-			if n, err := strconv.ParseFloat(value, 64); err == nil {
-				doc[name] = n
-			} else {
-				doc[name] = value
-			}
-		}
+	text := r.URL.Query().Get("filter")
+	if text == "" {
+		return expr, nil
 	}
-	body, err := json.Marshal(doc)
+	if lang := r.URL.Query().Get("filter-lang"); lang != "" && lang != "cql2-text" {
+		return nil, errors.New("unsupported filter-lang " + lang)
+	}
+	parsed, err := cql.Parse(text)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(body), nil
+	return cql.And(expr, parsed), nil
+}
+
+func typedLiteral(value string) any {
+	switch value {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	if n, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return n
+	}
+	if f, err := strconv.ParseFloat(value, 64); err == nil {
+		return f
+	}
+	return value
 }
 
 func inBounds(f *chunk.Feature, bbox *[4]float64) bool {

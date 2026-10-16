@@ -5,21 +5,21 @@ import (
 	"testing"
 )
 
-func TestFilterDocument(t *testing.T) {
-	doc, err := filterDocument(map[string]string{"name": "Main Street", "i": "42", "flag": "true"})
-	if err != nil {
-		t.Fatal(err)
+func TestTypedLiteral(t *testing.T) {
+	cases := []struct {
+		in   string
+		want any
+	}{
+		{"42", int64(42)},
+		{"1.5", 1.5},
+		{"true", true},
+		{"false", false},
+		{"feature-42", "feature-42"},
 	}
-	want := `{"flag":true,"i":42,"name":"Main Street"}`
-	if doc != want {
-		t.Fatalf("doc = %s, want %s", doc, want)
-	}
-	empty, err := filterDocument(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if empty != "" {
-		t.Fatalf("empty doc = %q, want empty string", empty)
+	for _, tc := range cases {
+		if got := typedLiteral(tc.in); got != tc.want {
+			t.Fatalf("typedLiteral(%q) = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -35,7 +35,7 @@ func TestPageLink(t *testing.T) {
 }
 
 func TestParseFilters(t *testing.T) {
-	r := httptest.NewRequest("GET", "/collections/demo/items?bbox=1,2,3,4&q=road&kind=highway&limit=5", nil)
+	r := httptest.NewRequest("GET", "/collections/demo/items?bbox=1,2,3,4&q=road&kind=highway&limit=5&filter=i%3E1", nil)
 	filters := parseFilters(r)
 	if len(filters) != 1 || filters["kind"] != "highway" {
 		t.Fatalf("filters = %v", filters)

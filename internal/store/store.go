@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/adonm/postfgb/internal/cover"
+	"github.com/adonm/postfgb/internal/cql"
 )
 
 //go:embed migrations/*.sql
@@ -274,29 +275,30 @@ func (s *Store) scanChunks(ctx context.Context, query string, args ...any) ([]Ch
 	return out, rows.Err()
 }
 
-func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64, query, filter string, limit, offset int) ([]FeatureMatch, error) {
-	if query == "" && filter == "" {
+func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+	if query == "" && filter == nil {
 		return nil, nil
 	}
 	sql := `select m.chunk_id, m.feature_ord from `
 	args := []any{collection}
 	switch {
-	case query != "" && filter != "":
-		sql += `chunk_text m
+	case query != "" && filter != nil:
+		args = append(args, query)
+		where := filter.SQL("p.props", &args)
+		sql += fmt.Sprintf(`chunk_text m
 			join chunk_props p on p.chunk_id = m.chunk_id and p.feature_ord = m.feature_ord
 			join chunks ch on ch.id = m.chunk_id
-			where ch.collection = $1 and m.tsv @@ websearch_to_tsquery('simple', $2) and p.props @> $3::jsonb`
-		args = append(args, query, filter)
+			where ch.collection = $1 and m.tsv @@ websearch_to_tsquery('simple', $2) and %s`, where)
 	case query != "":
+		args = append(args, query)
 		sql += `chunk_text m
 			join chunks ch on ch.id = m.chunk_id
 			where ch.collection = $1 and m.tsv @@ websearch_to_tsquery('simple', $2)`
-		args = append(args, query)
 	default:
-		sql += `chunk_props m
+		where := filter.SQL("m.props", &args)
+		sql += fmt.Sprintf(`chunk_props m
 			join chunks ch on ch.id = m.chunk_id
-			where ch.collection = $1 and m.props @> $2::jsonb`
-		args = append(args, filter)
+			where ch.collection = $1 and %s`, where)
 	}
 	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
 		sql += fragment
