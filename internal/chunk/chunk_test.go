@@ -91,3 +91,15 @@ func TestFixturePolyLandmarks(t *testing.T) {
 		t.Fatal("fixture feature missing geometry")
 	}
 }
+
+func TestText(t *testing.T) {
+	props := map[string]json.RawMessage{
+		"name": json.RawMessage(`"Main Street"`),
+		"kind": json.RawMessage(`"road"`),
+		"rank": json.RawMessage(`7`),
+		"gone": json.RawMessage(`null`),
+	}
+	if got, want := Text(props), "road Main Street 7"; got != want {
+		t.Fatalf("text = %q, want %q", got, want)
+	}
+}

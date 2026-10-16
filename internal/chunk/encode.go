@@ -351,3 +351,27 @@ func flatMulti(v any) ([][]float64, error) {
 	}
 	return out, nil
 }
+
+func Text(props map[string]json.RawMessage) string {
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		raw := props[name]
+		if len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		if raw[0] == '"' {
+			b.Write(unquote(raw))
+		} else {
+			b.Write(raw)
+		}
+	}
+	return b.String()
+}

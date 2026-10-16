@@ -1,5 +1,3 @@
-create extension if not exists postgis;
-
 create table if not exists collections (
   name text primary key,
   created_at timestamptz not null default now()
@@ -14,9 +12,9 @@ create table if not exists chunks (
   miny double precision not null,
   maxx double precision not null,
   maxy double precision not null,
-  bbox geometry(polygon, 4326) generated always as (st_makeenvelope(minx, miny, maxx, maxy, 4326)) stored,
+  cover int8multirange not null,
   data bytea not null
 );
 
-create index if not exists chunks_bbox_idx on chunks using gist (bbox);
+create index if not exists chunks_cover_idx on chunks using gist (cover);
 create index if not exists chunks_collection_idx on chunks (collection, id);

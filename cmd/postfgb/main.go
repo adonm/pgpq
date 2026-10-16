@@ -14,6 +14,7 @@ import (
 
 	"github.com/adonm/postfgb/internal/api"
 	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/cover"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -178,8 +179,17 @@ func putChunk(ctx context.Context, st *store.Store, collection string, batch []c
 		Data:  data,
 		Count: c.Count(),
 		MinX:  env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
+		Cover: cover.Chunk(env[0], env[1], env[2], env[3]),
 	}
-	if err := st.PutChunks(ctx, collection, []store.Payload{payload}); err != nil {
+	id, err := st.PutChunk(ctx, collection, payload)
+	if err != nil {
+		fatal(err)
+	}
+	docs := make([]string, len(batch))
+	for i := range batch {
+		docs[i] = chunk.Text(batch[i].Properties)
+	}
+	if err := st.PutChunkText(ctx, id, docs); err != nil {
 		fatal(err)
 	}
 }

@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/adonm/postfgb/internal/cover"
 )
 
 //go:embed migrations/*.sql
@@ -40,6 +42,7 @@ type Payload struct {
 	Count      int
 	MinX, MinY float64
 	MaxX, MaxY float64
+	Cover      string
 }
 
 type ChunkRow struct {
@@ -56,6 +59,11 @@ type CollectionInfo struct {
 	FeatureCount int64
 	MinX, MinY   *float64
 	MaxX, MaxY   *float64
+}
+
+type TextMatch struct {
+	ChunkID int64
+	Ord     int
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -143,30 +151,65 @@ func (s *Store) EnsureCollection(ctx context.Context, name string) error {
 	return err
 }
 
-func (s *Store) PutChunks(ctx context.Context, collection string, chunks []Payload) error {
-	if len(chunks) == 0 {
+func (s *Store) PutChunk(ctx context.Context, collection string, payload Payload) (int64, error) {
+	var id int64
+	err := s.Pool.QueryRow(ctx, `
+		insert into chunks (collection, feature_count, size_bytes, minx, miny, maxx, maxy, cover, data)
+		values ($1, $2, $3, $4, $5, $6, $7, $8::int8multirange, $9)
+		returning id`,
+		collection, payload.Count, len(payload.Data),
+		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY, payload.Cover, payload.Data).Scan(&id)
+	return id, err
+}
+
+func (s *Store) PutChunkText(ctx context.Context, chunkID int64, docs []string) error {
+	if len(docs) == 0 {
 		return nil
 	}
-	rows := make([][]any, len(chunks))
-	for i, c := range chunks {
-		rows[i] = []any{collection, c.Count, len(c.Data), c.MinX, c.MinY, c.MaxX, c.MaxY, c.Data}
+	ords := make([]int32, len(docs))
+	for i := range ords {
+		ords[i] = int32(i)
 	}
-	_, err := s.Pool.CopyFrom(ctx, pgx.Identifier{"chunks"},
-		[]string{"collection", "feature_count", "size_bytes", "minx", "miny", "maxx", "maxy", "data"},
-		pgx.CopyFromRows(rows))
+	_, err := s.Pool.Exec(ctx, `
+		insert into chunk_text (chunk_id, feature_ord, tsv)
+		select $1, ord, to_tsvector('simple', doc)
+		from unnest($2::int[], $3::text[]) as input(ord, doc)
+		where doc <> ''`, chunkID, ords, docs)
 	return err
+}
+
+func bboxPredicate(bbox *[4]float64, next int) (string, []any) {
+	if bbox == nil {
+		return "", nil
+	}
+	minx, miny, maxx, maxy := next+1, next+2, next+3, next+4
+	fragment := fmt.Sprintf(
+		` and cover && $%d::int8multirange and not (maxx < $%d or minx > $%d or maxy < $%d or miny > $%d)`,
+		next, minx, maxx, miny, maxy)
+	return fragment, []any{cover.Query(bbox[0], bbox[1], bbox[2], bbox[3]), bbox[0], bbox[1], bbox[2], bbox[3]}
 }
 
 func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64, limit int) ([]ChunkRow, error) {
 	query := `select id, feature_count, minx, miny, maxx, maxy, data from chunks where collection = $1`
 	args := []any{collection}
-	if bbox != nil {
-		query += fmt.Sprintf(` and bbox && st_makeenvelope($%d, $%d, $%d, $%d, 4326)`,
-			len(args)+1, len(args)+2, len(args)+3, len(args)+4)
-		args = append(args, bbox[0], bbox[1], bbox[2], bbox[3])
+	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
+		query += fragment
+		args = append(args, extra...)
 	}
 	query += fmt.Sprintf(` order by id limit $%d`, len(args)+1)
 	args = append(args, limit)
+	return s.scanChunks(ctx, query, args...)
+}
+
+func (s *Store) ChunksByIDs(ctx context.Context, ids []int64) ([]ChunkRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return s.scanChunks(ctx,
+		`select id, feature_count, minx, miny, maxx, maxy, data from chunks where id = any($1) order by id`, ids)
+}
+
+func (s *Store) scanChunks(ctx context.Context, query string, args ...any) ([]ChunkRow, error) {
 	rows, err := s.Pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -179,6 +222,34 @@ func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64,
 			return nil, err
 		}
 		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) TextMatches(ctx context.Context, collection, query string, bbox *[4]float64, limit int) ([]TextMatch, error) {
+	sql := `select ct.chunk_id, ct.feature_ord
+		from chunk_text ct
+		join chunks ch on ch.id = ct.chunk_id
+		where ch.collection = $1 and ct.tsv @@ websearch_to_tsquery('simple', $2)`
+	args := []any{collection, query}
+	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
+		sql += fragment
+		args = append(args, extra...)
+	}
+	sql += fmt.Sprintf(` order by ct.chunk_id, ct.feature_ord limit $%d`, len(args)+1)
+	args = append(args, limit)
+	rows, err := s.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TextMatch
+	for rows.Next() {
+		var match TextMatch
+		if err := rows.Scan(&match.ChunkID, &match.Ord); err != nil {
+			return nil, err
+		}
+		out = append(out, match)
 	}
 	return out, rows.Err()
 }

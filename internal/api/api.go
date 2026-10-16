@@ -181,20 +181,22 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	w.Header().Set("Content-Type", "application/geo+json")
+	fw := newFeatureWriter(w, limit)
+	if query := r.URL.Query().Get("q"); query != "" {
+		s.streamText(ctx, fw, id, bbox, query)
+	} else {
+		s.streamBBox(ctx, fw, id, bbox)
+	}
+	fw.close()
+}
+
+func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64) {
 	rows, err := s.Store.Chunks(ctx, id, bbox, s.MaxChunks)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/geo+json")
-	out := bufio.NewWriter(w)
-	defer out.Flush()
-	out.WriteString(`{"type":"FeatureCollection","features":[`)
-	count := 0
 	for _, row := range rows {
-		if count >= limit {
-			break
-		}
 		c, err := chunk.Open(row.Data)
 		if err != nil {
 			continue
@@ -204,23 +206,109 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		for _, f := range features {
-			if count >= limit {
-				break
+			if !fw.add(c.GeoJSON(f)) {
+				return
 			}
-			body, err := json.Marshal(c.GeoJSON(f))
-			if err != nil {
-				continue
-			}
-			if count > 0 {
-				out.WriteByte(',')
-			}
-			out.Write(body)
-			count++
 		}
 	}
-	out.WriteString(`],"numberReturned":`)
-	out.WriteString(strconv.Itoa(count))
-	out.WriteString("}")
+}
+
+func (s *Server) streamText(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, query string) {
+	matches, err := s.Store.TextMatches(ctx, id, query, bbox, fw.limit)
+	if err != nil {
+		return
+	}
+	byChunk := map[int64]map[int]bool{}
+	var ids []int64
+	for _, m := range matches {
+		ords := byChunk[m.ChunkID]
+		if ords == nil {
+			if len(ids) >= s.MaxChunks {
+				break
+			}
+			ords = map[int]bool{}
+			byChunk[m.ChunkID] = ords
+			ids = append(ids, m.ChunkID)
+		}
+		ords[m.Ord] = true
+	}
+	rows, err := s.Store.ChunksByIDs(ctx, ids)
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		c, err := chunk.Open(row.Data)
+		if err != nil {
+			continue
+		}
+		features, err := c.SearchAll()
+		if err != nil {
+			continue
+		}
+		ords := byChunk[row.ID]
+		for i, f := range features {
+			if !ords[i] {
+				continue
+			}
+			g := c.GeoJSON(f)
+			if !inBounds(g, bbox) {
+				continue
+			}
+			if !fw.add(g) {
+				return
+			}
+		}
+	}
+}
+
+type featureWriter struct {
+	out   *bufio.Writer
+	count int
+	limit int
+	first bool
+}
+
+func newFeatureWriter(w http.ResponseWriter, limit int) *featureWriter {
+	fw := &featureWriter{out: bufio.NewWriter(w), limit: limit, first: true}
+	fw.out.WriteString(`{"type":"FeatureCollection","features":[`)
+	return fw
+}
+
+func (fw *featureWriter) add(f *chunk.Feature) bool {
+	if fw.count >= fw.limit {
+		return false
+	}
+	body, err := json.Marshal(f)
+	if err != nil {
+		return true
+	}
+	if !fw.first {
+		fw.out.WriteByte(',')
+	}
+	fw.out.Write(body)
+	fw.first = false
+	fw.count++
+	return fw.count < fw.limit
+}
+
+func (fw *featureWriter) close() {
+	fw.out.WriteString(`],"numberReturned":`)
+	fw.out.WriteString(strconv.Itoa(fw.count))
+	fw.out.WriteString("}")
+	fw.out.Flush()
+}
+
+func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
+	if bbox == nil {
+		return true
+	}
+	geom := toOrb(f.Geometry)
+	if geom == nil {
+		return false
+	}
+	bound := geom.Bound()
+	return bound.Max[0] >= bbox[0] && bound.Min[0] <= bbox[2] &&
+		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
 func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
