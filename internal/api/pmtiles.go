@@ -3,12 +3,18 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 	"github.com/paulmach/orb"
@@ -88,7 +94,48 @@ func tilesForBounds(b [4]float64, z uint8) (uint32, uint32, uint32, uint32) {
 	return x0, x1, y0, y1
 }
 
-func (s *Server) writePMTiles(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit, maxzoom int) {
+func (s *Server) pmtilesCachePath(ctx context.Context, id, rawQuery string) (string, string, error) {
+	if s.CacheDir == "" {
+		return "", "", nil
+	}
+	state, err := s.Store.CollectionState(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256([]byte(id + "\x00" + state + "\x00" + rawQuery))
+	key := hex.EncodeToString(sum[:])
+	if err := os.MkdirAll(s.CacheDir, 0o755); err != nil {
+		return "", "", err
+	}
+	return filepath.Join(s.CacheDir, key+".pmtiles"), key, nil
+}
+
+func (s *Server) servePMTiles(w http.ResponseWriter, r *http.Request, content io.ReadSeeker, modTime time.Time, key, name string) {
+	w.Header().Set("Content-Type", pmtilesMediaType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name+".pmtiles"))
+	if key != "" {
+		w.Header().Set("ETag", `"`+key+`"`)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	http.ServeContent(w, r, name+".pmtiles", modTime, content)
+}
+
+func (s *Server) writePMTiles(w http.ResponseWriter, r *http.Request, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit, maxzoom int) {
+	ctx := r.Context()
+	path, key, err := s.pmtilesCachePath(ctx, id, r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if path != "" {
+		if file, err := os.Open(path); err == nil {
+			defer file.Close()
+			if info, err := file.Stat(); err == nil {
+				s.servePMTiles(w, r, file, info.ModTime(), key, id)
+				return
+			}
+		}
+	}
 	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, offset, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -173,9 +220,13 @@ func (s *Server) writePMTiles(ctx context.Context, w http.ResponseWriter, id str
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", pmtilesMediaType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", id+".pmtiles"))
-	w.Write(body)
+	if path != "" {
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, body, 0o644); err == nil {
+			os.Rename(tmp, path)
+		}
+	}
+	s.servePMTiles(w, r, bytes.NewReader(body), time.Time{}, key, id)
 }
 
 func buildPMTiles(name string, maxZoom uint8, bounds [4]float64, columns []chunk.Column, tiles []tilePayload) ([]byte, error) {

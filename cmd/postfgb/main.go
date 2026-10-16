@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/adonm/postfgb/internal/api"
 	"github.com/adonm/postfgb/internal/chunk"
@@ -54,6 +55,7 @@ func serve(args []string) {
 	adminToken := fs.String("admin-token", os.Getenv("POSTFGB_ADMIN_TOKEN"), "bearer token for the manifest, chunk and export endpoints")
 	rustgisCLI := fs.String("rustgis-cli", os.Getenv("POSTFGB_RUSTGIS_CLI"), "rustgis-cli binary used by the export endpoint")
 	ogr2ogr := fs.String("ogr2ogr", os.Getenv("POSTFGB_OGR2OGR"), "ogr2ogr binary used by the export endpoint")
+	cacheDir := fs.String("cache-dir", cacheDirDefault(), "cache directory for generated tilesets")
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
 	fs.Parse(args)
 	ctx := context.Background()
@@ -82,7 +84,15 @@ func serve(args []string) {
 		AdminToken: *adminToken,
 		RustgisCLI: *rustgisCLI,
 		OGR2OGR:    *ogr2ogr,
+		CacheDir:   *cacheDir,
 	})))
+}
+
+func cacheDirDefault() string {
+	if v := os.Getenv("POSTFGB_CACHE_DIR"); v != "" {
+		return v
+	}
+	return filepath.Join(os.TempDir(), "postfgb-cache")
 }
 
 type rawFeature struct {

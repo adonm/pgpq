@@ -372,6 +372,14 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) CollectionState(ctx context.Context, name string) (string, error) {
+	var state string
+	err := s.Pool.QueryRow(ctx, `
+		select coalesce(md5(string_agg(id::text || coalesce(checksum, ''), ',' order by id)), '')
+		from chunks where collection = $1`, name).Scan(&state)
+	return state, err
+}
+
 func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, error) {
 	var info CollectionInfo
 	err := s.Pool.QueryRow(ctx, fmt.Sprintf(collectionStats, "where c.name = $1"), name).

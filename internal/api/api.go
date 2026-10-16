@@ -32,6 +32,7 @@ type Server struct {
 	AdminToken   string
 	RustgisCLI   string
 	OGR2OGR      string
+	CacheDir     string
 }
 
 type Config struct {
@@ -39,6 +40,7 @@ type Config struct {
 	AdminToken string
 	RustgisCLI string
 	OGR2OGR    string
+	CacheDir   string
 }
 
 type link struct {
@@ -59,6 +61,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	s := &Server{
 		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 1000,
 		AdminToken: cfg.AdminToken, RustgisCLI: cfg.RustgisCLI, OGR2OGR: cfg.OGR2OGR,
+		CacheDir: cfg.CacheDir,
 	}
 	s.register(api)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
@@ -264,7 +267,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		s.writePMTiles(ctx, w, id, bbox, query, filter, offset, limit, maxzoom)
+		s.writePMTiles(w, r, id, bbox, query, filter, offset, limit, maxzoom)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
