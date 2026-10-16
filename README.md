@@ -44,7 +44,7 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 | `/conformance` | OGC API Features conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2-text filters, paged; `f=flatgeobuf` streams the filtered result as one FlatGeobuf |
+| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged; `f=flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile |
 | `/api` | OpenAPI 3.1 definition (OGC content type) |

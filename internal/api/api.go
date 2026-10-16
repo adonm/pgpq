@@ -98,7 +98,13 @@ func (s *Server) conformance(context.Context, *struct{}) (*conformanceOutput, er
 	out := &conformanceOutput{}
 	out.Body.ConformsTo = []string{
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30",
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/filter",
+		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/features-filter",
+		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
+		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
+		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
 	}
 	return out, nil
 }
@@ -394,10 +400,16 @@ func requestFilter(r *http.Request) (cql.Expr, error) {
 	if text == "" {
 		return expr, nil
 	}
-	if lang := r.URL.Query().Get("filter-lang"); lang != "" && lang != "cql2-text" {
-		return nil, errors.New("unsupported filter-lang " + lang)
+	var parsed cql.Expr
+	var err error
+	switch r.URL.Query().Get("filter-lang") {
+	case "", "cql2-text":
+		parsed, err = cql.Parse(text)
+	case "cql2-json":
+		parsed, err = cql.ParseJSON([]byte(text))
+	default:
+		return nil, errors.New("unsupported filter-lang " + r.URL.Query().Get("filter-lang"))
 	}
-	parsed, err := cql.Parse(text)
 	if err != nil {
 		return nil, err
 	}
