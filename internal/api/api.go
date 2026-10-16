@@ -17,7 +17,6 @@ import (
 	"github.com/paulmach/orb/encoding/mvt"
 	orbgeojson "github.com/paulmach/orb/geojson"
 	"github.com/paulmach/orb/maptile"
-	"github.com/paulmach/orb/simplify"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
@@ -214,7 +213,7 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 
 var reservedParams = map[string]bool{
 	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
-	"filter": true, "filter-lang": true, "format": true,
+	"filter": true, "filter-lang": true, "format": true, "maxzoom": true,
 }
 
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
@@ -232,7 +231,14 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	limit, err := parseLimit(r, s.DefaultLimit)
+	flatgeobuf := r.URL.Query().Get("f") == "flatgeobuf" ||
+		strings.Contains(r.Header.Get("Accept"), "application/flatgeobuf")
+	pmtilesRequested := r.URL.Query().Get("f") == "pmtiles"
+	defaultLimit := s.DefaultLimit
+	if flatgeobuf || pmtilesRequested {
+		defaultLimit = 1000000
+	}
+	limit, err := parseLimit(r, defaultLimit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -248,10 +254,17 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("q")
-	flatgeobuf := r.URL.Query().Get("f") == "flatgeobuf" ||
-		strings.Contains(r.Header.Get("Accept"), "application/flatgeobuf")
 	if flatgeobuf {
 		s.writeFGB(ctx, w, id, bbox, query, filter, offset, limit)
+		return
+	}
+	if pmtilesRequested {
+		maxzoom, err := parseMaxZoom(r, 4)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.writePMTiles(ctx, w, id, bbox, query, filter, offset, limit, maxzoom)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
@@ -698,15 +711,17 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 			collection.Append(feature)
 		}
 	}
-	layer := mvt.NewLayer(id, collection)
-	layer.ProjectToTile(tile)
-	layer.Clip(mvt.MapboxGLDefaultExtentBound)
-	layer.Simplify(simplify.DouglasPeucker(1.0))
-	layer.RemoveEmpty(1.0, 2.0)
-	data, err := mvt.MarshalGzipped(mvt.Layers{layer})
+	data, empty, err := tileBytes(id, collection, tile)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if empty {
+		data, err = mvt.MarshalGzipped(mvt.Layers{mvt.NewLayer(id, orbgeojson.NewFeatureCollection())})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
 	w.Write(data)

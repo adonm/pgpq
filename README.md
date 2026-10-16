@@ -48,7 +48,7 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 | `/conformance` | conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
+| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf; `f=pmtiles&maxzoom=N` builds a filtered PMTiles archive in process |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
 | `/collections/{id}/export?format=` | filtered features converted on the fly: fgb, geojson, gpkg, parquet, shp, kml, gpx (needs `--rustgis-cli` or `--ogr2ogr`; admin token when configured) |

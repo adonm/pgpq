@@ -1,10 +1,46 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/protomaps/go-pmtiles/pmtiles"
 )
+
+func TestTilesForBounds(t *testing.T) {
+	x0, x1, y0, y1 := tilesForBounds([4]float64{-180, -85, 180, 85}, 0)
+	if x0 != 0 || x1 != 0 || y0 != 0 || y1 != 0 {
+		t.Fatalf("z0 = %d %d %d %d", x0, x1, y0, y1)
+	}
+	x0, x1, y0, y1 = tilesForBounds([4]float64{-180, -85, 180, 85}, 2)
+	if x0 != 0 || x1 != 3 || y0 != 0 || y1 != 3 {
+		t.Fatalf("z2 = %d %d %d %d", x0, x1, y0, y1)
+	}
+}
+
+func TestBuildPMTiles(t *testing.T) {
+	tiles := []tilePayload{
+		{id: pmtiles.ZxyToID(0, 0, 0), data: []byte("tile0")},
+		{id: pmtiles.ZxyToID(1, 1, 0), data: []byte("tile1")},
+	}
+	body, err := buildPMTiles("demo", 1, [4]float64{-180, -85, 180, 85}, nil, tiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := pmtiles.DeserializeHeader(body[:127])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.SpecVersion != 3 || header.TileType != pmtiles.Mvt || header.AddressedTilesCount != 2 {
+		t.Fatalf("header = %+v", header)
+	}
+	entries := pmtiles.DeserializeEntries(bytes.NewBuffer(body[header.RootOffset:header.RootOffset+header.RootLength]), header.InternalCompression)
+	if len(entries) != 2 {
+		t.Fatalf("entries = %v", entries)
+	}
+}
 
 func TestTypedLiteral(t *testing.T) {
 	cases := []struct {
