@@ -56,7 +56,7 @@ func New(st *store.Store) http.Handler {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.0")
 		w.Write(body)
 	})
-	return mux
+	return gzipMiddleware(mux)
 }
 
 func (s *Server) register(api huma.API) {
@@ -65,6 +65,7 @@ func (s *Server) register(api huma.API) {
 	huma.Register(api, huma.Operation{OperationID: "collections", Method: "GET", Path: "/collections", Summary: "Collections"}, s.collections)
 	huma.Register(api, huma.Operation{OperationID: "collection", Method: "GET", Path: "/collections/{id}", Summary: "Collection"}, s.collection)
 	huma.Register(api, huma.Operation{OperationID: "collectionTilesets", Method: "GET", Path: "/collections/{id}/tiles", Summary: "Collection tilesets"}, s.tilesets)
+	huma.Register(api, huma.Operation{OperationID: "manifest", Method: "GET", Path: "/collections/{id}/manifest", Summary: "Chunk manifest"}, s.manifest)
 	huma.Register(api, huma.Operation{OperationID: "tileMatrixSets", Method: "GET", Path: "/tileMatrixSets", Summary: "Tile matrix sets"}, s.tileMatrixSets)
 	huma.Register(api, huma.Operation{OperationID: "tileMatrixSet", Method: "GET", Path: "/tileMatrixSets/{tileMatrixSetId}", Summary: "Tile matrix set"}, s.tileMatrixSet)
 }
@@ -256,12 +257,12 @@ func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, id string, b
 			skipped += meta.FeatureCount
 			continue
 		}
-		data, err := s.Store.ChunkByID(ctx, id, meta.ID)
+		row, err := s.Store.ChunkByID(ctx, id, meta.ID)
 		if err != nil {
 			slog.Error("chunk load failed", "chunk", meta.ID, "error", err)
 			continue
 		}
-		c, err := chunk.Open(data)
+		c, err := chunk.Open(row.Data)
 		if err != nil {
 			slog.Error("chunk open failed", "chunk", meta.ID, "error", err)
 			continue
@@ -495,11 +496,11 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 			skipped += meta.FeatureCount
 			continue
 		}
-		data, err := s.Store.ChunkByID(ctx, id, meta.ID)
+		row, err := s.Store.ChunkByID(ctx, id, meta.ID)
 		if err != nil {
 			return nil, nil, err
 		}
-		c, err := chunk.Open(data)
+		c, err := chunk.Open(row.Data)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -601,7 +602,7 @@ func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid chunk id", http.StatusBadRequest)
 		return
 	}
-	data, err := s.Store.ChunkByID(r.Context(), r.PathValue("id"), chunkID)
+	row, err := s.Store.ChunkByID(r.Context(), r.PathValue("id"), chunkID)
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "chunk not found", http.StatusNotFound)
 		return
@@ -610,8 +611,17 @@ func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if row.Checksum != nil {
+		etag := `"` + *row.Checksum + `"`
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "application/flatgeobuf")
-	w.Write(data)
+	w.Write(row.Data)
 }
 
 func (s *Server) tile(w http.ResponseWriter, r *http.Request) {

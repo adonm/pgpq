@@ -4,6 +4,8 @@ OGC API Features and OGC Tiles over PostgreSQL, backed by FlatGeobuf chunks and 
 
 Goal: the smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pushing filtering into index sidecars.
 
+The target deployment is [RustGIS](https://rustgis.app/): reads are served over HTTP at maximum speed, while writes are batch-oriented and free to sort and rewrite chunks.
+
 ## How it works
 
 - Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and stored as `bytea` rows.
@@ -12,6 +14,7 @@ Goal: the smallest Go package that provides performant 1000x scaling of the spat
 - Fulltext lives in a sidecar table (`tsvector`/GIN) populated at ingest; `?q=` intersects text matches with chunk and feature level spatial filtering.
 - Attribute equality filters live in a `jsonb`/GIN sidecar (`chunk_props`); any non-reserved query parameter becomes a containment filter intersected with the spatial and text paths.
 - Responses page with `links` (`rel=next`), so GDAL and other OGC clients walk the entire collection.
+- Read clients can fetch `/collections/{id}/manifest` and prune chunks locally, downloading only the FlatGeobuf chunks they need; chunk responses are immutable, with `Cache-Control` and ETags.
 - CQL2-text `filter=` supports comparisons, `IN`, `BETWEEN`, `LIKE`, `IS NULL` and `AND`/`OR`/`NOT`; clauses compile to type-guarded SQL over the jsonb sidecar, with equality served by GIN containment.
 - The server is one small Go binary: huma for the OGC metadata endpoints, streaming handlers for items, tiles, and raw chunks.
 
@@ -46,6 +49,7 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 | `/collections/{id}` | collection detail |
 | `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged; `f=flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
+| `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
 | `/collections/{id}/tiles` | tileset list |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
@@ -80,7 +84,7 @@ ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/benc
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text `filter=` clauses, OGC API Features with next-link paging, MVT tiles, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, bbox page ~2s, tiles ~0.6s. Next: CQL2-JSON, CQL2 spatial operators, Aurora client numbers.
+Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, OGC API Features with next-link paging, MVT tiles with tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: CQL2 spatial operators, collection versioning for atomic rewrites, Aurora client numbers.
 
 ## License
 

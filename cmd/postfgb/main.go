@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -181,6 +183,22 @@ func putChunk(ctx context.Context, st *store.Store, collection string, batch []c
 		MinX:  env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
 		Cover: cover.Chunk(env[0], env[1], env[2], env[3]),
 	}
+	sum := sha256.Sum256(data)
+	payload.Checksum = hex.EncodeToString(sum[:])
+	type column struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	cols := c.Columns()
+	list := make([]column, len(cols))
+	for i, col := range cols {
+		list[i] = column{Name: col.Name, Type: col.Type.String()}
+	}
+	columns, err := json.Marshal(list)
+	if err != nil {
+		fatal(err)
+	}
+	payload.Columns = string(columns)
 	id, err := st.PutChunk(ctx, collection, payload)
 	if err != nil {
 		fatal(err)

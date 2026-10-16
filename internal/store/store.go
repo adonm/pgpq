@@ -44,21 +44,29 @@ type Payload struct {
 	MinX, MinY float64
 	MaxX, MaxY float64
 	Cover      string
+	Checksum   string
+	Columns    string
 }
 
 type ChunkRow struct {
 	ID           int64
 	FeatureCount int
+	SizeBytes    int
 	MinX, MinY   float64
 	MaxX, MaxY   float64
+	Checksum     *string
+	Columns      []byte
 	Data         []byte
 }
 
 type ChunkMeta struct {
 	ID           int64
 	FeatureCount int
+	SizeBytes    int
 	MinX, MinY   float64
 	MaxX, MaxY   float64
+	Checksum     *string
+	Columns      []byte
 }
 
 type CollectionInfo struct {
@@ -162,11 +170,12 @@ func (s *Store) EnsureCollection(ctx context.Context, name string) error {
 func (s *Store) PutChunk(ctx context.Context, collection string, payload Payload) (int64, error) {
 	var id int64
 	err := s.Pool.QueryRow(ctx, `
-		insert into chunks (collection, feature_count, size_bytes, minx, miny, maxx, maxy, cover, data)
-		values ($1, $2, $3, $4, $5, $6, $7, $8::int8multirange, $9)
+		insert into chunks (collection, feature_count, size_bytes, minx, miny, maxx, maxy, cover, checksum, columns, data)
+		values ($1, $2, $3, $4, $5, $6, $7, $8::int8multirange, $9, $10::jsonb, $11)
 		returning id`,
 		collection, payload.Count, len(payload.Data),
-		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY, payload.Cover, payload.Data).Scan(&id)
+		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY, payload.Cover,
+		payload.Checksum, payload.Columns, payload.Data).Scan(&id)
 	return id, err
 }
 
@@ -226,7 +235,7 @@ func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64,
 }
 
 func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit int) ([]ChunkMeta, error) {
-	query := `select id, feature_count, minx, miny, maxx, maxy from chunks where collection = $1`
+	query := `select id, feature_count, size_bytes, minx, miny, maxx, maxy, checksum, columns from chunks where collection = $1`
 	args := []any{collection}
 	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
 		query += fragment
@@ -242,7 +251,7 @@ func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]floa
 	var out []ChunkMeta
 	for rows.Next() {
 		var meta ChunkMeta
-		if err := rows.Scan(&meta.ID, &meta.FeatureCount, &meta.MinX, &meta.MinY, &meta.MaxX, &meta.MaxY); err != nil {
+		if err := rows.Scan(&meta.ID, &meta.FeatureCount, &meta.SizeBytes, &meta.MinX, &meta.MinY, &meta.MaxX, &meta.MaxY, &meta.Checksum, &meta.Columns); err != nil {
 			return nil, err
 		}
 		out = append(out, meta)
@@ -322,14 +331,16 @@ func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64
 	return out, rows.Err()
 }
 
-func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) ([]byte, error) {
-	var data []byte
-	err := s.Pool.QueryRow(ctx,
-		`select data from chunks where collection = $1 and id = $2`, collection, id).Scan(&data)
+func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (ChunkRow, error) {
+	var row ChunkRow
+	err := s.Pool.QueryRow(ctx, `
+		select id, feature_count, size_bytes, minx, miny, maxx, maxy, checksum, columns, data
+		from chunks where collection = $1 and id = $2`, collection, id).
+		Scan(&row.ID, &row.FeatureCount, &row.SizeBytes, &row.MinX, &row.MinY, &row.MaxX, &row.MaxY, &row.Checksum, &row.Columns, &row.Data)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return row, ErrNotFound
 	}
-	return data, err
+	return row, err
 }
 
 const collectionStats = `
