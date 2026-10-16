@@ -31,6 +31,15 @@ type Server struct {
 	MaxChunks    int
 	DefaultLimit int
 	AdminToken   string
+	RustgisCLI   string
+	OGR2OGR      string
+}
+
+type Config struct {
+	Store      *store.Store
+	AdminToken string
+	RustgisCLI string
+	OGR2OGR    string
 }
 
 type link struct {
@@ -42,16 +51,20 @@ type link struct {
 }
 
 func New(st *store.Store) http.Handler {
-	return NewWithToken(st, "")
+	return NewWithConfig(Config{Store: st})
 }
 
-func NewWithToken(st *store.Store, adminToken string) http.Handler {
+func NewWithConfig(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("postfgb", "0.1.0"))
-	s := &Server{Store: st, MaxChunks: 64, DefaultLimit: 1000, AdminToken: adminToken}
+	s := &Server{
+		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 1000,
+		AdminToken: cfg.AdminToken, RustgisCLI: cfg.RustgisCLI, OGR2OGR: cfg.OGR2OGR,
+	}
 	s.register(api)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
+	mux.HandleFunc("GET /collections/{id}/export", s.export)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
@@ -201,7 +214,7 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 
 var reservedParams = map[string]bool{
 	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
-	"filter": true, "filter-lang": true,
+	"filter": true, "filter-lang": true, "format": true,
 }
 
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {

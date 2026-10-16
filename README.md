@@ -51,6 +51,7 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 | `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
+| `/collections/{id}/export?format=` | filtered features converted on the fly: fgb, geojson, gpkg, parquet, shp, kml, gpx (needs `--rustgis-cli` or `--ogr2ogr`; admin token when configured) |
 | `/collections/{id}/tiles` | tileset list |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
@@ -66,6 +67,8 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 - `gdalinfo "/vsicurl_streaming/http://localhost:8080/collections/bench/tiles/WebMercatorQuad/4/8/6.mvt"` — vector tile
 
 ## Exports
+
+The server converts on demand too: `GET /collections/{id}/export?format=gpkg&filter=...` runs the normal pushdown, assembles one FlatGeobuf and converts it with the configured engine — `--rustgis-cli` for its native Rust set, `--ogr2ogr` for the long tail — then streams the file with the right media type. The admin token is required when configured. Vector tiles are not part of rustgis-cli's writer set (its tileset writer makes raster PNG pyramids), so tiles stay on the in-process MVT path and the GDAL PMTiles batch below.
 
 Single-tile MVT is generated in-process (pure Go, clipped and simplified). For bulk conversion the server stays cgo-free and GDAL runs as a sidecar container:
 
@@ -85,7 +88,7 @@ ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/benc
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, OGC API Features with next-link paging, MVT tiles with tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: CQL2 spatial operators, collection versioning for atomic rewrites, Aurora client numbers.
+Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, OGC API Features with next-link paging, MVT tiles with tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, on-demand filtered exports through rustgis-cli or ogr2ogr, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: CQL2 spatial operators, collection versioning for atomic rewrites, Aurora client numbers.
 
 ## License
 
