@@ -70,6 +70,12 @@ just tiles bench 4                      # whole MVT tileset, packed as bench.pmt
 
 The tiles recipe chains GDAL's MVT writer into the PMTiles driver (MBTiles as the intermediate container, copied tile-for-tile). PMTiles archives are static files: host them on any object store and they serve without a tile backend.
 
+Keep filtering on the server side: GDAL evaluates `-where` clauses against OAPIF sources client-side (it downloads the whole collection), while server-side `filter=` goes through chunk pruning and the jsonb sidecar. Point GDAL at the filtered items URL instead:
+
+```sh
+ogr2ogr filtered.gpkg "/vsicurl/http://localhost:8080/collections/bench/items?filter=i%3E999990"
+```
+
 ## Status
 
 Pre-alpha. Working today: chunk encode/decode, ingest, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text `filter=` clauses, OGC API Features with next-link paging, MVT tiles, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, bbox page ~2s, tiles ~0.6s. Next: CQL2-JSON, CQL2 spatial operators, Aurora client numbers.
