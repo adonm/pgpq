@@ -41,13 +41,15 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 | Path | Content |
 | --- | --- |
 | `/` | landing page |
-| `/conformance` | OGC API Features conformance classes |
+| `/conformance` | conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
 | `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged; `f=flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
+| `/collections/{id}/tiles` | tileset list |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile |
-| `/api` | OpenAPI 3.1 definition (OGC content type) |
+| `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
+| `/api` | OpenAPI 3.0 definition (OGC content type) |
 
 ## Benchmarks
 
@@ -56,7 +58,7 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 - `ogrinfo "OAPIF:http://localhost:8080"` — collection listing
 - `ogrinfo -so -al "OAPIF:http://localhost:8080" bench` — full scan
 - `ogrinfo -so -al -spat -10 45 10 55 "OAPIF:http://localhost:8080" bench` — server-side bbox filter
-- `gdalinfo "/vsicurl/http://localhost:8080/collections/bench/tiles/WebMercatorQuad/0/0/0.mvt"` — vector tile
+- `gdalinfo "/vsicurl_streaming/http://localhost:8080/collections/bench/tiles/WebMercatorQuad/4/8/6.mvt"` — vector tile
 
 ## Exports
 

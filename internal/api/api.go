@@ -32,10 +32,11 @@ type Server struct {
 }
 
 type link struct {
-	Href  string `json:"href"`
-	Rel   string `json:"rel"`
-	Type  string `json:"type,omitempty"`
-	Title string `json:"title,omitempty"`
+	Href      string `json:"href"`
+	Rel       string `json:"rel"`
+	Type      string `json:"type,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Templated bool   `json:"templated,omitempty"`
 }
 
 func New(st *store.Store) http.Handler {
@@ -63,6 +64,9 @@ func (s *Server) register(api huma.API) {
 	huma.Register(api, huma.Operation{OperationID: "conformance", Method: "GET", Path: "/conformance", Summary: "Conformance"}, s.conformance)
 	huma.Register(api, huma.Operation{OperationID: "collections", Method: "GET", Path: "/collections", Summary: "Collections"}, s.collections)
 	huma.Register(api, huma.Operation{OperationID: "collection", Method: "GET", Path: "/collections/{id}", Summary: "Collection"}, s.collection)
+	huma.Register(api, huma.Operation{OperationID: "collectionTilesets", Method: "GET", Path: "/collections/{id}/tiles", Summary: "Collection tilesets"}, s.tilesets)
+	huma.Register(api, huma.Operation{OperationID: "tileMatrixSets", Method: "GET", Path: "/tileMatrixSets", Summary: "Tile matrix sets"}, s.tileMatrixSets)
+	huma.Register(api, huma.Operation{OperationID: "tileMatrixSet", Method: "GET", Path: "/tileMatrixSets/{tileMatrixSetId}", Summary: "Tile matrix set"}, s.tileMatrixSet)
 }
 
 type landing struct {
@@ -105,6 +109,12 @@ func (s *Server) conformance(context.Context, *struct{}) (*conformanceOutput, er
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
+		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/core",
+		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/oas30",
+		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/tileset",
+		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/tilesets-list",
+		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/geodata-tilesets",
+		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/mvt",
 	}
 	return out, nil
 }
@@ -170,7 +180,7 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 		Links: []link{
 			{Href: "/collections/" + info.Name, Rel: "self", Type: "application/json"},
 			{Href: "/collections/" + info.Name + "/items", Rel: "items", Type: "application/geo+json"},
-			{Href: "/collections/" + info.Name + "/tiles/WebMercatorQuad", Rel: "http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector", Type: "application/json"},
+			{Href: "/collections/" + info.Name + "/tiles", Rel: "http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector", Type: "application/json"},
 		},
 	}
 	if info.MinX != nil && info.MinY != nil && info.MaxX != nil && info.MaxY != nil {
