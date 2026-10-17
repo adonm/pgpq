@@ -81,6 +81,7 @@ type CollectionInfo struct {
 	Name         string
 	Kind         string
 	Members      []byte
+	Version      int64
 	ChunkCount   int64
 	FeatureCount int64
 	MinX, MinY   *float64
@@ -271,6 +272,9 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	if _, err := tx.Exec(ctx, `delete from collections where name = $1`, name); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `delete from tile_cache where collection = $1`, name); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -280,7 +284,7 @@ func (s *Store) PutView(ctx context.Context, name string, members []byte) error 
 	}
 	tag, err := s.Pool.Exec(ctx, `
 		insert into collections (name, kind, members) values ($1, 'view', $2::jsonb)
-		on conflict (name) do update set kind = 'view', members = excluded.members
+		on conflict (name) do update set kind = 'view', members = excluded.members, version = collections.version + 1
 		where collections.kind = 'view'`, name, members)
 	if err != nil {
 		return err
@@ -289,6 +293,36 @@ func (s *Store) PutView(ctx context.Context, name string, members []byte) error 
 		return ErrConflict
 	}
 	return nil
+}
+
+func (s *Store) TileCacheGet(ctx context.Context, collection, version string, tier, z, x, y int, filterKey string) ([]byte, string, bool, error) {
+	var data []byte
+	var etag string
+	err := s.Pool.QueryRow(ctx, `
+		select data, etag from tile_cache
+		where collection = $1 and version = $2 and tier = $3 and z = $4 and x = $5 and y = $6 and filter_key = $7`,
+		collection, version, tier, z, x, y, filterKey).Scan(&data, &etag)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", false, nil
+	}
+	if err != nil {
+		return nil, "", false, err
+	}
+	return data, etag, true, nil
+}
+
+func (s *Store) TileCachePut(ctx context.Context, collection, version string, tier, z, x, y int, filterKey, etag string, data []byte) error {
+	_, err := s.Pool.Exec(ctx, `
+		insert into tile_cache (collection, version, tier, z, x, y, filter_key, etag, data)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		on conflict do nothing`,
+		collection, version, tier, z, x, y, filterKey, etag, data)
+	return err
+}
+
+func (s *Store) PurgeTileCache(ctx context.Context) error {
+	_, err := s.Pool.Exec(ctx, `delete from tile_cache where created_at < now() - interval '6 hours'`)
+	return err
 }
 
 func (i *Ingest) Commit(ctx context.Context) error {
@@ -325,7 +359,7 @@ func (i *Ingest) RefreshStats(ctx context.Context) error {
 
 func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string) error {
 	_, err := i.tx.Exec(ctx, `
-		update collections set kind = 'native', sortable = coalesce($2::text[], '{}'), id_column = $3, time_column = $4
+		update collections set kind = 'native', version = version + 1, sortable = coalesce($2::text[], '{}'), id_column = $3, time_column = $4
 		where name = $1`, i.collection, sortable, nullable(idColumn), nullable(timeColumn))
 	return err
 }
@@ -570,7 +604,7 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, kind, members, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column from collections`
+const collectionColumns = `select name, kind, members, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
@@ -581,7 +615,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	var out []CollectionInfo
 	for rows.Next() {
 		var info CollectionInfo
-		if err := rows.Scan(&info.Name, &info.Kind, &info.Members, &info.ChunkCount, &info.FeatureCount,
+		if err := rows.Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn); err != nil {
 			return nil, err
 		}
@@ -593,7 +627,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, error) {
 	var info CollectionInfo
 	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
-		Scan(&info.Name, &info.Kind, &info.Members, &info.ChunkCount, &info.FeatureCount,
+		Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return info, ErrNotFound

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -34,6 +35,8 @@ type Server struct {
 	AdminToken   string
 	RustgisCLI   string
 	OGR2OGR      string
+	sweepMu      sync.Mutex
+	lastSweep    time.Time
 }
 
 type Config struct {
@@ -930,23 +933,45 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	tile := maptile.New(uint32(x), uint32(y), maptile.Zoom(z))
 	bound := tile.Bound()
 	bbox := [4]float64{bound.Min[0], bound.Min[1], bound.Max[0], bound.Max[1]}
-	var collection *orbgeojson.FeatureCollection
-	switch {
-	case info.Kind == "view":
-		tier := tierForZoom(int(z))
+	filtered := query != "" || filter != nil
+	tier := 0
+	if !filtered {
+		tier = tierForZoom(int(z))
 		if overview != nil {
 			tier = *overview
 		}
+	}
+	version, err := s.cacheVersion(ctx, info)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	filterKey := filterKeyOf(r)
+	etag := tileETag(version, tier, int(z), int(x), int(y), filterKey)
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	s.maybeSweep()
+	if cached, cachedEtag, ok, err := s.Store.TileCacheGet(ctx, info.Name, version, tier, int(z), int(x), int(y), filterKey); err != nil {
+		slog.Error("tile cache get failed", "collection", info.Name, "error", err)
+	} else if ok {
+		w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
+		w.Header().Set("ETag", cachedEtag)
+		w.Header().Set("Cache-Control", "public, max-age=600")
+		w.Write(cached)
+		return
+	}
+	var collection *orbgeojson.FeatureCollection
+	switch {
+	case info.Kind == "view":
 		collection, err = s.viewTile(ctx, info, bbox, query, filter, tier)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	case query == "" && filter == nil:
-		tier := tierForZoom(int(z))
-		if overview != nil {
-			tier = *overview
-		}
 		rows, err := s.Store.Chunks(ctx, id, &bbox, s.MaxChunks, tier)
 		if err == nil && len(rows) == 0 && tier > 0 {
 			rows, err = s.Store.Chunks(ctx, id, &bbox, s.MaxChunks, 0)
@@ -987,7 +1012,13 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
+	w.Header().Set("Cache-Control", "public, max-age=600")
 	w.Write(data)
+	if len(data) <= maxTileCacheBytes {
+		if err := s.Store.TileCachePut(ctx, info.Name, version, tier, int(z), int(x), int(y), filterKey, etag, data); err != nil {
+			slog.Error("tile cache put failed", "collection", info.Name, "error", err)
+		}
+	}
 }
 
 func appendFeatures(fc *orbgeojson.FeatureCollection, c *chunk.Chunk, feats []*flattypes.Feature) {

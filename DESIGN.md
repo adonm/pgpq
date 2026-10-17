@@ -17,7 +17,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 - Chunk payloads are zstd-compressed in Go before insert and stored out-of-line uncompressed (`STORAGE EXTERNAL`): Postgres does no compression work and ships stored bytes as-is; checksums and ETags cover the raw FlatGeobuf.
 - All queries already carry `collection = $1`, so partition pruning turns access into per-collection index scans with unchanged SQL.
 - Each collection also gets a `layers.<name>` SQL view over its tier-0 chunks for database-side introspection, GeoPackage-style.
-- The `collections` catalog row carries per-collection stats (feature count, spatial and temporal extent, kind, members, declared sortable columns), maintained in the ingest transaction; the collection endpoints never scan chunk tables.
+- The `collections` catalog row carries per-collection stats (feature count, spatial and temporal extent, kind, members, declared sortable columns) and a `version` that bumps on every replace; the collection endpoints never scan chunk tables.
 - The core path requires zero PostgreSQL extensions; the legacy `pg_trgm` create is removed.
 
 ## Views — managed union views
@@ -50,7 +50,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## HTTP caching
 
-Chunks are immutable with checksum ETags. Tiles carry an ETag derived from collection state plus z/x/y, long-lived. The manifest carries a collection-state ETag. Items stay uncached.
+Chunks are immutable with checksum ETags. Tiles and manifests carry ETags derived from a monotonically increasing per-collection `version` (views combine member versions). A shared Postgres tile cache holds rendered MVT keyed by `(collection, version, tier, z, x, y, filter hash)`: every worker sees the same entries, restarts lose nothing, and a replace bumps the version, which invalidates logically — a TTL janitor reclaims old rows. Items stay uncached.
 
 ## Exports
 
@@ -65,7 +65,7 @@ Chunks are immutable with checksum ETags. Tiles carry an ETag derived from colle
 
 ## Performance
 
-Design target: ~100M features in one collection on one PostgreSQL node. Chunk fetches run in parallel within a request; tiles get an in-process LRU; every request carries a chunk byte budget. Measured baseline (1M synthetic features, GDAL as OGC client): full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tile ~0.6s.
+Design target: ~100M features in one collection on one PostgreSQL node. Chunk fetches run in parallel within a request; every request carries a chunk byte budget; tiles are served through the shared Postgres cache rather than a per-worker one, so caching works identically at any worker count. Measured baseline (1M synthetic features, GDAL as OGC client): full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tile ~0.6s.
 
 ## Rejected or deferred
 
@@ -85,4 +85,4 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 6. Client features: datetime, sortby, CRS/bbox-crs, CQL2 spatial.
 7. Exports through ogr2ogr only.
 8. Ops: healthz/readyz, metrics, lifecycle and pool flags, integration tests in CI.
-9. Performance: parallel chunk fetch, tile LRU, byte budget; tile and manifest ETags, MVT ids, tileset limits.
+9. Performance: parallel chunk fetch, byte budget, shared Postgres tile cache with version-keyed tiles and manifest (ETags from the same version), MVT ids, tileset limits.
