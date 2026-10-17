@@ -122,7 +122,13 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	window := make([]chunk.InputFeature, 0, 4096)
 	windowBytes := 0
 	var timeMin, timeMax *time.Time
+	jsonDecided := false
 	flush := func() error {
+		if !jsonDecided {
+			decideJSONColumns(cols, batch)
+			jsonDecided = true
+		}
+		rewriteJSONValues(cols, batch)
 		encoded, err := putChunk(ctx, ing, opts.Collection, cols, batch, 0)
 		if err != nil {
 			return err
@@ -206,6 +212,73 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 
 func invalid(err error) error {
 	return fmt.Errorf("%w: %v", ErrInvalid, err)
+}
+
+const minJSONSample = 8
+
+func decideJSONColumns(cols []chunk.Column, features []chunk.InputFeature) {
+	jsonish := map[string]int{}
+	seen := map[string]int{}
+	for i := range features {
+		for j := range cols {
+			col := &cols[j]
+			if col.Type != flattypes.ColumnTypeString {
+				continue
+			}
+			raw, ok := features[i].Properties[col.Name]
+			if !ok || len(raw) == 0 || string(raw) == "null" {
+				continue
+			}
+			seen[col.Name]++
+			if _, ok := jsonText(raw); ok {
+				jsonish[col.Name]++
+			}
+		}
+	}
+	for i := range cols {
+		col := &cols[i]
+		if col.Type != flattypes.ColumnTypeString {
+			continue
+		}
+		if seen[col.Name] >= minJSONSample && jsonish[col.Name]*2 >= seen[col.Name] {
+			col.Type = flattypes.ColumnTypeJson
+		}
+	}
+}
+
+func rewriteJSONValues(cols []chunk.Column, features []chunk.InputFeature) {
+	for i := range cols {
+		if cols[i].Type != flattypes.ColumnTypeJson {
+			continue
+		}
+		for j := range features {
+			raw, ok := features[j].Properties[cols[i].Name]
+			if !ok {
+				continue
+			}
+			if inner, ok := jsonText(raw); ok {
+				features[j].Properties[cols[i].Name] = inner
+			}
+		}
+	}
+}
+
+func jsonText(raw json.RawMessage) (json.RawMessage, bool) {
+	if len(raw) < 3 || raw[0] != '"' {
+		return nil, false
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return nil, false
+	}
+	trimmed := json.RawMessage(strings.TrimSpace(text))
+	if len(trimmed) < 2 || (trimmed[0] != '[' && trimmed[0] != '{') {
+		return nil, false
+	}
+	if !json.Valid(trimmed) {
+		return nil, false
+	}
+	return trimmed, true
 }
 
 type columnInfo struct {

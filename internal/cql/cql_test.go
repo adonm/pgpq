@@ -14,7 +14,7 @@ func TestSQL(t *testing.T) {
 	var args []any
 	sql := expr.SQL("props", &args)
 	want := "((case when jsonb_typeof(props -> $1) = 'number' then (props ->> $1)::numeric end) >= $2" +
-		" and props @> jsonb_build_object($3::text, $4::text))"
+		" and (props @> jsonb_build_object($3::text, $4::text) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($4::text))))"
 	if sql != want {
 		t.Fatalf("sql = %s, want %s", sql, want)
 	}
@@ -31,7 +31,7 @@ func TestEqualityUsesContainment(t *testing.T) {
 	}
 	var args []any
 	sql := expr.SQL("props", &args)
-	want := "(props @> jsonb_build_object($1::text, $2::text) and (props @> jsonb_build_object($3::text, $4::numeric) or props @> jsonb_build_object($5::text, $6::numeric)))"
+	want := "((props @> jsonb_build_object($1::text, $2::text) or (jsonb_typeof(props -> $1::text) = 'array' and props -> $1::text @> jsonb_build_array($2::text))) and ((props @> jsonb_build_object($3::text, $4::numeric) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($4::numeric))) or (props @> jsonb_build_object($5::text, $6::numeric) or (jsonb_typeof(props -> $5::text) = 'array' and props -> $5::text @> jsonb_build_array($6::numeric)))))"
 	if sql != want {
 		t.Fatalf("sql = %s, want %s", sql, want)
 	}

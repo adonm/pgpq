@@ -126,7 +126,8 @@ func equalityExpr(col string, args *[]any, prop string, value any) string {
 	default:
 		val += "::text"
 	}
-	return fmt.Sprintf("%s @> jsonb_build_object(%s, %s)", col, key, val)
+	return fmt.Sprintf("(%s @> jsonb_build_object(%s, %s) or (jsonb_typeof(%s -> %s) = 'array' and %s -> %s @> jsonb_build_array(%s)))",
+		col, key, val, col, key, col, key, val)
 }
 
 func valueExpr(col string, args *[]any, prop string, value any) string {
