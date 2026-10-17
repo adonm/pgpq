@@ -75,6 +75,12 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /metrics", s.metricsHandler)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/items/{featureID}", s.feature)
+	mux.HandleFunc("GET /collections/{id}/items.fgb", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		query.Set("f", "flatgeobuf")
+		r.URL.RawQuery = query.Encode()
+		s.items(w, r)
+	})
 	if !s.ReadOnly {
 		mux.HandleFunc("PUT /collections/{id}", s.putCollection)
 		mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
@@ -89,7 +95,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /viewer", s.viewer)
 	mux.HandleFunc("GET /viewer.rgis", s.viewerProject)
 	mux.HandleFunc("GET /stats", s.stats)
-	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
+	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{y}/{x}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
 		if err != nil {
@@ -317,6 +323,7 @@ var reservedParams = map[string]bool{
 	"filter": true, "filter-lang": true, "format": true,
 	"overview": true, "numberMatched": true,
 	"datetime": true, "sortby": true, "crs": true, "bbox-crs": true,
+	"z": true, "x": true, "y": true, "tileMatrix": true, "tileMatrixSet": true,
 }
 
 func parseOverview(r *http.Request) (*int, error) {
@@ -352,7 +359,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		strings.Contains(r.Header.Get("Accept"), "application/flatgeobuf")
 	defaultLimit := s.DefaultLimit
 	if flatgeobuf {
-		defaultLimit = 1000000
+		defaultLimit = flatgeobufLimit
 	}
 	limit, err := parseLimit(r, defaultLimit)
 	if err != nil {
@@ -381,11 +388,11 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if info.Kind == "view" && flatgeobuf {
-		s.writeViewFGB(ctx, w, info, q)
+		s.writeViewFGB(ctx, w, r, info, q)
 		return
 	}
 	if flatgeobuf {
-		s.writeFGB(ctx, w, id, q.bbox, q.query, q.filter, q.order, q.shapes, q.offset, q.limit, 0)
+		s.writeFGB(ctx, w, r, id, q.bbox, q.query, q.filter, q.order, q.shapes, q.offset, q.limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
@@ -719,7 +726,7 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
-func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit, tier int) {
+func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit, tier int) {
 	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, order, shapes, offset, limit, tier)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -737,6 +744,9 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string,
 		return
 	}
 	w.Header().Set("Content-Type", "application/flatgeobuf")
+	if link := pageLink(r, limit, offset, len(features)); link != "" {
+		w.Header().Set("Link", "<"+link+">; rel=\"next\"")
+	}
 	w.Write(data)
 }
 
@@ -951,8 +961,8 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	z, errZ := strconv.ParseUint(r.PathValue("z"), 10, 32)
-	x, errX := strconv.ParseUint(r.PathValue("x"), 10, 32)
-	y, errY := strconv.ParseUint(strings.TrimSuffix(r.PathValue("y"), ".mvt"), 10, 32)
+	y, errY := strconv.ParseUint(r.PathValue("y"), 10, 32)
+	x, errX := strconv.ParseUint(strings.TrimSuffix(r.PathValue("x"), ".mvt"), 10, 32)
 	if errZ != nil || errX != nil || errY != nil {
 		http.Error(w, "invalid tile coordinates", http.StatusBadRequest)
 		return
@@ -1163,6 +1173,7 @@ func (s *Server) tileMatches(ctx context.Context, info store.CollectionInfo, bbo
 const (
 	maxTileFeatures = 250000
 	tileChunkMax    = 8
+	flatgeobufLimit = 100000
 )
 
 func itemHash(value any) uint64 {

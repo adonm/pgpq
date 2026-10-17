@@ -57,7 +57,7 @@ func (f *fgbSink) remaining() int {
 	return f.limit - len(f.features)
 }
 
-func (s *Server) writeViewFGB(ctx context.Context, w http.ResponseWriter, info store.CollectionInfo, q featureQuery) {
+func (s *Server) writeViewFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, info store.CollectionInfo, q featureQuery) {
 	members, err := s.viewMembers(ctx, info)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -84,6 +84,9 @@ func (s *Server) writeViewFGB(ctx context.Context, w http.ResponseWriter, info s
 		return
 	}
 	w.Header().Set("Content-Type", "application/flatgeobuf")
+	if link := pageLink(r, q.limit, q.offset, len(out.features)); link != "" {
+		w.Header().Set("Link", "<"+link+">; rel=\"next\"")
+	}
 	w.Write(data)
 }
 

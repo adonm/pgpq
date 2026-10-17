@@ -65,7 +65,7 @@ func (s *Server) tilesets(ctx context.Context, in *collectionInput) (*tilesetsOu
 		TileMatrixSetURI: webMercatorQuadURI,
 		Links: []link{
 			{
-				Href:      "/collections/" + in.ID + "/tiles/" + webMercatorQuadID + "/{z}/{x}/{y}",
+				Href:      "/collections/" + in.ID + "/tiles/" + webMercatorQuadID + "/{z}/{y}/{x}",
 				Rel:       "item",
 				Type:      "application/vnd.mapbox-vector-tile",
 				Title:     "Tiles",

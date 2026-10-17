@@ -128,7 +128,7 @@ func TestPostgresIngestQueryTiles(t *testing.T) {
 		t.Fatalf("feature = %d: %s", w.Code, w.Body.String())
 	}
 
-	w = call(h, "GET", "/collections/"+name+"/tiles/WebMercatorQuad/14/8529/5975", "", nil)
+	w = call(h, "GET", "/collections/"+name+"/tiles/WebMercatorQuad/14/5975/8529", "", nil)
 	if w.Code != 200 || w.Body.Len() == 0 {
 		t.Fatalf("tile = %d with %d bytes", w.Code, w.Body.Len())
 	}

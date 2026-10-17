@@ -5,7 +5,11 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strings"
 
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+
+	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -113,7 +117,7 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 		tiles = append(tiles, map[string]any{
 			"name":        title + " (vector tiles)",
 			"kind":        "vector",
-			"url":         base + "/collections/" + escaped + "/tiles/WebMercatorQuad/{z}/{y}/{x}?f=mvt",
+			"url":         base + "/collections/" + escaped + "/tiles/WebMercatorQuad/{z}/{y}/{x}",
 			"minZoom":     0,
 			"maxZoom":     projectTileMaxZoom,
 			"tileSize":    256,
@@ -126,16 +130,19 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 		if s.projectFeatureCount(r, info) > projectLayerMax {
 			continue
 		}
+		geometry := s.collectionGeometryType(r, info)
+		if geometry == "" {
+			continue
+		}
 		layers = append(layers, map[string]any{
 			"id":      next,
 			"name":    title,
 			"visible": false,
 			"dataset": map[string]any{
 				"name":          title,
-				"geometry_type": "None",
+				"geometry_type": geometry,
 				"fields":        []any{},
 				"features":      []any{},
-				"source":        info.Name + ".geojson",
 			},
 			"renderer": map[string]any{"Single": map[string]any{
 				"fill": []int{80, 160, 240, 120}, "stroke": []int{60, 120, 180, 255},
@@ -151,7 +158,7 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 			"expanded":     true,
 			"selectable":   true,
 			"source": map[string]any{
-				"path": base + "/collections/" + escaped + "/items?f=flatgeobuf",
+				"path": base + "/collections/" + escaped + "/items.fgb",
 			},
 		})
 		next++
@@ -176,6 +183,54 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", `inline; filename="postfgb.rgis"`)
 	json.NewEncoder(w).Encode(project)
+}
+
+func (s *Server) collectionGeometryType(r *http.Request, info store.CollectionInfo) string {
+	collection := info.Name
+	if info.Kind == "view" {
+		members, err := parseMembers(info)
+		if err != nil || len(members) == 0 {
+			return ""
+		}
+		collection = members[0].Collection
+	}
+	metas, err := s.Store.ChunkMetas(r.Context(), collection, nil, 1, 0, 0)
+	if err != nil || len(metas) == 0 {
+		return ""
+	}
+	row, err := s.Store.ChunkByID(r.Context(), collection, metas[0].ID)
+	if err != nil {
+		return ""
+	}
+	c, err := chunk.Open(row.Data)
+	if err != nil {
+		return ""
+	}
+	switch c.Header().GeometryType() {
+	case flattypes.GeometryTypePoint, flattypes.GeometryTypeMultiPoint:
+		return "Point"
+	case flattypes.GeometryTypeLineString, flattypes.GeometryTypeMultiLineString:
+		return "Polyline"
+	case flattypes.GeometryTypePolygon, flattypes.GeometryTypeMultiPolygon:
+		return "Polygon"
+	}
+	features, err := c.SearchAll()
+	if err != nil {
+		return ""
+	}
+	for _, f := range features {
+		switch g := c.GeoJSON(f).Geometry; {
+		case g == nil:
+			continue
+		case strings.HasPrefix(g.Type, "Point"):
+			return "Point"
+		case strings.HasPrefix(g.Type, "Line"):
+			return "Polyline"
+		default:
+			return "Polygon"
+		}
+	}
+	return ""
 }
 
 func (s *Server) projectFeatureCount(r *http.Request, info store.CollectionInfo) int64 {

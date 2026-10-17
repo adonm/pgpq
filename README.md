@@ -60,6 +60,7 @@ curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
 | `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters including spatial `S_INTERSECTS`, paged (50,000 default); `overview=auto|0|1|2` picks or bypasses the overview tier (views serve full detail unless set); `numberMatched=true` adds the match count; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
+| `/collections/{id}/items.fgb` | the same FlatGeobuf export at the address clients need for in-place reads (`.fgb` suffix); capped at 100k features with a `Link: rel=next` when there is more |
 | `/collections/{id}/items/{featureId}` | single feature; ids come from an id-like property (`id`, `fid`, ...) or the synthetic `chunkID-ord` |
 | `/collections/{id}/queryables` | JSON Schema of the filterable properties |
 | `PUT /collections/{id}?sortable=&id_column=&time_column=` (writable) | create-or-replace the collection from a whole FlatGeobuf body (any non-JSON content type); transactional, reprojected to WGS84, readers keep the old version until the swap; `sortable` declares up to 4 indexed columns |
@@ -71,7 +72,7 @@ curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "
 | `/collections/{id}/chunks/{chunkID}` (writable) | raw FlatGeobuf chunk |
 | `/collections/{id}/manifest` (writable) | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs; version ETag with 304 revalidation |
 | `/collections/{id}/tiles` | tileset list with bounding box and per-zoom tile matrix limits |
-| `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile; accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms and honor `overview=` |
+| `/collections/{id}/tiles/WebMercatorQuad/{z}/{y}/{x}` | MVT tile, OGC order (tileMatrix/tileRow/tileCol); accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms and honor `overview=` |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
 | `/api` | OpenAPI 3.0 definition (OGC content type) |
 | `/viewer` | minimal HTML host that embeds the RustGIS web app from its CDN (`web.rustgis.app/?embed&project=…`) on the generated `/viewer.rgis` project: one entry per catalog collection (vector tiles for every collection, streamed FlatGeobuf layers for those under 2M features), all hidden by default; a link opens the app on its own domain |
@@ -99,7 +100,7 @@ The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` a
 - `ogrinfo "OAPIF:http://localhost:8080"` — collection listing
 - `ogrinfo -so -al "OAPIF:http://localhost:8080" bench` — full scan
 - `ogrinfo -so -al -spat -10 45 10 55 "OAPIF:http://localhost:8080" bench` — server-side bbox filter
-- `gdalinfo "/vsicurl_streaming/http://localhost:8080/collections/bench/tiles/WebMercatorQuad/4/8/6.mvt"` — vector tile
+- `gdalinfo "/vsicurl_streaming/http://localhost:8080/collections/bench/tiles/WebMercatorQuad/4/6/8.mvt"` — vector tile (matrix/row/column)
 
 `just pg-stats` watches a bulk load from the database side: database size, `temp_files`/`temp_bytes`, session states and oldest transaction, per-collection chunk storage and the WAL directory size. `temp_bytes` is the one that matters during big loads — index builds spill into Postgres temp files that are unlinked immediately, so `df` shows the space consumed while `du`, `pg_database_size` and `docker system df` cannot; a jump there means index-build spill, answered by raising `maintenance_work_mem` (or loading in tiles).
 
