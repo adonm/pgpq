@@ -193,11 +193,19 @@ func catalogExtent(infos []store.CollectionInfo) (float64, float64, float64, flo
 }
 
 func (s *Server) collectionGeometryType(r *http.Request, info store.CollectionInfo) string {
-	metas, err := s.Store.ChunkMetas(r.Context(), info.Name, nil, 1, 0, 0)
+	collection := info.Name
+	if info.Kind == "view" {
+		names, err := s.Store.ViewMemberNames(r.Context(), info)
+		if err != nil || len(names) == 0 {
+			return ""
+		}
+		collection = names[0]
+	}
+	metas, err := s.Store.ChunkMetas(r.Context(), collection, nil, 1, 0, 0)
 	if err != nil || len(metas) == 0 {
 		return ""
 	}
-	row, err := s.Store.ChunkByID(r.Context(), info.Name, metas[0].ID)
+	row, err := s.Store.ChunkByID(r.Context(), collection, metas[0].ID)
 	if err != nil {
 		return ""
 	}

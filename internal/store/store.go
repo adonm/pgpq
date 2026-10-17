@@ -81,6 +81,7 @@ type ChunkMeta struct {
 type CollectionInfo struct {
 	Name         string
 	Kind         string
+	Members      []byte
 	Version      int64
 	ChunkCount   int64
 	FeatureCount int64

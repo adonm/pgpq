@@ -286,7 +286,7 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, kind, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable, title, description, license, keywords, stac from collections`
+const collectionColumns = `select name, kind, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable, title, description, license, keywords, stac, members from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
@@ -299,7 +299,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 		var info CollectionInfo
 		if err := rows.Scan(&info.Name, &info.Kind, &info.Version, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable,
-			&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac); err != nil {
+			&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac, &info.Members); err != nil {
 			return nil, err
 		}
 		out = append(out, info)
@@ -312,7 +312,7 @@ func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, er
 	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
 		Scan(&info.Name, &info.Kind, &info.Version, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable,
-			&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac)
+			&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac, &info.Members)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return info, ErrNotFound
 	}

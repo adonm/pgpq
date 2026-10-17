@@ -21,9 +21,10 @@ import (
 var virtualMagic = [8]byte{0x66, 0x67, 0x62, 0x03, 0x66, 0x67, 0x62, 0x00}
 
 type virtualRun struct {
-	chunkID int64
-	base    int64
-	bytes   int
+	collection string
+	chunkID    int64
+	base       int64
+	bytes      int
 }
 
 type virtualSegment struct {
@@ -142,6 +143,10 @@ func (s *Server) virtualFile(ctx context.Context, info store.CollectionInfo, tie
 		return cached, nil
 	}
 	vf, err := s.storedVirtual(ctx, info, tier)
+	if errors.Is(err, store.ErrNotFound) && tier > 0 {
+		tier = 0
+		vf, err = s.storedVirtual(ctx, info, tier)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +159,12 @@ func (s *Server) storedVirtual(ctx context.Context, info store.CollectionInfo, t
 	if err != nil {
 		return nil, err
 	}
-	runs, err := s.Store.VirtualRuns(ctx, info.Name, tier)
+	var runs []store.VirtualRun
+	if info.Kind == "view" {
+		runs, err = s.Store.ViewRuns(ctx, info)
+	} else {
+		runs, err = s.Store.VirtualRuns(ctx, info.Name, tier)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +184,11 @@ func (s *Server) storedVirtual(ctx context.Context, info store.CollectionInfo, t
 		runs:     make([]virtualRun, 0, len(runs)),
 	}
 	for _, run := range runs {
-		vf.runs = append(vf.runs, virtualRun{chunkID: run.ChunkID, base: run.Base, bytes: run.Bytes})
+		origin := run.Collection
+		if origin == "" {
+			origin = info.Name
+		}
+		vf.runs = append(vf.runs, virtualRun{collection: origin, chunkID: run.ChunkID, base: run.Base, bytes: run.Bytes})
 	}
 	return vf, nil
 }
@@ -338,7 +352,7 @@ func (s *Server) writeRun(ctx context.Context, w io.Writer, cursor *int64, vf *v
 	if end <= from || start >= to {
 		return nil
 	}
-	body, err := s.virtualRunBytes(ctx, vf.name, vf.version, *run, max(from, start)-start, min(to, end)-start)
+	body, err := s.virtualRunBytes(ctx, run.collection, vf.version, *run, max(from, start)-start, min(to, end)-start)
 	if err != nil {
 		return err
 	}

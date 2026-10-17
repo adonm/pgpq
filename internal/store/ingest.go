@@ -12,6 +12,7 @@ import (
 )
 
 type Ingest struct {
+	store      *Store
 	tx         pgx.Tx
 	collection string
 	staging    map[string]string
@@ -31,7 +32,7 @@ func (s *Store) BeginIngest(ctx context.Context, name string) (*Ingest, error) {
 		tx.Rollback(ctx)
 		return nil, err
 	}
-	ing := &Ingest{tx: tx, collection: name, staging: map[string]string{}, virtual: map[int]*virtualTier{}}
+	ing := &Ingest{store: s, tx: tx, collection: name, staging: map[string]string{}, virtual: map[int]*virtualTier{}}
 	if err := ing.createStaging(ctx); err != nil {
 		tx.Rollback(ctx)
 		return nil, err
@@ -207,11 +208,15 @@ func (s *Store) PutMeta(ctx context.Context, name string, doc []byte, meta Colle
 	if !collectionName.MatchString(name) {
 		return fmt.Errorf("invalid collection name %q", name)
 	}
+	return putMeta(ctx, s.Pool, name, doc, meta)
+}
+
+func putMeta(ctx context.Context, conn db, name string, doc []byte, meta CollectionMeta) error {
 	keywords := any(nil)
 	if meta.Keywords != nil {
 		keywords = *meta.Keywords
 	}
-	_, err := s.Pool.Exec(ctx, `
+	_, err := conn.Exec(ctx, `
 		insert into collections (name, stac, title, description, license, keywords)
 		values ($1, $2::jsonb, $3, $4, $5, coalesce($6::text[], '{}'))
 		on conflict (name) do update set
@@ -249,7 +254,14 @@ func (i *Ingest) Commit(ctx context.Context) error {
 	if err := i.buildVirtual(ctx); err != nil {
 		return err
 	}
+	if err := i.rebuildMemberViews(ctx); err != nil {
+		return err
+	}
 	return i.tx.Commit(ctx)
+}
+
+func (i *Ingest) rebuildMemberViews(ctx context.Context) error {
+	return i.store.rebuildMemberViews(ctx, i.tx, i.collection)
 }
 
 func (i *Ingest) Rollback(ctx context.Context) {

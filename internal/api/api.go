@@ -296,6 +296,10 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if info.Kind == "view" {
+		http.Error(w, "a view serves one FlatGeobuf file: /collections/"+id+"/items.fgb", http.StatusNotImplemented)
+		return
+	}
 	crsFn, contentCRS, err := s.outputCRS(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

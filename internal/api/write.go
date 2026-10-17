@@ -69,6 +69,8 @@ type collectionDoc struct {
 	Description *string   `json:"description"`
 	License     *string   `json:"license"`
 	Keywords    *[]string `json:"keywords"`
+	Members     []string  `json:"members"`
+	Postfgb     []string  `json:"postfgb:members"`
 }
 
 func (s *Server) putCollectionDoc(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +91,14 @@ func (s *Server) putCollectionDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meta := store.CollectionMeta{Title: doc.Title, Description: doc.Description, License: doc.License, Keywords: doc.Keywords}
+	members := doc.Members
+	if len(members) == 0 {
+		members = doc.Postfgb
+	}
+	if len(members) > 0 {
+		s.putView(w, r, id, members, body, meta)
+		return
+	}
 	if err := s.Store.PutMeta(ctx, id, body, meta); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -130,4 +140,28 @@ func flattenJSON(r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+func (s *Server) putView(w http.ResponseWriter, r *http.Request, id string, names []string, doc []byte, meta store.CollectionMeta) {
+	_, err := s.Store.Collection(r.Context(), id)
+	created := errors.Is(err, store.ErrNotFound)
+	err = s.Store.PutView(r.Context(), id, names, doc, meta)
+	switch {
+	case errors.Is(err, store.ErrInvalidView):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	case errors.Is(err, store.ErrConflict):
+		http.Error(w, "collection exists and is not a view", http.StatusConflict)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{"collection": id, "members": names})
 }

@@ -14,12 +14,14 @@ type VirtualLayout struct {
 	IndexBytes   int64
 	FeatureBytes int64
 	Chunks       int
+	Features     int64
 }
 
 type VirtualRun struct {
-	ChunkID int64
-	Base    int64
-	Bytes   int
+	Collection string
+	ChunkID    int64
+	Base       int64
+	Bytes      int
 }
 
 type virtualTier struct {
@@ -94,9 +96,9 @@ func (i *Ingest) putSegment(ctx context.Context, version int64, tier, kind, ordi
 func (s *Store) VirtualLayout(ctx context.Context, collection string, version int64, tier int) (VirtualLayout, error) {
 	var layout VirtualLayout
 	err := s.Pool.QueryRow(ctx, `
-		select header_bytes, index_bytes, feature_bytes, chunks from virtual_file
+		select header_bytes, index_bytes, feature_bytes, chunks, features from virtual_file
 		where collection = $1 and version = $2 and tier = $3`, collection, version, tier).
-		Scan(&layout.HeaderBytes, &layout.IndexBytes, &layout.FeatureBytes, &layout.Chunks)
+		Scan(&layout.HeaderBytes, &layout.IndexBytes, &layout.FeatureBytes, &layout.Chunks, &layout.Features)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return layout, ErrNotFound
 	}
@@ -104,38 +106,7 @@ func (s *Store) VirtualLayout(ctx context.Context, collection string, version in
 }
 
 func (s *Store) VirtualSegments(ctx context.Context, collection string, version int64, tier, kind int, from, to int64) ([]byte, error) {
-	first := int(from / fgb.SegmentBytes)
-	last := int((to - 1) / fgb.SegmentBytes)
-	rows, err := s.Pool.Query(ctx, `
-		select ordinal, data from virtual_segment
-		where collection = $1 and version = $2 and tier = $3 and kind = $4 and ordinal between $5 and $6
-		order by ordinal`, collection, version, tier, kind, first, last)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]byte, 0, to-from)
-	for rows.Next() {
-		var ordinal int
-		var data []byte
-		if err := rows.Scan(&ordinal, &data); err != nil {
-			return nil, err
-		}
-		start := int64(ordinal) * fgb.SegmentBytes
-		lo := max(from-start, 0)
-		hi := min(to-start, int64(len(data)))
-		if lo >= hi {
-			continue
-		}
-		out = append(out, data[lo:hi]...)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if int64(len(out)) != to-from {
-		return nil, errors.New("virtual: segment gap")
-	}
-	return out, nil
+	return readVirtual(ctx, s.Pool, collection, version, tier, kind, from, to)
 }
 
 func (s *Store) VirtualRuns(ctx context.Context, collection string, tier int) ([]VirtualRun, error) {
