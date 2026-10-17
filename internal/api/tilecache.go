@@ -13,7 +13,7 @@ import (
 	"github.com/adonm/postfgb/internal/store"
 )
 
-const maxTileCacheBytes = 1 << 20
+const maxTileCacheBytes = 4 << 20
 
 func filterKeyOf(r *http.Request) string {
 	sum := sha256.Sum256([]byte(r.URL.RawQuery))
