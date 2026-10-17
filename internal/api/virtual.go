@@ -1,31 +1,22 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
-	"github.com/flatgeobuf/flatgeobuf/src/go/index"
-	"github.com/flatgeobuf/flatgeobuf/src/go/writer"
-	flatbuffers "github.com/google/flatbuffers/go"
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/store"
 )
-
-const virtualNodeSize uint16 = 16
 
 var virtualMagic = [8]byte{0x66, 0x67, 0x62, 0x03, 0x66, 0x67, 0x62, 0x00}
 
@@ -35,26 +26,31 @@ type virtualRun struct {
 	bytes   int
 }
 
+type virtualSegment struct {
+	length int64
+	read   func(ctx context.Context, from, to int64) ([]byte, error)
+}
+
 type virtualFile struct {
 	name     string
 	version  int64
-	header   []byte
-	index    []byte
-	runs     []virtualRun
+	segments []virtualSegment
 	features int64
+	runs     []virtualRun
 }
 
 func (v *virtualFile) total() int64 {
-	return int64(len(v.header)) + int64(len(v.index)) + v.features + int64(len(virtualMagic))
+	total := int64(len(virtualMagic))
+	for _, segment := range v.segments {
+		total += segment.length
+	}
+	return total + v.features
 }
 
-type virtualItem struct {
-	offset uint64
-	bbox   [4]float64
-}
-
-func (v virtualItem) NodeItem() index.NodeItem {
-	return index.NewNodeItemWithCoordinates(v.offset, v.bbox[0], v.bbox[1], v.bbox[2], v.bbox[3])
+func byteSegment(body []byte, length int64) virtualSegment {
+	return virtualSegment{length: length, read: func(_ context.Context, from, to int64) ([]byte, error) {
+		return body[from:to], nil
+	}}
 }
 
 type virtualCache struct {
@@ -96,155 +92,42 @@ func (s *Server) virtualFile(ctx context.Context, info store.CollectionInfo, tie
 	if cached := s.virtuals.get(key); cached != nil {
 		return cached, nil
 	}
-	metas, err := s.Store.ChunkMetas(ctx, info.Name, nil, 1_000_000, tier, 0)
+	vf, err := s.storedVirtual(ctx, info, tier)
 	if err != nil {
 		return nil, err
 	}
-	if len(metas) == 0 && tier > 0 {
-		tier = 0
-		if metas, err = s.Store.ChunkMetas(ctx, info.Name, nil, 1_000_000, tier, 0); err != nil {
-			return nil, err
-		}
-	}
-	if len(metas) == 0 {
-		return nil, errors.New("collection has no chunks")
-	}
-	vf := &virtualFile{name: info.Name, version: info.Version}
-	items := make([]virtualItem, 0, len(metas))
-	var src *flattypes.Header
-	extent := index.NewNodeItem(0)
-	var base int64
-	for _, meta := range metas {
-		row, err := s.Store.ChunkByID(ctx, info.Name, meta.ID)
-		if err != nil {
-			return nil, err
-		}
-		raw, err := chunk.Decompress(row.Data)
-		if err != nil {
-			return nil, err
-		}
-		header := fgbHeader(raw)
-		if header == nil {
-			return nil, errors.New("virtual: unreadable chunk")
-		}
-		if src == nil {
-			src = header
-		}
-		featuresAt, featuresLen, err := fgb.Regions(raw, header)
-		if err != nil {
-			return nil, err
-		}
-		indexLen := indexLength(header)
-		if indexLen == 0 && header.FeaturesCount() > 0 {
-			return nil, errors.New("virtual: chunk has no index")
-		}
-		for _, leaf := range readLeaves(raw[featuresAt-indexLen:featuresAt], header.FeaturesCount(), header.IndexNodeSize()) {
-			item := virtualItem{offset: uint64(base) + leaf.offset, bbox: leaf.bbox}
-			items = append(items, item)
-			extent.Expand(item.NodeItem())
-		}
-		vf.runs = append(vf.runs, virtualRun{chunkID: meta.ID, base: base, bytes: featuresLen})
-		base += int64(featuresLen)
-	}
-	if src == nil {
-		return nil, errors.New("virtual: no chunks")
-	}
-	vf.features = base
-	sort.Slice(items, func(i, j int) bool { return items[i].offset < items[j].offset })
-	treeItems := make([]index.Item, len(items))
-	for i := range items {
-		treeItems[i] = items[i]
-	}
-	tree := index.NewPackedRTreeWithItems(treeItems, extent, virtualNodeSize)
-	var buf bytes.Buffer
-	if _, err := tree.Write(&buf); err != nil {
-		return nil, err
-	}
-	vf.index = buf.Bytes()
-	vf.header = virtualHeader(info.Name, src, uint64(len(items)), extent.ToSlice())
 	s.virtuals.put(key, vf)
 	return vf, nil
 }
 
-func virtualHeader(name string, src *flattypes.Header, count uint64, envelope []float64) []byte {
-	builder := flatbuffers.NewBuilder(0)
-	header := writer.NewHeader(builder).
-		SetName(name).
-		SetEnvelope(envelope).
-		SetGeometryType(src.GeometryType()).
-		SetHasZ(src.HasZ()).
-		SetHasM(src.HasM()).
-		SetFeaturesCount(count).
-		SetIndexNodeSize(virtualNodeSize)
-	columns := make([]*writer.Column, src.ColumnsLength())
-	for i := range columns {
-		var column flattypes.Column
-		src.Columns(&column, i)
-		columns[i] = writer.NewColumn(builder).SetName(string(column.Name())).SetType(column.Type())
+func (s *Server) storedVirtual(ctx context.Context, info store.CollectionInfo, tier int) (*virtualFile, error) {
+	layout, err := s.Store.VirtualLayout(ctx, info.Name, info.Version, tier)
+	if err != nil {
+		return nil, err
 	}
-	header.SetColumns(columns)
-	var crs flattypes.Crs
-	if src.Crs(&crs) != nil {
-		header.SetCrs(writer.NewCrs(builder).
-			SetOrg(string(crs.Org())).
-			SetCode(crs.Code()).
-			SetName(string(crs.Name())).
-			SetCodeString(string(crs.CodeString())))
+	runs, err := s.Store.VirtualRuns(ctx, info.Name, tier)
+	if err != nil {
+		return nil, err
 	}
-	offset := header.Build()
-	builder.FinishSizePrefixed(offset)
-	return builder.FinishedBytes()
-}
-
-type virtualLeaf struct {
-	bbox   [4]float64
-	offset uint64
-}
-
-func readLeaves(data []byte, count uint64, nodeSize uint16) []virtualLeaf {
-	if count == 0 || nodeSize < 2 {
-		return nil
+	name, version := info.Name, info.Version
+	vf := &virtualFile{
+		name:    name,
+		version: version,
+		segments: []virtualSegment{
+			{length: int64(layout.HeaderBytes), read: func(ctx context.Context, from, to int64) ([]byte, error) {
+				return s.Store.VirtualSegments(ctx, name, version, tier, 0, from, to)
+			}},
+			{length: layout.IndexBytes, read: func(ctx context.Context, from, to int64) ([]byte, error) {
+				return s.Store.VirtualSegments(ctx, name, version, tier, 1, from, to)
+			}},
+		},
+		features: layout.FeatureBytes,
+		runs:     make([]virtualRun, 0, len(runs)),
 	}
-	leaves := make([]virtualLeaf, 0, count)
-	for i := uint64(0); i < count; i++ {
-		at := int((numNodes(count, nodeSize) - count + i) * 40)
-		if at+40 > len(data) {
-			break
-		}
-		leaves = append(leaves, virtualLeaf{
-			bbox: [4]float64{
-				math.Float64frombits(binary.LittleEndian.Uint64(data[at:])),
-				math.Float64frombits(binary.LittleEndian.Uint64(data[at+8:])),
-				math.Float64frombits(binary.LittleEndian.Uint64(data[at+16:])),
-				math.Float64frombits(binary.LittleEndian.Uint64(data[at+24:])),
-			},
-			offset: binary.LittleEndian.Uint64(data[at+32:]),
-		})
+	for _, run := range runs {
+		vf.runs = append(vf.runs, virtualRun{chunkID: run.ChunkID, base: run.Base, bytes: run.Bytes})
 	}
-	return leaves
-}
-
-func numNodes(count uint64, nodeSize uint16) uint64 {
-	nodes := count
-	for n := count; n > 1; {
-		n = (n + uint64(nodeSize) - 1) / uint64(nodeSize)
-		nodes += n
-	}
-	return nodes
-}
-
-func indexLength(header *flattypes.Header) int {
-	nodeSize := header.IndexNodeSize()
-	count := header.FeaturesCount()
-	if nodeSize < 2 || count == 0 {
-		return 0
-	}
-	nodes := count
-	for n := count; n > 1; {
-		n = (n + uint64(nodeSize) - 1) / uint64(nodeSize)
-		nodes += n
-	}
-	return int(nodes * 40)
+	return vf, nil
 }
 
 func (s *Server) virtualRunBytes(ctx context.Context, collection string, run virtualRun, from, to int64) ([]byte, error) {
@@ -366,44 +249,24 @@ func parseRange(header string, total int64) (int64, int64, error) {
 }
 
 func (s *Server) writeVirtual(ctx context.Context, w io.Writer, vf *virtualFile, from, to int64) error {
-	segments := []virtualSegment{
-		{start: 0, body: virtualMagic[:]},
-		{start: int64(len(virtualMagic)), body: vf.header},
-		{body: vf.index},
-	}
-	featuresStart := int64(len(virtualMagic)) + int64(len(vf.header)) + int64(len(vf.index))
+	segments := make([]virtualSegment, 0, len(vf.segments)+len(vf.runs)+1)
+	segments = append(segments, byteSegment(virtualMagic[:], int64(len(virtualMagic))))
+	segments = append(segments, vf.segments...)
 	for i := range vf.runs {
 		run := vf.runs[i]
-		segments = append(segments, virtualSegment{
-			start:  featuresStart + run.base,
-			length: int64(run.bytes),
-			run:    &run,
-		})
+		segments = append(segments, virtualSegment{length: int64(run.bytes), read: func(ctx context.Context, lo, hi int64) ([]byte, error) {
+			return s.virtualRunBytes(ctx, vf.name, run, lo, hi)
+		}})
 	}
 	cursor := int64(0)
-	for i := range segments {
-		segment := &segments[i]
-		if segment.length == 0 {
-			segment.length = int64(len(segment.body))
-		}
-		segmentStart := segment.start
-		if segment.body != nil {
-			segmentStart = cursor
-		}
-		segmentEnd := segmentStart + segment.length
-		cursor = segmentEnd
-		if segmentEnd <= from || segmentStart >= to {
+	for _, segment := range segments {
+		start := cursor
+		end := start + segment.length
+		cursor = end
+		if end <= from || start >= to {
 			continue
 		}
-		lo := max64(from, segmentStart) - segmentStart
-		hi := min64(to, segmentEnd) - segmentStart
-		if segment.body != nil {
-			if _, err := w.Write(segment.body[lo:hi]); err != nil {
-				return err
-			}
-			continue
-		}
-		body, err := s.virtualRunBytes(ctx, vf.name, *segment.run, lo, hi)
+		body, err := segment.read(ctx, max64(from, start)-start, min64(to, end)-start)
 		if err != nil {
 			return err
 		}
@@ -412,13 +275,6 @@ func (s *Server) writeVirtual(ctx context.Context, w io.Writer, vf *virtualFile,
 		}
 	}
 	return nil
-}
-
-type virtualSegment struct {
-	start  int64
-	length int64
-	body   []byte
-	run    *virtualRun
 }
 
 func min64(a, b int64) int64 {

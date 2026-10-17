@@ -305,12 +305,19 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 	if err != nil {
 		return 0, err
 	}
+	_, featureBytes, err := fgb.Regions(data, c.Header())
+	if err != nil {
+		return 0, err
+	}
 	payload := store.Payload{
 		Data: chunk.Compress(data), Size: len(data), Count: c.Count(), Tier: tier,
 		MinX: env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
-		Cover:    cover.Chunk(env[0], env[1], env[2], env[3]),
-		Checksum: hex.EncodeToString(sum[:]),
-		Columns:  string(columns),
+		Cover:        cover.Chunk(env[0], env[1], env[2], env[3]),
+		Checksum:     hex.EncodeToString(sum[:]),
+		Columns:      string(columns),
+		FeatureBytes: featureBytes,
+		HeaderBlob:   fgb.HeaderBlobOf(data, c.Header()),
+		Leaves:       fgb.LeavesOf(data, c.Header()),
 	}
 	id, err := ing.PutChunk(ctx, payload)
 	if err != nil {
