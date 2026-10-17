@@ -10,7 +10,7 @@ Design decisions are recorded in [DESIGN.md](DESIGN.md).
 
 ## How it works
 
-- Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) sized to ~2 MiB by a self-calibrating estimator, zstd-compressed in Go, and stored as `bytea` rows in per-collection partitions with per-collection indexes; each collection is also exposed as a `layers.<name>` SQL view.
+- Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) sized to ~2 MiB by a self-calibrating estimator, Hilbert-sorted into coherent chunks at ingest, zstd-compressed in Go, and stored as `bytea` rows in per-collection partitions with per-collection indexes; each collection is also exposed as a `layers.<name>` SQL view.
 - Chunk bounds are plain float columns plus an S2 cell covering stored as an `int8multirange`; a GiST index prunes candidate chunks with one range-overlap predicate.
 - The app computes the S2 coverings in Go, so the database only compares ranges and floats: no geometry parsing, no PostGIS. Real spatial work happens in memory, over the FlatGeobuf Hilbert R-trees.
 - Fulltext lives in a sidecar table (`tsvector`/GIN) populated at ingest; `?q=` intersects text matches with chunk and feature level spatial filtering.

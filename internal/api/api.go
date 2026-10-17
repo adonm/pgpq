@@ -446,6 +446,8 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 			return skipped
 		}
 		fallback = false
+		fetch := make([]store.ChunkMeta, 0, len(metas))
+		fetchIDs := make([]int64, 0, len(metas))
 		for _, meta := range metas {
 			if sink.full() {
 				return skipped
@@ -454,12 +456,18 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 				skipped += meta.FeatureCount
 				continue
 			}
-			row, err := s.Store.ChunkByID(ctx, info.Name, meta.ID)
-			if err != nil {
-				slog.Error("chunk load failed", "chunk", meta.ID, "error", err)
+			fetch = append(fetch, meta)
+			fetchIDs = append(fetchIDs, meta.ID)
+		}
+		rows := s.fetchRows(ctx, info.Name, fetchIDs)
+		for j, meta := range fetch {
+			if sink.full() {
+				return skipped
+			}
+			if rows[j].Data == nil {
 				continue
 			}
-			c, err := chunk.Open(row.Data)
+			c, err := chunk.Open(rows[j].Data)
 			if err != nil {
 				slog.Error("chunk open failed", "chunk", meta.ID, "error", err)
 				continue
@@ -517,12 +525,12 @@ func (s *Server) emitMatches(ctx context.Context, sink featureSink, info store.C
 		if end > len(ids) {
 			end = len(ids)
 		}
-		rows, err := s.Store.ChunksByIDs(ctx, info.Name, ids[start:end])
-		if err != nil {
-			slog.Error("chunks by ids failed", "collection", info.Name, "error", err)
-			return
-		}
-		for _, row := range rows {
+		rows := s.fetchRows(ctx, info.Name, ids[start:end])
+		for j := range rows {
+			if rows[j].Data == nil {
+				continue
+			}
+			row := rows[j]
 			c, err := chunk.Open(row.Data)
 			if err != nil {
 				slog.Error("chunk open failed", "chunk", row.ID, "error", err)
@@ -781,6 +789,8 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 			break
 		}
 		fallback = false
+		fetch := make([]store.ChunkMeta, 0, len(metas))
+		fetchIDs := make([]int64, 0, len(metas))
 		for _, meta := range metas {
 			if len(features) >= limit {
 				return features, header, nil
@@ -789,11 +799,18 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 				skipped += meta.FeatureCount
 				continue
 			}
-			row, err := s.Store.ChunkByID(ctx, id, meta.ID)
-			if err != nil {
-				return nil, nil, err
+			fetch = append(fetch, meta)
+			fetchIDs = append(fetchIDs, meta.ID)
+		}
+		rows := s.fetchRows(ctx, id, fetchIDs)
+		for j := range fetch {
+			if len(features) >= limit {
+				return features, header, nil
 			}
-			c, err := chunk.Open(row.Data)
+			if rows[j].Data == nil {
+				continue
+			}
+			c, err := chunk.Open(rows[j].Data)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -855,11 +872,12 @@ func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float
 		if end > len(ids) {
 			end = len(ids)
 		}
-		rows, err := s.Store.ChunksByIDs(ctx, id, ids[start:end])
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, row := range rows {
+		rows := s.fetchRows(ctx, id, ids[start:end])
+		for j := range rows {
+			if rows[j].Data == nil {
+				continue
+			}
+			row := rows[j]
 			c, err := chunk.Open(row.Data)
 			if err != nil {
 				return nil, nil, err

@@ -29,6 +29,7 @@ import (
 var ErrInvalid = errors.New("invalid upload")
 
 const (
+	sortWindowBytes  = 8 << 20
 	targetChunkBytes = 2 << 20
 	maxChunkFeatures = 50000
 )
@@ -44,10 +45,15 @@ func newSizer() *sizer {
 }
 
 func (s *sizer) add(f chunk.InputFeature) {
-	s.est += 52 + len(f.Geometry.Coordinates)
+	s.est += featureEstimate(f)
+}
+
+func featureEstimate(f chunk.InputFeature) int {
+	n := 52 + len(f.Geometry.Coordinates)
 	for _, value := range f.Properties {
-		s.est += len(value) + 3
+		n += len(value) + 3
 	}
+	return n
 }
 
 func (s *sizer) full(features int) bool {
@@ -113,6 +119,8 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	result := Result{Created: created}
 	sizer := newSizer()
 	batch := make([]chunk.InputFeature, 0, 1024)
+	window := make([]chunk.InputFeature, 0, 4096)
+	windowBytes := 0
 	var timeMin, timeMax *time.Time
 	flush := func() error {
 		encoded, err := putChunk(ctx, ing, opts.Collection, cols, batch, 0)
@@ -122,6 +130,21 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		sizer.reset(encoded, len(batch))
 		batch = batch[:0]
 		result.Chunks++
+		return nil
+	}
+	drain := func() error {
+		sortWindow(window)
+		for i := range window {
+			batch = append(batch, window[i])
+			sizer.add(window[i])
+			if sizer.full(len(batch)) {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+		}
+		window = window[:0]
+		windowBytes = 0
 		return nil
 	}
 	for {
@@ -136,8 +159,8 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		if err != nil {
 			return Result{}, invalid(err)
 		}
-		batch = append(batch, feature)
-		sizer.add(feature)
+		window = append(window, feature)
+		windowBytes += featureEstimate(feature)
 		result.Features++
 		if timeColumn != "" {
 			if t, ok := featureTime(feature.Properties[timeColumn]); ok {
@@ -149,11 +172,14 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 				}
 			}
 		}
-		if sizer.full(len(batch)) {
-			if err := flush(); err != nil {
+		if windowBytes >= sortWindowBytes {
+			if err := drain(); err != nil {
 				return Result{}, err
 			}
 		}
+	}
+	if err := drain(); err != nil {
+		return Result{}, err
 	}
 	if len(batch) > 0 {
 		if err := flush(); err != nil {
