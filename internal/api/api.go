@@ -63,6 +63,7 @@ func NewWithConfig(cfg Config) http.Handler {
 		AdminToken: cfg.AdminToken,
 	}
 	s.register(api)
+	mux.HandleFunc("GET /{$}", s.landingPage)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/items/{featureID}", s.feature)
 	mux.HandleFunc("PUT /collections/{id}/data", s.ingestData)
@@ -83,7 +84,6 @@ func NewWithConfig(cfg Config) http.Handler {
 }
 
 func (s *Server) register(api huma.API) {
-	huma.Register(api, huma.Operation{OperationID: "landing", Method: "GET", Path: "/", Summary: "Landing page"}, s.landing)
 	huma.Register(api, huma.Operation{OperationID: "conformance", Method: "GET", Path: "/conformance", Summary: "Conformance"}, s.conformance)
 	huma.Register(api, huma.Operation{OperationID: "collections", Method: "GET", Path: "/collections", Summary: "Collections"}, s.collections)
 	huma.Register(api, huma.Operation{OperationID: "collection", Method: "GET", Path: "/collections/{id}", Summary: "Collection"}, s.collection)
@@ -100,12 +100,9 @@ type landing struct {
 	Links       []link `json:"links"`
 }
 
-type landingOutput struct {
-	Body landing
-}
-
-func (s *Server) landing(context.Context, *struct{}) (*landingOutput, error) {
-	return &landingOutput{Body: landing{
+func (s *Server) landingPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(landing{
 		Title:       "postfgb",
 		Description: "OGC API Features over FlatGeobuf chunks stored in PostgreSQL",
 		Links: []link{
@@ -114,7 +111,7 @@ func (s *Server) landing(context.Context, *struct{}) (*landingOutput, error) {
 			{Href: "/conformance", Rel: "conformance", Type: "application/json", Title: "Conformance classes"},
 			{Href: "/collections", Rel: "data", Type: "application/json", Title: "Collections"},
 		},
-	}}, nil
+	})
 }
 
 type conformanceOutput struct {
