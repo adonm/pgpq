@@ -61,7 +61,7 @@ curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "
 | `/conformance` | conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters including spatial `S_INTERSECTS`, paged (50,000 default); `overview=auto|0|1|2` picks a tier (`auto` and `0` are full detail); `numberMatched=true` adds the match count; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
+| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters including spatial `S_INTERSECTS`, paged (100,000 default, up to 1,000,000); `overview=auto|0|1|2` picks a tier (`auto` and `0` are full detail); `numberMatched=true` adds the match count; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/items.fgb` | with no filter parameter: the whole collection as one FlatGeobuf across the chunk feature streams (R-tree rebuilt from the chunk indexes), served with `Accept-Ranges` and 206 range responses so clients read windows in place; `overview=1\|2` serves a tier instead of full detail. With any filter parameter: the generated export, capped at 100k features with a `Link: rel=next` when there is more |
 | `/collections/{id}/items/{featureId}` | single feature; ids come from an id-like property (`id`, `fid`, ...) or the synthetic `chunkID-ord` |
 | `/collections/{id}/queryables` | JSON Schema of the filterable properties |

@@ -48,12 +48,6 @@ func (v *virtualFile) total() int64 {
 	return total + v.features
 }
 
-func byteSegment(body []byte, length int64) virtualSegment {
-	return virtualSegment{length: length, read: func(_ context.Context, from, to int64) ([]byte, error) {
-		return body[from:to], nil
-	}}
-}
-
 const chunkByteCacheBytes = 64 << 20
 
 type decompressedChunk struct {
@@ -398,8 +392,4 @@ func (s *Server) serveVirtualCollection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.serveVirtual(w, r, vf)
-}
-
-func (s *Server) cacheVersion(info store.CollectionInfo) string {
-	return strconv.FormatInt(info.Version, 10)
 }

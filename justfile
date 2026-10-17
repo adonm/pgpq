@@ -33,6 +33,9 @@ test-integration:
 viewer-test:
     RUSTGIS_CLI={{rustgis_cli}} scripts/viewer-test.sh {{url}}
 
+ogc-test coll="buildings_fr" view="pois_union" tier="buildings":
+    RUSTGIS_CLI={{rustgis_cli}} scripts/ogc-clients-test.sh {{url}} {{coll}} {{view}} {{tier}}
+
 pg-stats:
     @docker exec postfgb-postgres-1 sh -c 'psql -U postgres -d postfgb -X \
       -c "select pg_size_pretty(pg_database_size(current_database())) db, temp_files, pg_size_pretty(temp_bytes) temp_bytes from pg_stat_database where datname = current_database()" \

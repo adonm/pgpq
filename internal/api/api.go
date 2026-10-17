@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -63,7 +62,7 @@ func NewWithConfig(cfg Config) http.Handler {
 		cfg.MaxBytes = 32 << 20
 	}
 	s := &Server{
-		Store: cfg.Store, MaxChunks: 64, MaxBytes: cfg.MaxBytes, DefaultLimit: 50000,
+		Store: cfg.Store, MaxChunks: 64, MaxBytes: cfg.MaxBytes, DefaultLimit: 100000,
 		ReadOnly: cfg.ReadOnly, metrics: newMetrics(), virtuals: newVirtualCache(), chunks: newChunkByteCache(),
 	}
 	s.register(api)
@@ -178,13 +177,17 @@ type extent struct {
 }
 
 type collection struct {
-	ID          string  `json:"id"`
-	Title       string  `json:"title,omitempty"`
-	Description string  `json:"description,omitempty"`
-	Kind        string  `json:"kind,omitempty"`
-	Extent      *extent `json:"extent,omitempty"`
-	Links       []link  `json:"links"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Kind        string   `json:"kind,omitempty"`
+	ItemType    string   `json:"itemType"`
+	CRS         []string `json:"crs"`
+	Extent      *extent  `json:"extent,omitempty"`
+	Links       []link   `json:"links"`
 }
+
+const crs84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
 
 type collectionsOutput struct {
 	Body struct {
@@ -231,9 +234,11 @@ func (s *Server) collectionBody(ctx context.Context, info store.CollectionInfo) 
 		title = *info.Title
 	}
 	body := collection{
-		ID:    info.Name,
-		Title: title,
-		Kind:  info.Kind,
+		ID:       info.Name,
+		Title:    title,
+		Kind:     info.Kind,
+		ItemType: "feature",
+		CRS:      []string{crs84},
 		Links: []link{
 			{Href: "/collections/" + info.Name, Rel: "self", Type: "application/json"},
 			{Href: "/collections/" + info.Name + "/items", Rel: "items", Type: "application/geo+json"},
@@ -353,10 +358,13 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	fw.close(pageLink(r, limit, offset, fw.count))
 }
 
-func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.CollectionInfo, bbox *[4]float64, offset, tier int) int {
+// walkChunks streams a collection's tier chunks in feature order, consuming the
+// paging offset before handing each chunk's remaining features to visit, which
+// returns false to stop. It reports how many features the offset consumed.
+func (s *Server) walkChunks(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, offset, tier int, visit func(store.ChunkMeta, *chunk.Chunk, []*flattypes.Feature, int) bool) int {
+	skipped := 0
 	after := int64(0)
 	fallback := tier > 0
-	skipped := 0
 	for {
 		metas, err := s.Store.ChunkMetas(ctx, info.Name, bbox, s.MaxChunks, tier, after)
 		if err != nil {
@@ -376,9 +384,6 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 		fetch := make([]store.ChunkMeta, 0, len(metas))
 		fetchIDs := make([]int64, 0, len(metas))
 		for _, meta := range metas {
-			if sink.full() {
-				return skipped
-			}
 			if bbox == nil && skipped+meta.FeatureCount <= offset {
 				skipped += meta.FeatureCount
 				continue
@@ -388,9 +393,6 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 		}
 		rows := s.fetchRows(ctx, info.Name, fetchIDs)
 		for j, meta := range fetch {
-			if sink.full() {
-				return skipped
-			}
 			if rows[j].Data == nil {
 				continue
 			}
@@ -404,18 +406,16 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 				slog.Error("chunk search failed", "chunk", meta.ID, "error", err)
 				continue
 			}
-			for i, g := range geojsonAll(c, features) {
-				if !inBounds(g, bbox) {
-					continue
-				}
-				if skipped < offset {
-					skipped++
-					continue
-				}
-				g.ID = featureID(info, meta.ID, i, g.Properties)
-				if !sink.add(g) {
-					return skipped
-				}
+			from := 0
+			for from < len(features) && skipped < offset {
+				skipped++
+				from++
+			}
+			if from == len(features) {
+				continue
+			}
+			if !visit(meta, c, features, from) {
+				return skipped
 			}
 		}
 		if len(metas) < s.MaxChunks && !trimmed {
@@ -423,6 +423,24 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 		}
 		after = metas[len(metas)-1].ID
 	}
+}
+
+func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.CollectionInfo, bbox *[4]float64, offset, tier int) int {
+	return s.walkChunks(ctx, info, bbox, offset, tier, func(meta store.ChunkMeta, c *chunk.Chunk, features []*flattypes.Feature, from int) bool {
+		for i, g := range geojsonAll(c, features) {
+			if i < from {
+				continue
+			}
+			if !inBounds(g, bbox) {
+				continue
+			}
+			g.ID = featureID(info, meta.ID, i, g.Properties)
+			if !sink.add(g) {
+				return false
+			}
+		}
+		return true
+	})
 }
 
 func (s *Server) streamMatches(ctx context.Context, sink featureSink, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int) {
@@ -701,81 +719,28 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 	}
 	var features []*flattypes.Feature
 	var header *flattypes.Header
-	skipped := 0
-	after := int64(0)
-	fallback := tier > 0
-	for {
-		metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, tier, after)
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(metas) == 0 {
-			if fallback && after == 0 {
-				tier = 0
-				fallback = false
-				continue
-			}
-			break
-		}
-		fallback = false
-		metas, trimmed := budgetMetas(metas, s.MaxBytes)
-		fetch := make([]store.ChunkMeta, 0, len(metas))
-		fetchIDs := make([]int64, 0, len(metas))
-		for _, meta := range metas {
-			if len(features) >= limit {
-				return features, header, nil
-			}
-			if bbox == nil && skipped+meta.FeatureCount <= offset {
-				skipped += meta.FeatureCount
-				continue
-			}
-			fetch = append(fetch, meta)
-			fetchIDs = append(fetchIDs, meta.ID)
-		}
-		rows := s.fetchRows(ctx, id, fetchIDs)
-		for j := range fetch {
-			if len(features) >= limit {
-				return features, header, nil
-			}
-			if rows[j].Data == nil {
-				continue
-			}
-			c, err := s.openChunk(ctx, id, 0, fetch[j].ID, rows[j])
-			if err != nil {
-				return nil, nil, err
-			}
-			if header == nil {
-				header = c.Header()
-			} else if !sameColumns(header, c.Header()) {
-				return nil, nil, errors.New("collection chunks have differing schemas")
-			}
-			feats, err := c.SearchAll()
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, f := range feats {
-				g := c.GeoJSON(f)
-				if !inBounds(g, bbox) {
-					continue
-				}
-				if len(shapes) > 0 && !intersectsShapes(shapes, geo.ToOrb(g.Geometry)) {
-					continue
-				}
-				if skipped < offset {
-					skipped++
-					continue
-				}
-				if len(features) >= limit {
-					return features, header, nil
-				}
-				features = append(features, f)
-			}
-		}
-		if len(metas) < s.MaxChunks && !trimmed {
-			break
-		}
-		after = metas[len(metas)-1].ID
+	info, err := s.Store.Collection(ctx, id)
+	if err != nil {
+		return nil, nil, err
 	}
+	s.walkChunks(ctx, info, bbox, offset, 0, func(_ store.ChunkMeta, c *chunk.Chunk, feats []*flattypes.Feature, from int) bool {
+		if header == nil {
+			header = c.Header()
+		} else if !sameColumns(header, c.Header()) {
+			return false
+		}
+		for i := from; i < len(feats) && len(features) < limit; i++ {
+			g := c.GeoJSON(feats[i])
+			if !inBounds(g, bbox) {
+				continue
+			}
+			if len(shapes) > 0 && !intersectsShapes(shapes, geo.ToOrb(g.Geometry)) {
+				continue
+			}
+			features = append(features, feats[i])
+		}
+		return len(features) < limit
+	})
 	return features, header, nil
 }
 
@@ -891,12 +856,6 @@ func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 }
 
 const flatgeobufLimit = 100000
-
-func itemHash(value any) uint64 {
-	h := fnv.New64a()
-	fmt.Fprintf(h, "%v\x00", value)
-	return h.Sum64()
-}
 
 func parseBBox(r *http.Request) (*[4]float64, error) {
 	value := r.URL.Query().Get("bbox")
