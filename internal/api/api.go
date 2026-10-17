@@ -1016,6 +1016,7 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
 		w.Header().Set("ETag", cachedEtag)
 		w.Header().Set("Cache-Control", "public, max-age=600")
+		w.Header().Set("Content-Length", strconv.Itoa(len(cached)))
 		w.Write(cached)
 		return
 	}
@@ -1069,6 +1070,7 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
 	w.Header().Set("Cache-Control", "public, max-age=600")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
 	if len(data) <= maxTileCacheBytes {
 		if err := s.Store.TileCachePut(ctx, info.Name, version, tier, int(z), int(x), int(y), filterKey, etag, data); err != nil {

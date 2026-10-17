@@ -53,3 +53,6 @@ tiles coll maxzoom="3":
 
 bench:
     bench/run.sh
+
+layercake layer bbox="" nlt="GEOMETRY":
+    LAYER={{layer}} BBOX="{{bbox}}" NLT={{nlt}} docker run --rm -i -e LAYER -e BBOX -e NLT {{gdal}} bash -c 'set -euo pipefail; SPAT=""; if [ -n "$BBOX" ]; then SPAT="-spat $BBOX"; fi; NLTARG=""; if [ -n "$NLT" ]; then NLTARG="-nlt $NLT"; fi; ogr2ogr -f FlatGeobuf /tmp/out.fgb "/vsicurl/https://data.openstreetmap.us/layercake/${LAYER}.parquet" "$LAYER" $SPAT $NLTARG -lco SPATIAL_INDEX=NO && exec cat /tmp/out.fgb' | curl -sfS -X PUT --data-binary @- "{{url}}/collections/{{layer}}/data"

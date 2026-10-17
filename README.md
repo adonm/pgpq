@@ -68,6 +68,17 @@ curl -X PUT --data-binary @features.fgb "localhost:8080/collections/demo/data"
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
 | `/api` | OpenAPI 3.0 definition (OGC content type) |
 
+## Real data (OSM Layer Cake)
+
+[Layercake](https://layercake.openstreetmap.us) publishes OpenStreetMap as planet-wide GeoParquet layers with HTTP range access. GDAL (sidecar container) reads them with row-group pruning, converts to FlatGeobuf and streams it straight into a PUT — no temporary files on the host:
+
+```sh
+just layercake settlements "-74.05 40.65 -73.92 40.82"   # NYC, ~3 s
+just layercake buildings "7.40 43.72 7.44 43.76"         # Monaco, ~10 s
+```
+
+The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` and an optional `-spat` bbox; omit the bbox to stream an entire layer (settlements is 188 MiB, buildings is 42.9 GiB planet-wide). Layer types are normalized with `-nlt GEOMETRY` by default so mixed-geometry layers (highways, POIs) load as-is. Layers land with their real tags, OSM timestamps (time filtering and `extent.temporal` come along) and polygon geometry.
+
 ## Benchmarks
 
 `bench/run.sh` uses GDAL as an OGC client:

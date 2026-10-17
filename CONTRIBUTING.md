@@ -33,6 +33,7 @@ Run `just` for the full list. The common ones:
 | `just image-tar` | build the container image with ko |
 | `just demo` | pg-up + gen + ingest |
 | `just bench` | GDAL client benchmark against a running server |
+| `just layercake <layer> <bbox>` | stream an OSM Layercake GeoParquet layer into a collection over HTTP |
 
 ## Code style
 

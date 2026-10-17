@@ -291,13 +291,13 @@ func parseGeometry(g *RawGeometry) (*parsedGeometry, error) {
 		}
 		return &parsedGeometry{typ: flattypes.GeometryTypeMultiLineString, parts: parts}, nil
 	case "MultiPolygon":
-		polys, err := flatMulti(coords)
-		if err != nil {
-			return nil, err
+		polys, ok := coords.([]any)
+		if !ok {
+			return nil, errors.New("chunk: multipolygon coordinates are not a polygon list")
 		}
 		parts := make([]parsedGeometry, len(polys))
-		for i := range polys {
-			xy, ends, err := flatRings(polys[i])
+		for i, poly := range polys {
+			xy, ends, err := flatRings(poly)
 			if err != nil {
 				return nil, err
 			}
