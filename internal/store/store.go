@@ -41,6 +41,7 @@ type Store struct {
 type Payload struct {
 	Data       []byte
 	Count      int
+	Tier       int
 	MinX, MinY float64
 	MaxX, MaxY float64
 	Cover      string
@@ -170,10 +171,10 @@ func (s *Store) EnsureCollection(ctx context.Context, name string) error {
 func (s *Store) PutChunk(ctx context.Context, collection string, payload Payload) (int64, error) {
 	var id int64
 	err := s.Pool.QueryRow(ctx, `
-		insert into chunks (collection, feature_count, size_bytes, minx, miny, maxx, maxy, cover, checksum, columns, data)
-		values ($1, $2, $3, $4, $5, $6, $7, $8::int8multirange, $9, $10::jsonb, $11)
+		insert into chunks (collection, tier, feature_count, size_bytes, minx, miny, maxx, maxy, cover, checksum, columns, data)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9::int8multirange, $10, $11::jsonb, $12)
 		returning id`,
-		collection, payload.Count, len(payload.Data),
+		collection, payload.Tier, payload.Count, len(payload.Data),
 		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY, payload.Cover,
 		payload.Checksum, payload.Columns, payload.Data).Scan(&id)
 	return id, err
@@ -222,9 +223,14 @@ func bboxPredicate(bbox *[4]float64, next int) (string, []any) {
 	return fragment, []any{cover.Query(bbox[0], bbox[1], bbox[2], bbox[3]), bbox[0], bbox[1], bbox[2], bbox[3]}
 }
 
-func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64, limit int) ([]ChunkRow, error) {
-	query := `select id, feature_count, minx, miny, maxx, maxy, data from chunks where collection = $1`
-	args := []any{collection}
+func (s *Store) DeleteChunksAboveTier(ctx context.Context, collection string, tier int) error {
+	_, err := s.Pool.Exec(ctx, `delete from chunks where collection = $1 and tier > $2`, collection, tier)
+	return err
+}
+
+func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {
+	query := `select id, feature_count, minx, miny, maxx, maxy, data from chunks where collection = $1 and tier = $2`
+	args := []any{collection, tier}
 	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
 		query += fragment
 		args = append(args, extra...)
@@ -234,9 +240,9 @@ func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64,
 	return s.scanChunks(ctx, query, args...)
 }
 
-func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit int) ([]ChunkMeta, error) {
-	query := `select id, feature_count, size_bytes, minx, miny, maxx, maxy, checksum, columns from chunks where collection = $1`
-	args := []any{collection}
+func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit, tier int) ([]ChunkMeta, error) {
+	query := `select id, feature_count, size_bytes, minx, miny, maxx, maxy, checksum, columns from chunks where collection = $1 and tier = $2`
+	args := []any{collection, tier}
 	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
 		query += fragment
 		args = append(args, extra...)
@@ -349,7 +355,7 @@ const collectionStats = `
 	       coalesce(sum(ch.feature_count), 0)::bigint,
 	       min(ch.minx), min(ch.miny), max(ch.maxx), max(ch.maxy)
 	from collections c
-	left join chunks ch on ch.collection = c.name
+	left join chunks ch on ch.collection = c.name and ch.tier = 0
 	%s
 	group by c.name
 	order by c.name`
@@ -370,14 +376,6 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 		out = append(out, info)
 	}
 	return out, rows.Err()
-}
-
-func (s *Store) CollectionState(ctx context.Context, name string) (string, error) {
-	var state string
-	err := s.Pool.QueryRow(ctx, `
-		select coalesce(md5(string_agg(id::text || coalesce(checksum, ''), ',' order by id)), '')
-		from chunks where collection = $1`, name).Scan(&state)
-	return state, err
 }
 
 func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, error) {

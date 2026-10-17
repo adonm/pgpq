@@ -13,12 +13,16 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"path/filepath"
+
+	"github.com/paulmach/orb"
+	orbgeojson "github.com/paulmach/orb/geojson"
+	"github.com/paulmach/orb/simplify"
 
 	"github.com/adonm/postfgb/internal/api"
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cover"
 	"github.com/adonm/postfgb/internal/store"
+	"github.com/adonm/postfgb/internal/tiles"
 )
 
 func main() {
@@ -55,7 +59,6 @@ func serve(args []string) {
 	adminToken := fs.String("admin-token", os.Getenv("POSTFGB_ADMIN_TOKEN"), "bearer token for the manifest, chunk and export endpoints")
 	rustgisCLI := fs.String("rustgis-cli", os.Getenv("POSTFGB_RUSTGIS_CLI"), "rustgis-cli binary used by the export endpoint")
 	ogr2ogr := fs.String("ogr2ogr", os.Getenv("POSTFGB_OGR2OGR"), "ogr2ogr binary used by the export endpoint")
-	cacheDir := fs.String("cache-dir", cacheDirDefault(), "cache directory for generated tilesets")
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
 	fs.Parse(args)
 	ctx := context.Background()
@@ -84,15 +87,7 @@ func serve(args []string) {
 		AdminToken: *adminToken,
 		RustgisCLI: *rustgisCLI,
 		OGR2OGR:    *ogr2ogr,
-		CacheDir:   *cacheDir,
 	})))
-}
-
-func cacheDirDefault() string {
-	if v := os.Getenv("POSTFGB_CACHE_DIR"); v != "" {
-		return v
-	}
-	return filepath.Join(os.TempDir(), "postfgb-cache")
 }
 
 type rawFeature struct {
@@ -107,6 +102,7 @@ func ingest(args []string) {
 	collection := fs.String("collection", "", "collection name")
 	file := fs.String("file", "", "geojson FeatureCollection file")
 	chunkSize := fs.Int("chunk-size", 50000, "features per chunk")
+	overviews := fs.Bool("overviews", true, "build 10% and 1% overview tiers after ingest")
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
 	fs.Parse(args)
 	if *collection == "" || *file == "" {
@@ -165,7 +161,7 @@ func ingest(args []string) {
 			batch = append(batch, chunk.InputFeature{Geometry: rf.Geometry, Properties: rf.Properties})
 			total++
 			if len(batch) == *chunkSize {
-				putChunk(ctx, st, *collection, batch)
+				putChunk(ctx, st, *collection, batch, 0)
 				chunks++
 				slog.Info("chunk stored", "features", total, "chunks", chunks)
 				batch = batch[:0]
@@ -176,13 +172,16 @@ func ingest(args []string) {
 		}
 	}
 	if len(batch) > 0 {
-		putChunk(ctx, st, *collection, batch)
+		putChunk(ctx, st, *collection, batch, 0)
 		chunks++
+	}
+	if *overviews {
+		buildOverviews(ctx, st, *collection)
 	}
 	slog.Info("done", "features", total, "chunks", chunks)
 }
 
-func putChunk(ctx context.Context, st *store.Store, collection string, batch []chunk.InputFeature) {
+func putChunk(ctx context.Context, st *store.Store, collection string, batch []chunk.InputFeature, tier int) {
 	data, err := chunk.Encode(collection, batch)
 	if err != nil {
 		fatal(err)
@@ -198,6 +197,7 @@ func putChunk(ctx context.Context, st *store.Store, collection string, batch []c
 	payload := store.Payload{
 		Data:  data,
 		Count: c.Count(),
+		Tier:  tier,
 		MinX:  env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
 		Cover: cover.Chunk(env[0], env[1], env[2], env[3]),
 	}
@@ -221,6 +221,9 @@ func putChunk(ctx context.Context, st *store.Store, collection string, batch []c
 	if err != nil {
 		fatal(err)
 	}
+	if tier > 0 {
+		return
+	}
 	docs := make([]string, len(batch))
 	for i := range batch {
 		docs[i] = chunk.Text(batch[i].Properties)
@@ -238,6 +241,99 @@ func putChunk(ctx context.Context, st *store.Store, collection string, batch []c
 	}
 	if err := st.PutChunkProps(ctx, id, props); err != nil {
 		fatal(err)
+	}
+}
+
+func buildOverviews(ctx context.Context, st *store.Store, collection string) {
+	rows, err := st.Chunks(ctx, collection, nil, 1000000, 0)
+	if err != nil {
+		fatal(err)
+	}
+	if err := st.DeleteChunksAboveTier(ctx, collection, 0); err != nil {
+		fatal(err)
+	}
+	tiers := []struct {
+		tier    int
+		stride  int
+		tol     float64
+		minDiag float64
+	}{
+		{tier: 1, stride: 10, tol: 0.01, minDiag: 0.05},
+		{tier: 2, stride: 100, tol: 0.05, minDiag: 0.2},
+	}
+	totals := map[int]int{}
+	for _, row := range rows {
+		c, err := chunk.Open(row.Data)
+		if err != nil {
+			fatal(err)
+		}
+		feats, err := c.SearchAll()
+		if err != nil {
+			fatal(err)
+		}
+		for _, spec := range tiers {
+			batch := make([]chunk.InputFeature, 0, len(feats)/spec.stride+1)
+			for i, f := range feats {
+				if i%spec.stride != 0 {
+					continue
+				}
+				g := c.GeoJSON(f)
+				geom := tiles.ToOrb(g.Geometry)
+				if geom == nil {
+					continue
+				}
+				if _, ok := geom.(orb.Collection); ok {
+					continue
+				}
+				simp := geom
+				if !pointFamily(geom) {
+					simp = simplify.DouglasPeucker(spec.tol).Simplify(geom)
+					if simp == nil {
+						continue
+					}
+					bound := simp.Bound()
+					dx := bound.Max[0] - bound.Min[0]
+					dy := bound.Max[1] - bound.Min[1]
+					if dx*dx+dy*dy < spec.minDiag*spec.minDiag {
+						continue
+					}
+				}
+				body, err := json.Marshal(orbgeojson.NewGeometry(simp))
+				if err != nil {
+					continue
+				}
+				var raw chunk.RawGeometry
+				if err := json.Unmarshal(body, &raw); err != nil {
+					continue
+				}
+				props := make(map[string]json.RawMessage, len(g.Properties))
+				for name, value := range g.Properties {
+					encoded, err := json.Marshal(value)
+					if err != nil {
+						continue
+					}
+					props[name] = encoded
+				}
+				batch = append(batch, chunk.InputFeature{Geometry: raw, Properties: props})
+			}
+			if len(batch) == 0 {
+				continue
+			}
+			putChunk(ctx, st, collection, batch, spec.tier)
+			totals[spec.tier] += len(batch)
+		}
+	}
+	for tier, count := range totals {
+		slog.Info("overview tier stored", "collection", collection, "tier", tier, "features", count)
+	}
+}
+
+func pointFamily(g orb.Geometry) bool {
+	switch g.(type) {
+	case orb.Point, orb.MultiPoint:
+		return true
+	default:
+		return false
 	}
 }
 

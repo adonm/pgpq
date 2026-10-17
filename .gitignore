@@ -3,6 +3,5 @@ bench/*.geojson
 *.test
 *.gpkg
 *.mbtiles
-*.pmtiles
 *.parquet
 export.fgb

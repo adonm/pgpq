@@ -13,7 +13,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
-	"github.com/paulmach/orb"
 	"github.com/paulmach/orb/encoding/mvt"
 	orbgeojson "github.com/paulmach/orb/geojson"
 	"github.com/paulmach/orb/maptile"
@@ -23,6 +22,7 @@ import (
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/store"
+	"github.com/adonm/postfgb/internal/tiles"
 )
 
 type Server struct {
@@ -32,7 +32,6 @@ type Server struct {
 	AdminToken   string
 	RustgisCLI   string
 	OGR2OGR      string
-	CacheDir     string
 }
 
 type Config struct {
@@ -40,7 +39,6 @@ type Config struct {
 	AdminToken string
 	RustgisCLI string
 	OGR2OGR    string
-	CacheDir   string
 }
 
 type link struct {
@@ -59,9 +57,8 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("postfgb", "0.1.0"))
 	s := &Server{
-		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 1000,
+		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 50000,
 		AdminToken: cfg.AdminToken, RustgisCLI: cfg.RustgisCLI, OGR2OGR: cfg.OGR2OGR,
-		CacheDir: cfg.CacheDir,
 	}
 	s.register(api)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
@@ -216,7 +213,7 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 
 var reservedParams = map[string]bool{
 	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
-	"filter": true, "filter-lang": true, "format": true, "maxzoom": true,
+	"filter": true, "filter-lang": true, "format": true,
 }
 
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
@@ -236,9 +233,8 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	}
 	flatgeobuf := r.URL.Query().Get("f") == "flatgeobuf" ||
 		strings.Contains(r.Header.Get("Accept"), "application/flatgeobuf")
-	pmtilesRequested := r.URL.Query().Get("f") == "pmtiles"
 	defaultLimit := s.DefaultLimit
-	if flatgeobuf || pmtilesRequested {
+	if flatgeobuf {
 		defaultLimit = 1000000
 	}
 	limit, err := parseLimit(r, defaultLimit)
@@ -258,16 +254,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query().Get("q")
 	if flatgeobuf {
-		s.writeFGB(ctx, w, id, bbox, query, filter, offset, limit)
-		return
-	}
-	if pmtilesRequested {
-		maxzoom, err := parseMaxZoom(r, 4)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		s.writePMTiles(w, r, id, bbox, query, filter, offset, limit, maxzoom)
+		s.writeFGB(ctx, w, id, bbox, query, filter, offset, limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
@@ -281,7 +268,11 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, offset int) {
-	metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks)
+	tier := tierForBounds(bbox)
+	metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, tier)
+	if err == nil && len(metas) == 0 && tier > 0 {
+		metas, err = s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, 0)
+	}
 	if err != nil {
 		slog.Error("chunk metas query failed", "collection", id, "error", err)
 		return
@@ -485,7 +476,7 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 	if bbox == nil {
 		return true
 	}
-	geom := toOrb(f.Geometry)
+	geom := tiles.ToOrb(f.Geometry)
 	if geom == nil {
 		return false
 	}
@@ -494,8 +485,8 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
-func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit int) {
-	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, offset, limit)
+func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit, tier int) {
+	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, offset, limit, tier)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -515,11 +506,14 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string,
 	w.Write(data)
 }
 
-func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	if query != "" || filter != nil {
 		return s.collectMatches(ctx, id, bbox, query, filter, offset, limit)
 	}
-	metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks)
+	metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, tier)
+	if err == nil && len(metas) == 0 && tier > 0 {
+		metas, err = s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, 0)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -685,36 +679,46 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid tile coordinates", http.StatusBadRequest)
 		return
 	}
+	filter, err := requestFilter(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	query := r.URL.Query().Get("q")
 	tile := maptile.New(uint32(x), uint32(y), maptile.Zoom(z))
 	bound := tile.Bound()
 	bbox := [4]float64{bound.Min[0], bound.Min[1], bound.Max[0], bound.Max[1]}
-	rows, err := s.Store.Chunks(ctx, id, &bbox, s.MaxChunks)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	collection := orbgeojson.NewFeatureCollection()
-	for _, row := range rows {
-		c, err := chunk.Open(row.Data)
-		if err != nil {
-			continue
+	var collection *orbgeojson.FeatureCollection
+	if query == "" && filter == nil {
+		tier := tierForZoom(int(z))
+		rows, err := s.Store.Chunks(ctx, id, &bbox, s.MaxChunks, tier)
+		if err == nil && len(rows) == 0 && tier > 0 {
+			rows, err = s.Store.Chunks(ctx, id, &bbox, s.MaxChunks, 0)
 		}
-		raw, err := c.Search(bbox[0], bbox[1], bbox[2], bbox[3])
 		if err != nil {
-			continue
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		for _, f := range raw {
-			g := c.GeoJSON(f)
-			geom := toOrb(g.Geometry)
-			if geom == nil {
+		collection = orbgeojson.NewFeatureCollection()
+		for _, row := range rows {
+			c, err := chunk.Open(row.Data)
+			if err != nil {
 				continue
 			}
-			feature := orbgeojson.NewFeature(geom)
-			feature.Properties = g.Properties
-			collection.Append(feature)
+			raw, err := c.Search(bbox[0], bbox[1], bbox[2], bbox[3])
+			if err != nil {
+				continue
+			}
+			appendFeatures(collection, c, raw)
+		}
+	} else {
+		collection, err = s.tileMatches(ctx, id, bbox, query, filter)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 	}
-	data, empty, err := tileBytes(id, collection, tile)
+	data, empty, err := tiles.Bytes(id, collection, tile)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -728,6 +732,99 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
 	w.Write(data)
+}
+
+func appendFeatures(fc *orbgeojson.FeatureCollection, c *chunk.Chunk, feats []*flattypes.Feature) {
+	for _, f := range feats {
+		g := c.GeoJSON(f)
+		geom := tiles.ToOrb(g.Geometry)
+		if geom == nil {
+			continue
+		}
+		feature := orbgeojson.NewFeature(geom)
+		feature.Properties = g.Properties
+		fc.Append(feature)
+	}
+}
+
+func (s *Server) tileMatches(ctx context.Context, id string, bbox [4]float64, query string, filter cql.Expr) (*orbgeojson.FeatureCollection, error) {
+	matches, err := s.Store.Matches(ctx, id, &bbox, query, filter, s.DefaultLimit, 0)
+	if err != nil {
+		return nil, err
+	}
+	byChunk := map[int64]map[int]bool{}
+	var ids []int64
+	for _, m := range matches {
+		ords := byChunk[m.ChunkID]
+		if ords == nil {
+			if len(ids) >= s.MaxChunks {
+				break
+			}
+			ords = map[int]bool{}
+			byChunk[m.ChunkID] = ords
+			ids = append(ids, m.ChunkID)
+		}
+		ords[m.Ord] = true
+	}
+	rows, err := s.Store.ChunksByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	fc := orbgeojson.NewFeatureCollection()
+	for _, row := range rows {
+		c, err := chunk.Open(row.Data)
+		if err != nil {
+			continue
+		}
+		feats, err := c.SearchAll()
+		if err != nil {
+			continue
+		}
+		ords := byChunk[row.ID]
+		for i, f := range feats {
+			if !ords[i] {
+				continue
+			}
+			g := c.GeoJSON(f)
+			if !inBounds(g, &bbox) {
+				continue
+			}
+			geom := tiles.ToOrb(g.Geometry)
+			if geom == nil {
+				continue
+			}
+			feature := orbgeojson.NewFeature(geom)
+			feature.Properties = g.Properties
+			fc.Append(feature)
+		}
+	}
+	return fc, nil
+}
+
+func tierForZoom(z int) int {
+	switch {
+	case z <= 2:
+		return 2
+	case z <= 4:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func tierForBounds(bbox *[4]float64) int {
+	if bbox == nil {
+		return 2
+	}
+	area := (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+	switch {
+	case area >= 400:
+		return 2
+	case area >= 20:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func parseBBox(r *http.Request) (*[4]float64, error) {
@@ -772,91 +869,4 @@ func parseOffset(r *http.Request) (int, error) {
 		return 0, errors.New("invalid offset")
 	}
 	return n, nil
-}
-
-func toOrb(g *chunk.Geometry) orb.Geometry {
-	if g == nil {
-		return nil
-	}
-	switch g.Type {
-	case "Point":
-		pts, ok := g.Coordinates.([]float64)
-		if !ok || len(pts) < 2 {
-			return nil
-		}
-		return orb.Point{pts[0], pts[1]}
-	case "LineString":
-		pts, ok := g.Coordinates.([][]float64)
-		if !ok {
-			return nil
-		}
-		return orbLine(pts)
-	case "Polygon":
-		rs, ok := g.Coordinates.([][][]float64)
-		if !ok {
-			return nil
-		}
-		return orbPoly(rs)
-	case "MultiPoint":
-		pts, ok := g.Coordinates.([][]float64)
-		if !ok {
-			return nil
-		}
-		mp := make(orb.MultiPoint, 0, len(pts))
-		for _, p := range pts {
-			if len(p) < 2 {
-				continue
-			}
-			mp = append(mp, orb.Point{p[0], p[1]})
-		}
-		return mp
-	case "MultiLineString":
-		ls, ok := g.Coordinates.([][][]float64)
-		if !ok {
-			return nil
-		}
-		ml := make(orb.MultiLineString, 0, len(ls))
-		for _, l := range ls {
-			ml = append(ml, orbLine(l))
-		}
-		return ml
-	case "MultiPolygon":
-		ps, ok := g.Coordinates.([][][][]float64)
-		if !ok {
-			return nil
-		}
-		mp := make(orb.MultiPolygon, 0, len(ps))
-		for _, p := range ps {
-			mp = append(mp, orbPoly(p))
-		}
-		return mp
-	case "GeometryCollection":
-		var parts []orb.Geometry
-		for i := range g.Geometries {
-			if part := toOrb(&g.Geometries[i]); part != nil {
-				parts = append(parts, part)
-			}
-		}
-		return orb.Collection(parts)
-	}
-	return nil
-}
-
-func orbLine(pts [][]float64) orb.LineString {
-	line := make(orb.LineString, 0, len(pts))
-	for _, p := range pts {
-		if len(p) < 2 {
-			continue
-		}
-		line = append(line, orb.Point{p[0], p[1]})
-	}
-	return line
-}
-
-func orbPoly(rs [][][]float64) orb.Polygon {
-	poly := make(orb.Polygon, 0, len(rs))
-	for _, r := range rs {
-		poly = append(poly, orb.Ring(orbLine(r)))
-	}
-	return poly
 }
