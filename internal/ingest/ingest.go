@@ -551,8 +551,6 @@ func sortColumns(cols []chunk.Column, sortable []string) []store.SortColumn {
 			case flattypes.ColumnTypeInt, flattypes.ColumnTypeUInt, flattypes.ColumnTypeLong,
 				flattypes.ColumnTypeULong, flattypes.ColumnTypeFloat, flattypes.ColumnTypeDouble:
 				cast = "numeric"
-			case flattypes.ColumnTypeDateTime:
-				cast = "timestamptz"
 			}
 			break
 		}

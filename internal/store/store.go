@@ -367,15 +367,23 @@ func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, ti
 	return err
 }
 
+func SortExpr(name, cast string) string {
+	key := strings.ReplaceAll(name, "'", "''")
+	expr := `props->>'` + key + `'`
+	switch cast {
+	case "":
+		return expr
+	case "numeric", "boolean", "timestamptz":
+		return `(` + expr + `)::` + cast
+	default:
+		return ""
+	}
+}
+
 func (i *Ingest) CreateSortIndexes(ctx context.Context, cols []SortColumn) error {
 	for idx, col := range cols {
-		key := strings.ReplaceAll(col.Name, "'", "''")
-		expr := `props->>'` + key + `'`
-		switch col.Cast {
-		case "":
-		case "numeric", "boolean", "timestamptz":
-			expr = `(` + expr + `)::` + col.Cast
-		default:
+		expr := SortExpr(col.Name, col.Cast)
+		if expr == "" {
 			return fmt.Errorf("sortable: unsupported cast %q", col.Cast)
 		}
 		name := pgx.Identifier{fmt.Sprintf("chunk_props_%s_sort_%d_idx", i.collection, idx)}.Sanitize()
@@ -553,7 +561,9 @@ func matchesWhere(collection string, bbox *[4]float64, query string, filter cql.
 		args = append(args, query)
 		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2)`
 	default:
-		where += ` and ` + filter.SQL("m.props", &args)
+		if filter != nil {
+			where += ` and ` + filter.SQL("m.props", &args)
+		}
 	}
 	if bbox != nil {
 		from += ` join chunks ch on ch.collection = m.collection and ch.id = m.chunk_id`
@@ -572,7 +582,19 @@ func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64
 	args = append(args, limit, offset)
 	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by m.chunk_id, m.feature_ord limit $%d offset $%d`,
 		from, where, len(args)-1, len(args))
-	rows, err := s.Pool.Query(ctx, sql, args...)
+	return scanMatches(ctx, s.Pool, sql, args...)
+}
+
+func (s *Store) Sorted(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, order []string, limit, offset int) ([]FeatureMatch, error) {
+	from, where, args := matchesWhere(collection, bbox, query, filter)
+	args = append(args, limit, offset)
+	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by %s, m.chunk_id, m.feature_ord limit $%d offset $%d`,
+		from, where, strings.Join(order, ", "), len(args)-1, len(args))
+	return scanMatches(ctx, s.Pool, sql, args...)
+}
+
+func scanMatches(ctx context.Context, conn db, sql string, args ...any) ([]FeatureMatch, error) {
+	rows, err := conn.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -89,7 +89,7 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	features, header, err := s.collectFeatures(ctx, id, bbox, r.URL.Query().Get("q"), filter, offset, limit, 0)
+	features, header, err := s.collectFeatures(ctx, id, bbox, r.URL.Query().Get("q"), filter, nil, offset, limit, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

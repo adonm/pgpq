@@ -354,6 +354,11 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter = cql.And(filter, dt)
+	order, err := s.sortOrder(ctx, r, info)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	query := r.URL.Query().Get("q")
 	var matched *int64
 	if r.URL.Query().Get("numberMatched") == "true" {
@@ -378,14 +383,17 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if flatgeobuf {
-		s.writeFGB(ctx, w, id, bbox, query, filter, offset, limit, 0)
+		s.writeFGB(ctx, w, id, bbox, query, filter, order, offset, limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
 	fw := newFeatureWriter(w, limit, matched)
-	if query != "" || filter != nil {
+	switch {
+	case order != nil:
+		s.streamSorted(ctx, fw, info, bbox, query, filter, order, offset)
+	case query != "" || filter != nil:
 		s.streamMatches(ctx, fw, info, bbox, query, filter, offset)
-	} else {
+	default:
 		tier := tierForBounds(bbox)
 		if overview != nil {
 			tier = *overview
@@ -465,6 +473,10 @@ func (s *Server) streamMatches(ctx context.Context, sink featureSink, info store
 		slog.Error("matches query failed", "collection", info.Name, "error", err)
 		return
 	}
+	s.emitMatches(ctx, sink, info, bbox, matches)
+}
+
+func (s *Server) emitMatches(ctx context.Context, sink featureSink, info store.CollectionInfo, bbox *[4]float64, matches []store.FeatureMatch) {
 	ords := map[int64]map[int]bool{}
 	var ids []int64
 	for _, m := range matches {
@@ -698,8 +710,8 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
-func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit, tier int) {
-	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, offset, limit, tier)
+func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, offset, limit, tier int) {
+	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, order, offset, limit, tier)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -719,7 +731,10 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string,
 	w.Write(data)
 }
 
-func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
+	if len(order) > 0 {
+		return s.collectSorted(ctx, id, bbox, query, filter, order, offset, limit)
+	}
 	if query != "" || filter != nil {
 		return s.collectMatches(ctx, id, bbox, query, filter, offset, limit)
 	}
@@ -794,6 +809,10 @@ func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64
 	if err != nil {
 		return nil, nil, err
 	}
+	return s.collectMatchRows(ctx, id, bbox, matches)
+}
+
+func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float64, matches []store.FeatureMatch) ([]*flattypes.Feature, *flattypes.Header, error) {
 	ords := map[int64]map[int]bool{}
 	var ids []int64
 	for _, m := range matches {
