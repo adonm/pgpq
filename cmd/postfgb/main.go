@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 	"github.com/flatgeobuf/flatgeobuf/src/go/index"
@@ -92,23 +93,29 @@ func genFeatures(args []string) {
 	maxX := fs.Float64("maxx", 180, "maximum longitude")
 	maxY := fs.Float64("maxy", 85, "maximum latitude")
 	seed := fs.Int64("seed", 42, "random seed")
+	withTime := fs.Bool("time", false, "add a DateTime column spanning 2020-01-01 plus one second per feature")
 	fs.Parse(args)
 	rng := rand.New(rand.NewSource(*seed))
+	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	features := make([]chunk.InputFeature, *n)
 	keys := make([]uint32, *n)
 	for i := range features {
 		x := *minX + rng.Float64()*(*maxX-*minX)
 		y := *minY + rng.Float64()*(*maxY-*minY)
 		keys[i] = hilbertKey(x, y, *minX, *minY, *maxX, *maxY)
+		props := map[string]json.RawMessage{
+			"i":    json.RawMessage(strconv.Itoa(i)),
+			"name": json.RawMessage(strconv.Quote(fmt.Sprintf("feature-%d", i))),
+		}
+		if *withTime {
+			props["ts"] = json.RawMessage(strconv.Quote(base.Add(time.Duration(i) * time.Second).Format(time.RFC3339)))
+		}
 		features[i] = chunk.InputFeature{
 			Geometry: chunk.RawGeometry{
 				Type:        "Point",
 				Coordinates: json.RawMessage(fmt.Sprintf("[%g,%g]", x, y)),
 			},
-			Properties: map[string]json.RawMessage{
-				"i":    json.RawMessage(strconv.Itoa(i)),
-				"name": json.RawMessage(strconv.Quote(fmt.Sprintf("feature-%d", i))),
-			},
+			Properties: props,
 		}
 	}
 	order := make([]int, len(features))
@@ -128,6 +135,9 @@ func genFeatures(args []string) {
 	cols := []chunk.Column{
 		{Name: "i", Type: flattypes.ColumnTypeLong},
 		{Name: "name", Type: flattypes.ColumnTypeString},
+	}
+	if *withTime {
+		cols = append(cols, chunk.Column{Name: "ts", Type: flattypes.ColumnTypeDateTime})
 	}
 	if _, err := chunk.WriteFile(f, "features", cols, sorted); err != nil {
 		fatal(err)

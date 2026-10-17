@@ -89,6 +89,8 @@ type CollectionInfo struct {
 	TimeMin      *time.Time
 	TimeMax      *time.Time
 	IDColumn     *string
+	TimeColumn   *string
+	Sortable     []string
 }
 
 type FeatureMatch struct {
@@ -357,10 +359,11 @@ func (i *Ingest) RefreshStats(ctx context.Context) error {
 	return refreshStats(ctx, i.tx, i.collection)
 }
 
-func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string) error {
+func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string, timeMin, timeMax *time.Time) error {
 	_, err := i.tx.Exec(ctx, `
-		update collections set kind = 'native', version = version + 1, sortable = coalesce($2::text[], '{}'), id_column = $3, time_column = $4
-		where name = $1`, i.collection, sortable, nullable(idColumn), nullable(timeColumn))
+		update collections set kind = 'native', version = version + 1, sortable = coalesce($2::text[], '{}'),
+			id_column = $3, time_column = $4, time_min = $5, time_max = $6
+		where name = $1`, i.collection, sortable, nullable(idColumn), nullable(timeColumn), timeMin, timeMax)
 	return err
 }
 
@@ -604,7 +607,7 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, kind, members, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column from collections`
+const collectionColumns = `select name, kind, members, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
@@ -616,7 +619,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	for rows.Next() {
 		var info CollectionInfo
 		if err := rows.Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
-			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn); err != nil {
+			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable); err != nil {
 			return nil, err
 		}
 		out = append(out, info)
@@ -628,7 +631,7 @@ func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, er
 	var info CollectionInfo
 	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
 		Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
-			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn)
+			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return info, ErrNotFound
 	}

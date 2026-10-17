@@ -26,6 +26,8 @@ func (s *Server) ingestData(w http.ResponseWriter, r *http.Request) {
 	result, err := ingest.Run(r.Context(), s.Store, r.Body, ingest.Options{
 		Collection: id,
 		Sortable:   sortable,
+		IDColumn:   r.URL.Query().Get("id_column"),
+		TimeColumn: r.URL.Query().Get("time_column"),
 	})
 	if errors.Is(err, ingest.ErrInvalid) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)

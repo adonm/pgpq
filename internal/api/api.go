@@ -290,6 +290,7 @@ var reservedParams = map[string]bool{
 	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
 	"filter": true, "filter-lang": true, "format": true,
 	"overview": true, "numberMatched": true,
+	"datetime": true, "sortby": true, "crs": true, "bbox-crs": true,
 }
 
 func parseOverview(r *http.Request) (*int, error) {
@@ -347,6 +348,12 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	dt, err := datetimeFilter(r, info)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	filter = cql.And(filter, dt)
 	query := r.URL.Query().Get("q")
 	var matched *int64
 	if r.URL.Query().Get("numberMatched") == "true" {
@@ -929,6 +936,12 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	dt, err := datetimeFilter(r, info)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	filter = cql.And(filter, dt)
 	query := r.URL.Query().Get("q")
 	tile := maptile.New(uint32(x), uint32(y), maptile.Zoom(z))
 	bound := tile.Bound()

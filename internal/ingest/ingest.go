@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 	"github.com/paulmach/orb"
@@ -64,6 +65,8 @@ func (s *sizer) reset(encoded int, features int) {
 type Options struct {
 	Collection string
 	Sortable   []string
+	IDColumn   string
+	TimeColumn string
 }
 
 type Result struct {
@@ -83,8 +86,18 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	if err != nil {
 		return Result{}, invalid(err)
 	}
-	idColumn := detectIDColumn(cols)
-	timeColumn := detectTimeColumn(cols)
+	idColumn := opts.IDColumn
+	if idColumn == "" {
+		idColumn = detectIDColumn(cols)
+	} else if !hasColumn(cols, idColumn) {
+		return Result{}, invalid(fmt.Errorf("id column %q is not in the schema", idColumn))
+	}
+	timeColumn := opts.TimeColumn
+	if timeColumn == "" {
+		timeColumn = detectTimeColumn(cols)
+	} else if !hasColumn(cols, timeColumn) {
+		return Result{}, invalid(fmt.Errorf("time column %q is not in the schema", timeColumn))
+	}
 	for _, name := range opts.Sortable {
 		if !hasColumn(cols, name) {
 			return Result{}, invalid(fmt.Errorf("sortable column %q is not in the schema", name))
@@ -100,6 +113,7 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	result := Result{Created: created}
 	sizer := newSizer()
 	batch := make([]chunk.InputFeature, 0, 1024)
+	var timeMin, timeMax *time.Time
 	flush := func() error {
 		encoded, err := putChunk(ctx, ing, opts.Collection, cols, batch, 0)
 		if err != nil {
@@ -125,6 +139,16 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		batch = append(batch, feature)
 		sizer.add(feature)
 		result.Features++
+		if timeColumn != "" {
+			if t, ok := featureTime(feature.Properties[timeColumn]); ok {
+				if timeMin == nil || t.Before(*timeMin) {
+					timeMin = &t
+				}
+				if timeMax == nil || t.After(*timeMax) {
+					timeMax = &t
+				}
+			}
+		}
 		if sizer.full(len(batch)) {
 			if err := flush(); err != nil {
 				return Result{}, err
@@ -145,7 +169,7 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	if err := ing.CreateSortIndexes(ctx, sortColumns(cols, opts.Sortable)); err != nil {
 		return Result{}, err
 	}
-	if err := ing.SetCatalog(ctx, opts.Sortable, idColumn, timeColumn); err != nil {
+	if err := ing.SetCatalog(ctx, opts.Sortable, idColumn, timeColumn, timeMin, timeMax); err != nil {
 		return Result{}, err
 	}
 	if err := ing.RefreshStats(ctx); err != nil {
@@ -486,6 +510,22 @@ func detectTimeColumn(cols []chunk.Column) string {
 		}
 	}
 	return ""
+}
+
+func featureTime(raw json.RawMessage) (time.Time, bool) {
+	if len(raw) == 0 {
+		return time.Time{}, false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func hasColumn(cols []chunk.Column, name string) bool {

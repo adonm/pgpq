@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -135,6 +136,8 @@ func valueExpr(col string, args *[]any, prop string, value any) string {
 		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'boolean' then (%s ->> %s)::boolean end)", col, key, col, key)
 	case int, int64, float64:
 		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'number' then (%s ->> %s)::numeric end)", col, key, col, key)
+	case time.Time:
+		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'string' then (%s ->> %s)::timestamptz end)", col, key, col, key)
 	default:
 		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'string' then %s ->> %s end)", col, key, col, key)
 	}
