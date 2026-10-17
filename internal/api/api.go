@@ -296,10 +296,6 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if info.Kind == "view" {
-		http.Error(w, "a view serves one FlatGeobuf file: /collections/"+id+"/items.fgb", http.StatusNotImplemented)
-		return
-	}
 	crsFn, contentCRS, err := s.outputCRS(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -398,7 +394,7 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 			if rows[j].Data == nil {
 				continue
 			}
-			c, err := chunk.Open(rows[j].Data)
+			c, err := s.openChunk(ctx, info.Name, info.Version, meta.ID, rows[j])
 			if err != nil {
 				slog.Error("chunk open failed", "chunk", meta.ID, "error", err)
 				continue
@@ -408,8 +404,7 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 				slog.Error("chunk search failed", "chunk", meta.ID, "error", err)
 				continue
 			}
-			for i, f := range features {
-				g := c.GeoJSON(f)
+			for i, g := range geojsonAll(c, features) {
 				if !inBounds(g, bbox) {
 					continue
 				}
@@ -613,6 +608,22 @@ func typedLiteral(value string) any {
 }
 
 func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, tw timeWindow) (int64, bool, error) {
+	if info.Kind == "view" {
+		var total int64
+		exact := true
+		for _, member := range s.streamTargets(ctx, info) {
+			count, ok, err := s.countMatches(ctx, member, bbox, query, filter, tw)
+			if err != nil {
+				return 0, false, err
+			}
+			if !ok {
+				exact = false
+				continue
+			}
+			total += count
+		}
+		return total, exact, nil
+	}
 	if tw.set {
 		if info.TimeColumn == nil || *info.TimeColumn == "" {
 			return 0, false, nil
@@ -679,6 +690,9 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
+	if info, err := s.Store.Collection(ctx, id); err == nil && info.Kind == "view" {
+		return s.collectView(ctx, info, bbox, query, filter, order, shapes, offset, limit)
+	}
 	if len(order) > 0 {
 		return s.collectSorted(ctx, id, bbox, query, filter, order, shapes, offset, limit)
 	}
@@ -726,7 +740,7 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 			if rows[j].Data == nil {
 				continue
 			}
-			c, err := chunk.Open(rows[j].Data)
+			c, err := s.openChunk(ctx, id, 0, fetch[j].ID, rows[j])
 			if err != nil {
 				return nil, nil, err
 			}
@@ -884,21 +898,6 @@ func itemHash(value any) uint64 {
 	return h.Sum64()
 }
 
-func tierForBounds(bbox *[4]float64) int {
-	if bbox == nil {
-		return 2
-	}
-	area := (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-	switch {
-	case area >= 400:
-		return 2
-	case area >= 20:
-		return 1
-	default:
-		return 0
-	}
-}
-
 func parseBBox(r *http.Request) (*[4]float64, error) {
 	value := r.URL.Query().Get("bbox")
 	if value == "" {
@@ -941,4 +940,28 @@ func parseOffset(r *http.Request) (int, error) {
 		return 0, errors.New("invalid offset")
 	}
 	return n, nil
+}
+
+func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+	if len(order) > 0 {
+		return nil, nil, errors.New("views cannot be sorted: read the file or query the members")
+	}
+	var features []*flattypes.Feature
+	var header *flattypes.Header
+	remaining := offset
+	for _, member := range s.streamTargets(ctx, info) {
+		if len(features) >= limit {
+			break
+		}
+		collected, memberHeader, err := s.collectFeatures(ctx, member.Name, bbox, query, filter, order, shapes, remaining, limit-len(features), 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		if header == nil {
+			header = memberHeader
+		}
+		remaining = 0
+		features = append(features, collected...)
+	}
+	return features, header, nil
 }

@@ -15,6 +15,9 @@ func (s *Server) sortOrder(ctx context.Context, r *http.Request, info store.Coll
 	if value == "" {
 		return nil, nil
 	}
+	if info.Kind == "view" {
+		return nil, errors.New("a view has no sort order: read /items.fgb or query its members")
+	}
 	if len(info.Sortable) == 0 {
 		return nil, errors.New("collection has no sortable columns")
 	}

@@ -2,9 +2,15 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+
+	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -71,4 +77,49 @@ func budgetMetas(metas []store.ChunkMeta, maxBytes int) ([]store.ChunkMeta, bool
 		total += meta.SizeBytes
 	}
 	return metas, false
+}
+
+func geojsonAll(c *chunk.Chunk, features []*flattypes.Feature) []*chunk.Feature {
+	out := make([]*chunk.Feature, len(features))
+	workers := runtime.NumCPU()
+	if workers > len(features) {
+		workers = len(features)
+	}
+	if workers <= 1 {
+		for i, f := range features {
+			out[i] = c.GeoJSON(f)
+		}
+		return out
+	}
+	per := (len(features) + workers - 1) / workers
+	var wg sync.WaitGroup
+	for lo := 0; lo < len(features); lo += per {
+		hi := min(lo+per, len(features))
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			for i := lo; i < hi; i++ {
+				out[i] = c.GeoJSON(features[i])
+			}
+		}(lo, hi)
+	}
+	wg.Wait()
+	return out
+}
+
+func (s *Server) openChunk(ctx context.Context, collection string, version, id int64, row store.ChunkRow) (*chunk.Chunk, error) {
+	key := fmt.Sprintf("%s|%d|%d", collection, id, version)
+	if entry, ok := s.chunks.get(key); ok {
+		return chunk.FromRaw(entry.data)
+	}
+	c, err := chunk.Open(row.Data)
+	if err != nil {
+		return nil, err
+	}
+	featuresAt, _, err := fgb.Regions(c.Data, c.Header())
+	if err != nil {
+		return nil, err
+	}
+	s.chunks.put(key, decompressedChunk{data: c.Data, featuresAt: featuresAt})
+	return c, nil
 }

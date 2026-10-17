@@ -39,6 +39,10 @@ func Open(data []byte) (*Chunk, error) {
 	if err != nil {
 		return nil, err
 	}
+	return FromRaw(raw)
+}
+
+func FromRaw(raw []byte) (*Chunk, error) {
 	fgb, err := flatgeobuf.NewWithData(raw)
 	if err != nil {
 		return nil, err

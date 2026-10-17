@@ -39,6 +39,18 @@ func (s *Server) feature(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) lookupFeature(ctx context.Context, info store.CollectionInfo, fid string) (*chunk.Feature, bool, error) {
+	if info.Kind == "view" {
+		for _, member := range s.streamTargets(ctx, info) {
+			feature, ok, err := s.lookupFeature(ctx, member, fid)
+			if err != nil {
+				return nil, false, err
+			}
+			if ok {
+				return feature, true, nil
+			}
+		}
+		return nil, false, nil
+	}
 	if info.IDColumn != nil {
 		values := []any{typedLiteral(fid)}
 		if _, isString := values[0].(string); !isString {

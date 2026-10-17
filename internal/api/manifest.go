@@ -44,6 +44,9 @@ func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutp
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, huma.Error404NotFound("collection not found")
 	}
+	if info.Kind == "view" {
+		return nil, huma.Error400BadRequest("a view has no chunk manifest: read /items.fgb or its members")
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/adonm/postfgb/internal/cql"
@@ -45,7 +46,7 @@ func (s *Server) parseFeatureQuery(ctx context.Context, r *http.Request, info st
 	if err != nil {
 		return q, err
 	}
-	if tw.set {
+	if tw.set && info.Kind != "view" {
 		if info.TimeColumn == nil || *info.TimeColumn == "" {
 			return q, errors.New("collection has no time column")
 		}
@@ -79,7 +80,28 @@ func (s *Server) streamCollection(ctx context.Context, sink featureSink, info st
 	if q.empty {
 		return
 	}
-	s.streamCollections(ctx, []store.CollectionInfo{info}, func() featureSink { return sink }, q)
+	s.streamCollections(ctx, s.streamTargets(ctx, info), func() featureSink { return sink }, q)
+}
+
+func (s *Server) streamTargets(ctx context.Context, info store.CollectionInfo) []store.CollectionInfo {
+	if info.Kind != "view" {
+		return []store.CollectionInfo{info}
+	}
+	names, err := s.Store.ViewMemberNames(ctx, info)
+	if err != nil {
+		slog.Error("view members unreadable", "view", info.Name, "error", err)
+		return nil
+	}
+	targets := make([]store.CollectionInfo, 0, len(names))
+	for _, name := range names {
+		member, err := s.Store.Collection(ctx, name)
+		if err != nil {
+			slog.Error("view member missing", "view", info.Name, "member", name, "error", err)
+			continue
+		}
+		targets = append(targets, member)
+	}
+	return targets
 }
 
 func (s *Server) streamCollections(ctx context.Context, infos []store.CollectionInfo, sinkFor func() featureSink, q featureQuery) {
@@ -97,12 +119,9 @@ func (s *Server) streamCollections(ctx context.Context, infos []store.Collection
 			filter = cql.And(filter, datetimeExpr(*info.TimeColumn, q.tw))
 		}
 		if filter == nil && q.query == "" && q.order == nil {
-			tier := tierForBounds(q.bbox)
-			if q.overview != nil {
+			tier := 0
+			if q.overview != nil && info.Kind != "view" {
 				tier = *q.overview
-			}
-			if len(q.shapes) > 0 {
-				tier = 0
 			}
 			remaining -= s.streamBBox(ctx, sink, info, q.bbox, remaining, tier)
 			continue

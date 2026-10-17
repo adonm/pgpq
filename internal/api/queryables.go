@@ -37,7 +37,17 @@ func (s *Server) queryables(ctx context.Context, in *collectionInput) (*queryabl
 	out.Body.Type = "object"
 	out.Body.Title = info.Name
 	out.Body.Properties = map[string]queryableType{}
-	metas, err := s.Store.ChunkMetas(ctx, in.ID, nil, 1, 0, 0)
+	if info.Kind == "view" {
+		names, err := s.Store.ViewMemberNames(ctx, info)
+		if err != nil {
+			return nil, err
+		}
+		if len(names) == 0 {
+			return out, nil
+		}
+		info.Name = names[0]
+	}
+	metas, err := s.Store.ChunkMetas(ctx, info.Name, nil, 1, 0, 0)
 	if err != nil {
 		return nil, err
 	}
