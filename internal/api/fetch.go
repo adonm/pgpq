@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -79,22 +80,33 @@ func budgetMetas(metas []store.ChunkMeta, maxBytes int) ([]store.ChunkMeta, bool
 	return metas, false
 }
 
+// openAndSearch opens a chunk (through the shared cache) and materialises its
+// features, so the walker can keep several chunks in flight at once.
+func (s *Server) openAndSearch(ctx context.Context, info store.CollectionInfo, meta store.ChunkMeta, row store.ChunkRow) openedChunk {
+	if row.Data == nil {
+		return openedChunk{err: errors.New("chunk row missing")}
+	}
+	c, err := s.openChunk(ctx, info.Name, info.Version, meta.ID, row)
+	if err != nil {
+		return openedChunk{err: err}
+	}
+	features, err := c.SearchAll()
+	if err != nil {
+		return openedChunk{err: err}
+	}
+	return openedChunk{chunk: c, features: features}
+}
+
+// geojsonAll decodes a chunk's features across the available cores, in order.
 func geojsonAll(c *chunk.Chunk, features []*flattypes.Feature) []*chunk.Feature {
 	out := make([]*chunk.Feature, len(features))
-	workers := runtime.NumCPU()
-	if workers > len(features) {
-		workers = len(features)
+	stripe := (len(features) + runtime.NumCPU() - 1) / max(runtime.NumCPU(), 1)
+	if stripe < 1 {
+		stripe = len(features)
 	}
-	if workers <= 1 {
-		for i, f := range features {
-			out[i] = c.GeoJSON(f)
-		}
-		return out
-	}
-	per := (len(features) + workers - 1) / workers
 	var wg sync.WaitGroup
-	for lo := 0; lo < len(features); lo += per {
-		hi := min(lo+per, len(features))
+	for lo := 0; lo < len(features); lo += stripe {
+		hi := min(lo+stripe, len(features))
 		wg.Add(1)
 		go func(lo, hi int) {
 			defer wg.Done()
@@ -105,6 +117,12 @@ func geojsonAll(c *chunk.Chunk, features []*flattypes.Feature) []*chunk.Feature 
 	}
 	wg.Wait()
 	return out
+}
+
+type openedChunk struct {
+	chunk    *chunk.Chunk
+	features []*flattypes.Feature
+	err      error
 }
 
 func (s *Server) openChunk(ctx context.Context, collection string, version, id int64, row store.ChunkRow) (*chunk.Chunk, error) {

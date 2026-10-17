@@ -393,28 +393,20 @@ func (s *Server) walkChunks(ctx context.Context, info store.CollectionInfo, bbox
 		}
 		rows := s.fetchRows(ctx, info.Name, fetchIDs)
 		for j, meta := range fetch {
-			if rows[j].Data == nil {
-				continue
-			}
-			c, err := s.openChunk(ctx, info.Name, info.Version, meta.ID, rows[j])
-			if err != nil {
-				slog.Error("chunk open failed", "chunk", meta.ID, "error", err)
-				continue
-			}
-			features, err := c.SearchAll()
-			if err != nil {
-				slog.Error("chunk search failed", "chunk", meta.ID, "error", err)
+			opened := s.openAndSearch(ctx, info, meta, rows[j])
+			if opened.err != nil {
+				slog.Error("chunk read failed", "chunk", meta.ID, "error", opened.err)
 				continue
 			}
 			from := 0
-			for from < len(features) && skipped < offset {
+			for from < len(opened.features) && skipped < offset {
 				skipped++
 				from++
 			}
-			if from == len(features) {
+			if from == len(opened.features) {
 				continue
 			}
-			if !visit(meta, c, features, from) {
+			if !visit(meta, opened.chunk, opened.features, from) {
 				return skipped
 			}
 		}

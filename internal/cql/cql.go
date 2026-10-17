@@ -185,8 +185,8 @@ func equalityExpr(b *Builder, prop string, value any) string {
 }
 
 func equalityClause(col, key, val string) string {
-	return fmt.Sprintf("(%s @> jsonb_build_object(%s, %s) or (jsonb_typeof(%s -> %s) = 'array' and %s -> %s @> jsonb_build_array(%s)))",
-		col, key, val, col, key, col, key, val)
+	return fmt.Sprintf("(%s @> jsonb_build_object(%s, %s) or %s @> jsonb_build_object(%s, jsonb_build_array(%s)))",
+		col, key, val, col, key, val)
 }
 
 func valueExpr(b *Builder, prop string, value any) string {

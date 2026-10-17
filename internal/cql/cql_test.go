@@ -14,7 +14,7 @@ func TestSQL(t *testing.T) {
 	var args []any
 	sql, args := sqlOf(expr, nil)
 	want := "((case when jsonb_typeof(props -> $1) = 'number' then (props ->> $1)::numeric end) >= $2" +
-		" and (props @> jsonb_build_object($3::text, $4::text) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($4::text))))"
+		" and (props @> jsonb_build_object($3::text, $4::text) or props @> jsonb_build_object($3::text, jsonb_build_array($4::text))))"
 	if sql != want {
 		t.Fatalf("sql = %s, want %s", sql, want)
 	}
@@ -31,7 +31,7 @@ func TestEqualityUsesContainment(t *testing.T) {
 	}
 	var args []any
 	sql, args := sqlOf(expr, nil)
-	want := "((props @> jsonb_build_object($1::text, $2::text) or (jsonb_typeof(props -> $1::text) = 'array' and props -> $1::text @> jsonb_build_array($2::text))) and (((props @> jsonb_build_object($3::text, $4::numeric) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($4::numeric))) or (props @> jsonb_build_object($3::text, $5::text) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($5::text)))) or ((props @> jsonb_build_object($6::text, $7::numeric) or (jsonb_typeof(props -> $6::text) = 'array' and props -> $6::text @> jsonb_build_array($7::numeric))) or (props @> jsonb_build_object($6::text, $8::text) or (jsonb_typeof(props -> $6::text) = 'array' and props -> $6::text @> jsonb_build_array($8::text))))))"
+	want := "((props @> jsonb_build_object($1::text, $2::text) or props @> jsonb_build_object($1::text, jsonb_build_array($2::text))) and (((props @> jsonb_build_object($3::text, $4::numeric) or props @> jsonb_build_object($3::text, jsonb_build_array($4::numeric))) or (props @> jsonb_build_object($3::text, $5::text) or props @> jsonb_build_object($3::text, jsonb_build_array($5::text)))) or ((props @> jsonb_build_object($6::text, $7::numeric) or props @> jsonb_build_object($6::text, jsonb_build_array($7::numeric))) or (props @> jsonb_build_object($6::text, $8::text) or props @> jsonb_build_object($6::text, jsonb_build_array($8::text))))))"
 	if sql != want {
 		t.Fatalf("sql = %s, want %s", sql, want)
 	}
