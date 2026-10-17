@@ -201,6 +201,7 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	if _, err := tx.Exec(ctx, `delete from virtual_segment where collection = $1`, name); err != nil {
 		return err
 	}
+	s.forgetCasts(name)
 	return tx.Commit(ctx)
 }
 
@@ -257,6 +258,7 @@ func (i *Ingest) Commit(ctx context.Context) error {
 	if err := i.rebuildMemberViews(ctx); err != nil {
 		return err
 	}
+	i.store.forgetCasts(i.collection)
 	return i.tx.Commit(ctx)
 }
 
@@ -308,10 +310,12 @@ func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, ti
 	return err
 }
 
-func SortExpr(name, cast string) string {
+func SortExpr(name string, cast cql.Cast) string {
 	switch cast {
-	case "", "numeric", "boolean", "timestamptz":
+	case cql.CastNumeric, cql.CastBoolean, cql.CastTimestamp:
 		return cql.ColumnExpr("props", name, cast)
+	case cql.CastText:
+		return `props->>'` + strings.ReplaceAll(name, "'", "''") + `'`
 	}
 	return ""
 }

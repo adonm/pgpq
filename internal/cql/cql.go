@@ -9,22 +9,51 @@ import (
 	"unicode"
 )
 
-type Casts map[string]string
+type Cast string
 
-type Expr interface {
-	SQL(col string, args *[]any, casts Casts) string
+const (
+	CastNone      Cast = ""
+	CastText      Cast = "text"
+	CastNumeric   Cast = "numeric"
+	CastBoolean   Cast = "boolean"
+	CastTimestamp Cast = "timestamptz"
+)
+
+type Casts map[string]Cast
+
+type Builder struct {
+	Col   string
+	Casts Casts
+	args  []any
 }
 
-func ColumnExpr(col, prop, cast string) string {
+func NewBuilder(col string, casts Casts, args ...any) *Builder {
+	return &Builder{Col: col, Casts: casts, args: args}
+}
+
+func (b *Builder) Bind(value any) string {
+	b.args = append(b.args, value)
+	return "$" + strconv.Itoa(len(b.args))
+}
+
+func (b *Builder) Args() []any {
+	return b.args
+}
+
+type Expr interface {
+	SQL(b *Builder) string
+}
+
+func ColumnExpr(col, prop string, cast Cast) string {
 	key := strings.ReplaceAll(prop, "'", "''")
 	lit := col + " -> '" + key + "'"
 	text := col + " ->> '" + key + "'"
 	switch cast {
-	case "numeric":
+	case CastNumeric:
 		return "(case when jsonb_typeof(" + lit + ") = 'number' then (" + text + ")::numeric end)"
-	case "boolean":
+	case CastBoolean:
 		return "(case when jsonb_typeof(" + lit + ") = 'boolean' then (" + text + ")::boolean end)"
-	case "timestamptz":
+	case CastTimestamp:
 		return "(case when jsonb_typeof(" + lit + ") = 'string' then (" + text + ")::timestamptz end)"
 	default:
 		return "(case when jsonb_typeof(" + lit + ") = 'string' then " + text + " end)"
@@ -43,20 +72,20 @@ func And(left, right Expr) Expr {
 
 type andExpr struct{ left, right Expr }
 
-func (e andExpr) SQL(col string, args *[]any, casts Casts) string {
-	return "(" + e.left.SQL(col, args, casts) + " and " + e.right.SQL(col, args, casts) + ")"
+func (e andExpr) SQL(b *Builder) string {
+	return "(" + e.left.SQL(b) + " and " + e.right.SQL(b) + ")"
 }
 
 type orExpr struct{ left, right Expr }
 
-func (e orExpr) SQL(col string, args *[]any, casts Casts) string {
-	return "(" + e.left.SQL(col, args, casts) + " or " + e.right.SQL(col, args, casts) + ")"
+func (e orExpr) SQL(b *Builder) string {
+	return "(" + e.left.SQL(b) + " or " + e.right.SQL(b) + ")"
 }
 
 type notExpr struct{ inner Expr }
 
-func (e notExpr) SQL(col string, args *[]any, casts Casts) string {
-	return "(not " + e.inner.SQL(col, args, casts) + ")"
+func (e notExpr) SQL(b *Builder) string {
+	return "(not " + e.inner.SQL(b) + ")"
 }
 
 type Compare struct {
@@ -65,12 +94,12 @@ type Compare struct {
 	Value any
 }
 
-func (e *Compare) SQL(col string, args *[]any, casts Casts) string {
+func (e *Compare) SQL(b *Builder) string {
 	if e.Op == "=" {
-		return equalityExpr(col, args, e.Prop, e.Value)
+		return equalityExpr(b, e.Prop, e.Value)
 	}
-	value := coerce(e.Value, casts[e.Prop])
-	return valueExpr(col, args, e.Prop, value, casts) + " " + e.Op + " " + placeholder(args, value)
+	value := coerce(e.Value, b.Casts[e.Prop])
+	return valueExpr(b, e.Prop, value) + " " + e.Op + " " + b.Bind(value)
 }
 
 type Between struct {
@@ -79,11 +108,11 @@ type Between struct {
 	Not    bool
 }
 
-func (e *Between) SQL(col string, args *[]any, casts Casts) string {
-	lo := coerce(e.Lo, casts[e.Prop])
-	hi := coerce(e.Hi, casts[e.Prop])
-	sql := valueExpr(col, args, e.Prop, lo, casts) +
-		" between " + placeholder(args, lo) + " and " + placeholder(args, hi)
+func (e *Between) SQL(b *Builder) string {
+	lo := coerce(e.Lo, b.Casts[e.Prop])
+	hi := coerce(e.Hi, b.Casts[e.Prop])
+	sql := valueExpr(b, e.Prop, lo) +
+		" between " + b.Bind(lo) + " and " + b.Bind(hi)
 	if e.Not {
 		return "(not " + sql + ")"
 	}
@@ -96,10 +125,10 @@ type In struct {
 	Not    bool
 }
 
-func (e *In) SQL(col string, args *[]any, casts Casts) string {
+func (e *In) SQL(b *Builder) string {
 	parts := make([]string, len(e.Values))
 	for i, v := range e.Values {
-		parts[i] = equalityExpr(col, args, e.Prop, v)
+		parts[i] = equalityExpr(b, e.Prop, v)
 	}
 	sql := "(" + strings.Join(parts, " or ") + ")"
 	if e.Not {
@@ -114,8 +143,8 @@ type Like struct {
 	Not     bool
 }
 
-func (e *Like) SQL(col string, args *[]any, casts Casts) string {
-	sql := valueExpr(col, args, e.Prop, "", casts) + " like " + placeholder(args, e.Pattern)
+func (e *Like) SQL(b *Builder) string {
+	sql := valueExpr(b, e.Prop, "") + " like " + b.Bind(e.Pattern)
 	if e.Not {
 		return "(not " + sql + ")"
 	}
@@ -127,27 +156,27 @@ type IsNull struct {
 	Not  bool
 }
 
-func (e *IsNull) SQL(col string, args *[]any, casts Casts) string {
-	key := placeholder(args, e.Prop)
-	cond := fmt.Sprintf("(%s -> %s is null or jsonb_typeof(%s -> %s) = 'null')", col, key, col, key)
+func (e *IsNull) SQL(b *Builder) string {
+	key := b.Bind(e.Prop)
+	cond := fmt.Sprintf("(%s -> %s is null or jsonb_typeof(%s -> %s) = 'null')", b.Col, key, b.Col, key)
 	if e.Not {
 		return "(not " + cond + ")"
 	}
 	return cond
 }
 
-func equalityExpr(col string, args *[]any, prop string, value any) string {
-	key := placeholder(args, prop) + "::text"
+func equalityExpr(b *Builder, prop string, value any) string {
+	key := b.Bind(prop) + "::text"
 	clauses := make([]string, 0, 2)
 	switch value.(type) {
 	case bool:
-		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::boolean"))
-		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::text"))
+		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(value)+"::boolean"))
+		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(value)+"::text"))
 	case int, int64, float64:
-		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::numeric"))
-		clauses = append(clauses, equalityClause(col, key, placeholder(args, fmt.Sprint(value))+"::text"))
+		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(value)+"::numeric"))
+		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(fmt.Sprint(value))+"::text"))
 	default:
-		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::text"))
+		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(value)+"::text"))
 	}
 	if len(clauses) == 1 {
 		return clauses[0]
@@ -160,46 +189,46 @@ func equalityClause(col, key, val string) string {
 		col, key, val, col, key, col, key, val)
 }
 
-func valueExpr(col string, args *[]any, prop string, value any, casts Casts) string {
-	if cast, ok := casts[prop]; ok && indexable(value, cast) {
-		return ColumnExpr(col, prop, cast)
+func valueExpr(b *Builder, prop string, value any) string {
+	if cast, ok := b.Casts[prop]; ok && indexable(value, cast) {
+		return ColumnExpr(b.Col, prop, cast)
 	}
-	key := placeholder(args, prop)
+	key := b.Bind(prop)
 	switch value.(type) {
 	case bool:
-		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'boolean' then (%s ->> %s)::boolean end)", col, key, col, key)
+		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'boolean' then (%s ->> %s)::boolean end)", b.Col, key, b.Col, key)
 	case int, int64, float64:
-		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'number' then (%s ->> %s)::numeric end)", col, key, col, key)
+		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'number' then (%s ->> %s)::numeric end)", b.Col, key, b.Col, key)
 	case time.Time:
-		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'string' then (%s ->> %s)::timestamptz end)", col, key, col, key)
+		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'string' then (%s ->> %s)::timestamptz end)", b.Col, key, b.Col, key)
 	default:
-		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'string' then %s ->> %s end)", col, key, col, key)
+		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'string' then %s ->> %s end)", b.Col, key, b.Col, key)
 	}
 }
 
-func indexable(value any, cast string) bool {
+func indexable(value any, cast Cast) bool {
 	switch cast {
-	case "numeric":
+	case CastNumeric:
 		switch value.(type) {
 		case int, int64, float64:
 			return true
 		}
-	case "boolean":
+	case CastBoolean:
 		_, ok := value.(bool)
 		return ok
-	case "timestamptz":
+	case CastTimestamp:
 		_, ok := value.(time.Time)
 		return ok
-	case "":
+	case CastText, CastNone:
 		_, ok := value.(string)
 		return ok
 	}
 	return false
 }
 
-func coerce(value any, cast string) any {
+func coerce(value any, cast Cast) any {
 	switch cast {
-	case "numeric":
+	case CastNumeric:
 		switch v := value.(type) {
 		case int, int64, float64:
 			return v
@@ -211,7 +240,7 @@ func coerce(value any, cast string) any {
 				return f
 			}
 		}
-	case "boolean":
+	case CastBoolean:
 		if v, ok := value.(string); ok {
 			switch v {
 			case "true":
@@ -222,11 +251,6 @@ func coerce(value any, cast string) any {
 		}
 	}
 	return value
-}
-
-func placeholder(args *[]any, value any) string {
-	*args = append(*args, value)
-	return fmt.Sprintf("$%d", len(*args))
 }
 
 var keywords = map[string]bool{

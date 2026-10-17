@@ -17,8 +17,7 @@ func TestParseSpatial(t *testing.T) {
 	if len(spatials) != 1 {
 		t.Fatalf("spatials = %d", len(spatials))
 	}
-	var args []any
-	sql := rest.SQL("props", &args, nil)
+	sql, _ := sqlOf(rest, nil)
 	if strings.Contains(sql, "true") || sql == "" {
 		t.Fatalf("unexpected residual SQL: %q", sql)
 	}

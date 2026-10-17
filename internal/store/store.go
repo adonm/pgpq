@@ -8,12 +8,14 @@ import (
 	"io/fs"
 	"regexp"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
 )
 
@@ -39,7 +41,9 @@ var TrackedExtensions = []string{
 }
 
 type Store struct {
-	Pool *pgxpool.Pool
+	Pool    *pgxpool.Pool
+	castsMu sync.Mutex
+	casts   map[string]cql.Casts
 }
 
 type Payload struct {
@@ -113,7 +117,7 @@ type FeatureMatch struct {
 
 type SortColumn struct {
 	Name string
-	Cast string
+	Cast cql.Cast
 }
 
 type db interface {
@@ -150,11 +154,17 @@ func OpenWithPool(ctx context.Context, dsn string, opts PoolOptions) (*Store, er
 		pool.Close()
 		return nil, err
 	}
-	return &Store{Pool: pool}, nil
+	return &Store{Pool: pool, casts: map[string]cql.Casts{}}, nil
 }
 
 func (s *Store) Close() {
 	s.Pool.Close()
+}
+
+func (s *Store) forgetCasts(collection string) {
+	s.castsMu.Lock()
+	delete(s.casts, collection)
+	s.castsMu.Unlock()
 }
 
 func (s *Store) Ping(ctx context.Context) error {
