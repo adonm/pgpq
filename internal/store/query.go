@@ -112,6 +112,12 @@ func scanChunks(ctx context.Context, conn db, query string, args ...any) ([]Chun
 }
 
 func (s *Store) ColumnCasts(ctx context.Context, collection string) (cql.Casts, error) {
+	s.castsMu.Lock()
+	cached, ok := s.casts[collection]
+	s.castsMu.Unlock()
+	if ok {
+		return cached, nil
+	}
 	casts := cql.Casts{}
 	metas, err := s.ChunkMetas(ctx, collection, nil, 1, 0, 0)
 	if err != nil {
@@ -130,37 +136,44 @@ func (s *Store) ColumnCasts(ctx context.Context, collection string) (cql.Casts, 
 	for _, col := range cols {
 		casts[col.Name] = CastOf(col.Type)
 	}
+	s.castsMu.Lock()
+	s.casts[collection] = casts
+	s.castsMu.Unlock()
 	return casts, nil
 }
 
-func CastOf(columnType string) string {
+func CastOf(columnType string) cql.Cast {
 	switch columnType {
 	case "Bool":
-		return "boolean"
+		return cql.CastBoolean
 	case "Byte", "UByte", "Short", "UShort", "Int", "UInt", "Long", "ULong", "Float", "Double":
-		return "numeric"
+		return cql.CastNumeric
+	case "String", "Json":
+		return cql.CastText
 	}
-	return ""
+	return cql.CastNone
 }
 
 func matchesWhere(collection string, casts cql.Casts, bbox *[4]float64, query string, filter cql.Expr) (string, string, []any) {
 	from := `chunk_props m`
 	where := `m.collection = $1`
 	args := []any{collection}
+	b := cql.NewBuilder("m.props", casts, collection)
 	switch {
 	case query != "" && filter != nil:
 		from = `chunk_text m join chunk_props p on p.collection = m.collection and p.chunk_id = m.chunk_id and p.feature_ord = m.feature_ord`
-		args = append(args, query)
-		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2) and ` + filter.SQL("p.props", &args, casts)
+		b = cql.NewBuilder("p.props", casts, collection, query)
+		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2) and ` + filter.SQL(b)
 	case query != "":
 		from = `chunk_text m`
 		args = append(args, query)
 		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2)`
 	default:
 		if filter != nil {
-			where += ` and ` + filter.SQL("m.props", &args, casts)
+			where += ` and ` + filter.SQL(b)
 		}
 	}
+	args = b.Args()
 	if bbox != nil {
 		from += ` join chunks ch on ch.collection = m.collection and ch.id = m.chunk_id`
 		fragment, extra := bboxPredicate("ch.", bbox, len(args)+1)

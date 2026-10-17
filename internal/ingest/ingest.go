@@ -23,6 +23,7 @@ import (
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cover"
+	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
@@ -851,7 +852,7 @@ func hasColumn(cols []chunk.Column, name string) bool {
 func sortColumns(cols []chunk.Column, sortable []string) []store.SortColumn {
 	out := make([]store.SortColumn, 0, len(sortable))
 	for _, name := range sortable {
-		cast := ""
+		cast := cql.CastNone
 		for _, col := range cols {
 			if col.Name == name {
 				cast = store.CastOf(col.Type.String())
