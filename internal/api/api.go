@@ -34,7 +34,6 @@ type Server struct {
 	MaxChunks    int
 	DefaultLimit int
 	AdminToken   string
-	OGR2OGR      string
 	sweepMu      sync.Mutex
 	lastSweep    time.Time
 }
@@ -42,7 +41,6 @@ type Server struct {
 type Config struct {
 	Store      *store.Store
 	AdminToken string
-	OGR2OGR    string
 }
 
 type link struct {
@@ -62,7 +60,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	api := humago.New(mux, huma.DefaultConfig("postfgb", "0.1.0"))
 	s := &Server{
 		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 50000,
-		AdminToken: cfg.AdminToken, OGR2OGR: cfg.OGR2OGR,
+		AdminToken: cfg.AdminToken,
 	}
 	s.register(api)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
@@ -71,7 +69,6 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("PUT /collections/{id}/view", s.putView)
 	mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
-	mux.HandleFunc("GET /collections/{id}/export", s.export)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()

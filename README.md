@@ -62,7 +62,6 @@ curl -X PUT --data-binary @features.fgb "localhost:8080/collections/demo/data"
 | `DELETE /collections/{id}` | drop a collection and its partitions (admin token) |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
-| `/collections/{id}/export?format=` | filtered features converted on the fly: fgb, geojson, gpkg, parquet, shp, kml, gpx (needs `--ogr2ogr`; admin token when configured) |
 | `/collections/{id}/tiles` | tileset list |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile; accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms and honor `overview=` |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
@@ -90,9 +89,14 @@ The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` a
 
 ## Exports
 
-The server converts on demand too: `GET /collections/{id}/export?format=gpkg&filter=...` runs the normal pushdown, assembles one FlatGeobuf and converts it with `--ogr2ogr`, then streams the file with the right media type. The admin token is required when configured. Tiles are served per-tile by the OGC endpoint at every zoom, filtered or not, so there are no batch archives to build or cache.
+Bulk data leaves the server as FlatGeobuf and nothing else — clients convert locally with GDAL, like any other file:
 
-Single-tile MVT is generated in-process (pure Go, clipped and simplified). For bulk conversion the server stays cgo-free and GDAL runs as a sidecar container:
+```sh
+curl -s "localhost:8080/collections/bench/items?f=flatgeobuf&filter=i%3E999990" -o filtered.fgb
+ogr2ogr filtered.gpkg filtered.fgb
+```
+
+The `just export` recipe runs that OAPIF-to-OGR conversion client-side in one step, and single-tile MVT is generated in-process (pure Go, clipped and simplified). GDAL stays a sidecar container; the server remains cgo-free:
 
 ```sh
 just export demo FlatGeobuf demo.fgb    # OAPIF -> any OGR format: GPKG, KML, Shapefile, GeoParquet, ...
@@ -110,7 +114,7 @@ ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/benc
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (create-or-replace PUT, transactional, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, union views with per-member filters and column mapping, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters including spatial `S_INTERSECTS`, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, on-demand filtered exports through ogr2ogr, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (exports cleanup, ops, performance).
+Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (create-or-replace PUT, transactional, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, union views with per-member filters and column mapping, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters including spatial `S_INTERSECTS`, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, FlatGeobuf downloads for local conversion, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (ops, performance).
 
 ## License
 

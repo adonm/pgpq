@@ -39,8 +39,7 @@ func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
-	adminToken := fs.String("admin-token", os.Getenv("POSTFGB_ADMIN_TOKEN"), "bearer token for the manifest, chunk, export and ingest endpoints")
-	ogr2ogr := fs.String("ogr2ogr", os.Getenv("POSTFGB_OGR2OGR"), "ogr2ogr binary used by the export endpoint")
+	adminToken := fs.String("admin-token", os.Getenv("POSTFGB_ADMIN_TOKEN"), "bearer token for the manifest, chunk and ingest endpoints")
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
 	fs.Parse(args)
 	ctx := context.Background()
@@ -67,6 +66,5 @@ func serve(args []string) {
 	fatal(http.ListenAndServe(*addr, api.NewWithConfig(api.Config{
 		Store:      st,
 		AdminToken: *adminToken,
-		OGR2OGR:    *ogr2ogr,
 	})))
 }

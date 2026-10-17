@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/http/httptest"
 	"testing"
 
@@ -62,22 +61,6 @@ func TestAdminOK(t *testing.T) {
 	open := &Server{}
 	if !open.adminOK("") {
 		t.Fatal("expected open server to allow")
-	}
-}
-
-func TestConvertExport(t *testing.T) {
-	s := &Server{}
-	if ok := s.adminOK(""); !ok {
-		t.Fatal("expected open server")
-	}
-	if _, mime, err := s.convertExport(context.Background(), []byte("data"), "fgb"); err != nil || mime != "application/flatgeobuf" {
-		t.Fatalf("passthrough: %v %q", err, mime)
-	}
-	if _, _, err := s.convertExport(context.Background(), []byte("data"), "nope"); err == nil {
-		t.Fatal("expected unsupported format error")
-	}
-	if _, _, err := s.convertExport(context.Background(), []byte("data"), "gpkg"); err == nil {
-		t.Fatal("expected no-converter error")
 	}
 }
 

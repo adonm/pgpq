@@ -54,14 +54,14 @@ Chunks are immutable with checksum ETags. Tiles and manifests carry ETags derive
 
 ## Exports
 
-`fgb` streams directly. `geojson`, `gpkg`, `parquet`, `shp`, `kml` and `gpx` convert through `ogr2ogr` only (the rustgis-cli engine is removed). Synchronous, 1,000,000 feature cap, 404 when nothing matches.
+There is no server-side format conversion: `items?f=flatgeobuf` is the bulk download, and clients convert locally with GDAL or any OGR binding. The server stays a single dependency-free binary.
 
 ## Ops and build
 
-- Images build with [ko](https://ko.build): no Dockerfile, static base (`cgr.dev/chainguard/static`), CGO_ENABLED=0, git-SHA tags, SBOM support. Exports need an operator-supplied ogr2ogr (mounted binary or sidecar) in that image; a GDAL-based base is the alternative when in-image exports matter.
+- Images build with [ko](https://ko.build): no Dockerfile, static base (`cgr.dev/chainguard/static`), CGO_ENABLED=0, git-SHA tags, SBOM support.
 - mise provides Go, just, hk and ko. hk runs gofmt/vet/tidy/tests on every commit; GitHub Actions runs unit tests, PostgreSQL-backed integration tests (ingest -> query -> tiles) and a ko image build.
 - `/healthz` and `/readyz`; a minimal hand-rolled Prometheus `/metrics`; graceful shutdown; pool-size flags; structured request logging. Deployment stays raw binary / generated image; no release pipeline yet.
-- The admin bearer token gates manifest, chunks, export, ingest, delete and view management. OGC endpoints stay open and always filter server-side.
+- The admin bearer token gates manifest, chunks, ingest, delete and view management. OGC endpoints stay open and always filter server-side.
 
 ## Performance
 
@@ -73,7 +73,7 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 - Materialized views and DB-native view discovery; views of views.
 - Dynamic per-collection tables and schema-per-collection storage.
 - Async ingest jobs and upload sessions (synchronous chosen); versioned blue/green replace (transactional chosen).
-- cgo PROJ; the rustgis-cli export engine; runtime extension accelerators (probing stays as a future hook).
+- cgo PROJ; the rustgis-cli export engine; server-side format conversion (clients convert FlatGeobuf locally); runtime extension accelerators (probing stays as a future hook).
 
 ## Build order
 
