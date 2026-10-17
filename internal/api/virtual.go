@@ -53,6 +53,55 @@ func byteSegment(body []byte, length int64) virtualSegment {
 	}}
 }
 
+const chunkByteCacheBytes = 64 << 20
+
+type decompressedChunk struct {
+	data       []byte
+	featuresAt int
+}
+
+type chunkByteCache struct {
+	mu      sync.Mutex
+	entries map[string]decompressedChunk
+	bytes   int64
+}
+
+func newChunkByteCache() *chunkByteCache {
+	return &chunkByteCache{entries: map[string]decompressedChunk{}}
+}
+
+func (c *chunkByteCache) get(key string) (decompressedChunk, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	return entry, ok
+}
+
+func (c *chunkByteCache) put(key string, entry decompressedChunk) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if int64(len(entry.data)) > chunkByteCacheBytes {
+		return
+	}
+	if old, ok := c.entries[key]; ok {
+		c.bytes -= int64(len(old.data))
+	}
+	c.entries[key] = entry
+	c.bytes += int64(len(entry.data))
+	for c.bytes > chunkByteCacheBytes {
+		evicted := false
+		for k := range c.entries {
+			c.bytes -= int64(len(c.entries[k].data))
+			delete(c.entries, k)
+			evicted = true
+			break
+		}
+		if !evicted {
+			break
+		}
+	}
+}
+
 type virtualCache struct {
 	mu      sync.Mutex
 	entries map[string]*virtualFile
@@ -130,47 +179,43 @@ func (s *Server) storedVirtual(ctx context.Context, info store.CollectionInfo, t
 	return vf, nil
 }
 
-func (s *Server) virtualRunBytes(ctx context.Context, collection string, run virtualRun, from, to int64) ([]byte, error) {
-	row, err := s.Store.ChunkByID(ctx, collection, run.chunkID)
-	if err != nil {
-		return nil, err
+func (s *Server) virtualRunBytes(ctx context.Context, collection string, version int64, run virtualRun, from, to int64) ([]byte, error) {
+	key := fmt.Sprintf("%s|%d|%d", collection, run.chunkID, version)
+	entry, ok := s.chunks.get(key)
+	if !ok {
+		row, err := s.Store.ChunkByID(ctx, collection, run.chunkID)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := chunk.Decompress(row.Data)
+		if err != nil {
+			return nil, err
+		}
+		header := fgbHeader(raw)
+		if header == nil {
+			return nil, errors.New("virtual: unreadable chunk")
+		}
+		featuresAt, _, err := fgb.Regions(raw, header)
+		if err != nil {
+			return nil, err
+		}
+		entry = decompressedChunk{data: raw, featuresAt: featuresAt}
+		s.chunks.put(key, entry)
 	}
-	raw, err := chunk.Decompress(row.Data)
-	if err != nil {
-		return nil, err
-	}
-	header := fgbHeader(raw)
-	if header == nil {
-		return nil, errors.New("virtual: unreadable chunk")
-	}
-	featuresAt, _, err := fgb.Regions(raw, header)
-	if err != nil {
-		return nil, err
-	}
-	start := featuresAt + int(from)
-	end := featuresAt + int(to)
-	if start < featuresAt {
-		start = featuresAt
-	}
-	if end > len(raw) {
-		end = len(raw)
+	start := entry.featuresAt + int(from)
+	end := entry.featuresAt + int(to)
+	if end > len(entry.data) {
+		end = len(entry.data)
 	}
 	if start > end {
 		return nil, errors.New("virtual: run out of bounds")
 	}
-	return raw[start:end], nil
+	return entry.data[start:end], nil
 }
 
 func (s *Server) serveVirtual(w http.ResponseWriter, r *http.Request, vf *virtualFile) {
 	s.serveRanges(w, r, vf.total(), virtualETag(vf.name, vf.version), func(out io.Writer, from, to int64) error {
 		return s.writeVirtual(r.Context(), out, vf, from, to)
-	})
-}
-
-func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, etag string, data []byte) {
-	s.serveRanges(w, r, int64(len(data)), etag, func(out io.Writer, from, to int64) error {
-		_, err := out.Write(data[from:to])
-		return err
 	})
 }
 
@@ -249,56 +294,65 @@ func parseRange(header string, total int64) (int64, int64, error) {
 }
 
 func (s *Server) writeVirtual(ctx context.Context, w io.Writer, vf *virtualFile, from, to int64) error {
-	segments := make([]virtualSegment, 0, len(vf.segments)+len(vf.runs)+1)
-	segments = append(segments, byteSegment(virtualMagic[:], int64(len(virtualMagic))))
-	segments = append(segments, vf.segments...)
-	for i := range vf.runs {
-		run := vf.runs[i]
-		segments = append(segments, virtualSegment{length: int64(run.bytes), read: func(ctx context.Context, lo, hi int64) ([]byte, error) {
-			return s.virtualRunBytes(ctx, vf.name, run, lo, hi)
-		}})
-	}
 	cursor := int64(0)
-	for _, segment := range segments {
-		start := cursor
-		end := start + segment.length
-		cursor = end
-		if end <= from || start >= to {
-			continue
-		}
-		body, err := segment.read(ctx, max64(from, start)-start, min64(to, end)-start)
-		if err != nil {
+	if err := writeRegion(w, &cursor, int64(len(virtualMagic)), from, to, func(lo, hi int64) ([]byte, error) {
+		return virtualMagic[lo:hi], nil
+	}); err != nil {
+		return err
+	}
+	for i := range vf.segments {
+		segment := &vf.segments[i]
+		if err := writeRegion(w, &cursor, segment.length, from, to, func(lo, hi int64) ([]byte, error) {
+			return segment.read(ctx, lo, hi)
+		}); err != nil {
 			return err
 		}
-		if _, err := w.Write(body); err != nil {
+	}
+	for i := range vf.runs {
+		if err := s.writeRun(ctx, w, &cursor, vf, &vf.runs[i], from, to); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func min64(a, b int64) int64 {
-	if a < b {
-		return a
+func writeRegion(w io.Writer, cursor *int64, length, from, to int64, read func(lo, hi int64) ([]byte, error)) error {
+	start := *cursor
+	end := start + length
+	*cursor = end
+	if end <= from || start >= to {
+		return nil
 	}
-	return b
+	body, err := read(max(from, start)-start, min(to, end)-start)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(body)
+	return err
 }
 
-func max64(a, b int64) int64 {
-	if a > b {
-		return a
+func (s *Server) writeRun(ctx context.Context, w io.Writer, cursor *int64, vf *virtualFile, run *virtualRun, from, to int64) error {
+	start := *cursor
+	end := start + int64(run.bytes)
+	*cursor = end
+	if end <= from || start >= to {
+		return nil
 	}
-	return b
+	body, err := s.virtualRunBytes(ctx, vf.name, vf.version, *run, max(from, start)-start, min(to, end)-start)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(body)
+	return err
 }
 
 func virtualRequest(r *http.Request) bool {
-	if len(parseFilters(r)) > 0 {
-		return false
-	}
-	for _, name := range []string{"bbox", "filter", "filter-lang", "q", "datetime", "limit", "offset", "sortby", "crs", "bbox-crs"} {
-		if r.URL.Query().Has(name) {
-			return false
+	for name := range r.URL.Query() {
+		switch name {
+		case "limit", "offset", "overview", "f":
+			continue
 		}
+		return false
 	}
 	return true
 }
@@ -314,14 +368,14 @@ func (s *Server) serveVirtualCollection(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	overview, err := parseOverview(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	tier := 0
-	if value := r.URL.Query().Get("overview"); value != "" && value != "auto" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 0 || parsed > 2 {
-			http.Error(w, "overview must be 0, 1 or 2", http.StatusBadRequest)
-			return
-		}
-		tier = parsed
+	if overview != nil {
+		tier = *overview
 	}
 	vf, err := s.virtualFile(ctx, info, tier)
 	if err != nil {

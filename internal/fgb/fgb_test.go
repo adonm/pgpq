@@ -42,12 +42,12 @@ func testChunks(t *testing.T, sizes ...int) ([]byte, []byte) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, featureBytes, err := Regions(data, c.Header())
-		if err != nil {
-			t.Fatal(err)
+		_, chunkLeaves, featureBytes, ok := Layout(data, c.Header())
+		if !ok {
+			t.Fatal("chunk layout unreadable")
 		}
 		lengths[i] = int64(featureBytes)
-		leaves[i] = LeavesOf(data, c.Header())
+		leaves[i] = chunkLeaves
 		if len(leaves[i]) != sizes[i] {
 			t.Fatalf("chunk %d: %d leaves for %d features", i, len(leaves[i]), sizes[i])
 		}
@@ -96,8 +96,8 @@ func headerBlobOf(t *testing.T, data []byte) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob := HeaderBlobOf(data, c.Header())
-	if blob == nil {
+	blob, _, _, ok := Layout(data, c.Header())
+	if !ok {
 		t.Fatal("no header blob")
 	}
 	return blob

@@ -9,3 +9,4 @@ export.fgb
 postfgb-image.tar
 .env
 tmpgen/
+.oy/

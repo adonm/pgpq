@@ -47,8 +47,7 @@ func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutp
 	if err != nil {
 		return nil, err
 	}
-	version := s.cacheVersion(info)
-	etag := `"` + version + `"`
+	etag := `"` + strconv.FormatInt(info.Version, 10) + `"`
 	if in.IfNoneMatch == etag {
 		return nil, huma.ErrorWithHeaders(huma.Status304NotModified(), http.Header{"ETag": {etag}})
 	}

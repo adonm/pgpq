@@ -85,13 +85,7 @@ func treeSize(numItems uint64, nodeSize uint16) uint64 {
 	if nodeSize < 2 || numItems == 0 {
 		return 0
 	}
-	n := numItems
-	numNodes := n
-	for n != 1 {
-		n = (n + uint64(nodeSize) - 1) / uint64(nodeSize)
-		numNodes += n
-	}
-	return numNodes * 40
+	return Nodes(numItems, nodeSize) * 40
 }
 
 func Regions(data []byte, header *flattypes.Header) (featuresAt int, featuresLen int, err error) {
@@ -127,15 +121,15 @@ func Nodes(count uint64, nodeSize uint16) uint64 {
 	return nodes
 }
 
-func Leaves(data []byte, count uint64, nodeSize uint16) []Leaf {
+func Leaves(data []byte, count uint64, nodeSize uint16) ([]Leaf, bool) {
 	if count == 0 || nodeSize < 2 {
-		return nil
+		return nil, false
 	}
 	leaves := make([]Leaf, 0, count)
 	for i := uint64(0); i < count; i++ {
 		at := int((Nodes(count, nodeSize) - count + i) * 40)
 		if at+40 > len(data) {
-			break
+			return nil, false
 		}
 		leaves = append(leaves, Leaf{
 			BBox: [4]float64{
@@ -147,31 +141,23 @@ func Leaves(data []byte, count uint64, nodeSize uint16) []Leaf {
 			Offset: binary.LittleEndian.Uint64(data[at+32:]),
 		})
 	}
-	return leaves
+	return leaves, true
 }
 
-func LeavesOf(data []byte, header *flattypes.Header) []Leaf {
-	featuresAt, _, err := Regions(data, header)
+func Layout(data []byte, header *flattypes.Header) (headerBlob []byte, leaves []Leaf, featureBytes int, ok bool) {
+	featuresAt, featuresLen, err := Regions(data, header)
 	if err != nil {
-		return nil
+		return nil, nil, 0, false
 	}
-	start := featuresAt - int(Nodes(header.FeaturesCount(), header.IndexNodeSize()))*40
-	if start < 8 || featuresAt > len(data) {
-		return nil
+	indexStart := featuresAt - int(Nodes(header.FeaturesCount(), header.IndexNodeSize()))*40
+	if indexStart <= 8 || featuresAt > len(data) {
+		return nil, nil, 0, false
 	}
-	return Leaves(data[start:featuresAt], header.FeaturesCount(), header.IndexNodeSize())
-}
-
-func HeaderBlobOf(data []byte, header *flattypes.Header) []byte {
-	featuresAt, _, err := Regions(data, header)
-	if err != nil {
-		return nil
+	leaves, ok = Leaves(data[indexStart:featuresAt], header.FeaturesCount(), header.IndexNodeSize())
+	if !ok {
+		return nil, nil, 0, false
 	}
-	end := featuresAt - int(Nodes(header.FeaturesCount(), header.IndexNodeSize()))*40
-	if end <= 8 || end > len(data) {
-		return nil
-	}
-	return data[8:end]
+	return data[8:indexStart], leaves, featuresLen, true
 }
 
 type item struct {

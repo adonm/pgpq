@@ -305,9 +305,9 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 	if err != nil {
 		return 0, err
 	}
-	_, featureBytes, err := fgb.Regions(data, c.Header())
-	if err != nil {
-		return 0, err
+	headerBlob, leaves, featureBytes, ok := fgb.Layout(data, c.Header())
+	if !ok {
+		return 0, errors.New("ingest: chunk layout unreadable")
 	}
 	payload := store.Payload{
 		Data: chunk.Compress(data), Size: len(data), Count: c.Count(), Tier: tier,
@@ -316,8 +316,8 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 		Checksum:     hex.EncodeToString(sum[:]),
 		Columns:      string(columns),
 		FeatureBytes: featureBytes,
-		HeaderBlob:   fgb.HeaderBlobOf(data, c.Header()),
-		Leaves:       fgb.LeavesOf(data, c.Header()),
+		HeaderBlob:   headerBlob,
+		Leaves:       leaves,
 	}
 	id, err := ing.PutChunk(ctx, payload)
 	if err != nil {

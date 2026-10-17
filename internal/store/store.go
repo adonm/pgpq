@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -75,12 +74,10 @@ type VirtualRun struct {
 }
 
 type virtualTier struct {
-	header   []byte
-	leaves   [][]fgb.Leaf
-	lengths  []int64
-	count    uint64
-	envelope [4]float64
-	spatial  bool
+	header  []byte
+	leaves  [][]fgb.Leaf
+	lengths []int64
+	count   uint64
 }
 
 type ChunkRow struct {
@@ -488,12 +485,6 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	return tx.Commit(ctx)
 }
 
-type memberJSON struct {
-	Collection string            `json:"collection"`
-	Filter     string            `json:"filter,omitempty"`
-	Columns    map[string]string `json:"columns,omitempty"`
-}
-
 func (s *Store) PutMeta(ctx context.Context, name string, doc []byte, meta CollectionMeta) error {
 	if !collectionName.MatchString(name) {
 		return fmt.Errorf("invalid collection name %q", name)
@@ -640,8 +631,8 @@ func (s *Store) VirtualSegments(ctx context.Context, collection string, version 
 			return nil, err
 		}
 		start := int64(ordinal) * fgb.SegmentBytes
-		lo := max64(from-start, 0)
-		hi := min64(to-start, int64(len(data)))
+		lo := max(from-start, 0)
+		hi := min(to-start, int64(len(data)))
 		if lo >= hi {
 			continue
 		}
@@ -675,20 +666,6 @@ func (s *Store) VirtualRuns(ctx context.Context, collection string, tier int) ([
 	return runs, rows.Err()
 }
 
-func min64(a, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
 	id, err := putChunk(ctx, i.tx, i.staging["chunks"], i.collection, payload)
 	if err != nil {
@@ -702,15 +679,6 @@ func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
 	tier.leaves = append(tier.leaves, payload.Leaves)
 	tier.lengths = append(tier.lengths, int64(payload.FeatureBytes))
 	tier.count += uint64(payload.Count)
-	if !tier.spatial {
-		tier.envelope = [4]float64{payload.MinX, payload.MinY, payload.MaxX, payload.MaxY}
-		tier.spatial = true
-	} else {
-		tier.envelope[0] = math.Min(tier.envelope[0], payload.MinX)
-		tier.envelope[1] = math.Min(tier.envelope[1], payload.MinY)
-		tier.envelope[2] = math.Max(tier.envelope[2], payload.MaxX)
-		tier.envelope[3] = math.Max(tier.envelope[3], payload.MaxY)
-	}
 	return id, nil
 }
 
@@ -858,10 +826,6 @@ func chunks(ctx context.Context, conn db, table, collection string, bbox *[4]flo
 	query += fmt.Sprintf(` order by id limit $%d`, len(args)+1)
 	args = append(args, limit)
 	return scanChunks(ctx, conn, query, args...)
-}
-
-func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {
-	return chunks(ctx, s.Pool, "chunks", collection, bbox, limit, tier)
 }
 
 func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit, tier int, after int64) ([]ChunkMeta, error) {
