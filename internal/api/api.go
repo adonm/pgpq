@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -62,6 +63,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	}
 	s.register(api)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
+	mux.HandleFunc("GET /collections/{id}/items/{featureID}", s.feature)
 	mux.HandleFunc("PUT /collections/{id}/data", s.ingestData)
 	mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
@@ -84,6 +86,7 @@ func (s *Server) register(api huma.API) {
 	huma.Register(api, huma.Operation{OperationID: "conformance", Method: "GET", Path: "/conformance", Summary: "Conformance"}, s.conformance)
 	huma.Register(api, huma.Operation{OperationID: "collections", Method: "GET", Path: "/collections", Summary: "Collections"}, s.collections)
 	huma.Register(api, huma.Operation{OperationID: "collection", Method: "GET", Path: "/collections/{id}", Summary: "Collection"}, s.collection)
+	huma.Register(api, huma.Operation{OperationID: "queryables", Method: "GET", Path: "/collections/{id}/queryables", Summary: "Queryables"}, s.queryables)
 	huma.Register(api, huma.Operation{OperationID: "collectionTilesets", Method: "GET", Path: "/collections/{id}/tiles", Summary: "Collection tilesets"}, s.tilesets)
 	huma.Register(api, huma.Operation{OperationID: "manifest", Method: "GET", Path: "/collections/{id}/manifest", Summary: "Chunk manifest"}, s.manifest)
 	huma.Register(api, huma.Operation{OperationID: "tileMatrixSets", Method: "GET", Path: "/tileMatrixSets", Summary: "Tile matrix sets"}, s.tileMatrixSets)
@@ -216,19 +219,39 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 var reservedParams = map[string]bool{
 	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
 	"filter": true, "filter-lang": true, "format": true,
+	"overview": true, "numberMatched": true,
+}
+
+func parseOverview(r *http.Request) (*int, error) {
+	switch value := r.URL.Query().Get("overview"); value {
+	case "", "auto":
+		return nil, nil
+	case "0", "1", "2":
+		n, _ := strconv.Atoi(value)
+		return &n, nil
+	default:
+		return nil, errors.New("overview must be auto, 0, 1 or 2")
+	}
 }
 
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
-	if _, err := s.Store.Collection(ctx, id); errors.Is(err, store.ErrNotFound) {
+	info, err := s.Store.Collection(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "collection not found", http.StatusNotFound)
 		return
-	} else if err != nil {
+	}
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	bbox, err := parseBBox(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	overview, err := parseOverview(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -255,113 +278,150 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("q")
+	var matched *int64
+	if r.URL.Query().Get("numberMatched") == "true" {
+		count, ok, err := s.countMatches(ctx, info, bbox, query, filter)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if ok {
+			matched = &count
+		}
+	}
 	if flatgeobuf {
 		s.writeFGB(ctx, w, id, bbox, query, filter, offset, limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
-	fw := newFeatureWriter(w, limit)
+	fw := newFeatureWriter(w, limit, matched)
 	if query != "" || filter != nil {
-		s.streamMatches(ctx, fw, id, bbox, query, filter, offset)
+		s.streamMatches(ctx, fw, info, bbox, query, filter, offset)
 	} else {
-		s.streamBBox(ctx, fw, id, bbox, offset)
+		tier := tierForBounds(bbox)
+		if overview != nil {
+			tier = *overview
+		}
+		s.streamBBox(ctx, fw, info, bbox, offset, tier)
 	}
 	fw.close(pageLink(r, limit, offset, fw.count))
 }
 
-func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, offset int) {
-	tier := tierForBounds(bbox)
-	metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, tier)
-	if err == nil && len(metas) == 0 && tier > 0 {
-		metas, err = s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, 0)
-	}
-	if err != nil {
-		slog.Error("chunk metas query failed", "collection", id, "error", err)
-		return
-	}
+func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, info store.CollectionInfo, bbox *[4]float64, offset, tier int) {
+	after := int64(0)
+	fallback := tier > 0
 	skipped := 0
-	for _, meta := range metas {
-		if fw.count >= fw.limit {
+	for {
+		metas, err := s.Store.ChunkMetas(ctx, info.Name, bbox, s.MaxChunks, tier, after)
+		if err != nil {
+			slog.Error("chunk metas query failed", "collection", info.Name, "error", err)
 			return
 		}
-		if bbox == nil && skipped+meta.FeatureCount <= offset {
-			skipped += meta.FeatureCount
-			continue
-		}
-		row, err := s.Store.ChunkByID(ctx, id, meta.ID)
-		if err != nil {
-			slog.Error("chunk load failed", "chunk", meta.ID, "error", err)
-			continue
-		}
-		c, err := chunk.Open(row.Data)
-		if err != nil {
-			slog.Error("chunk open failed", "chunk", meta.ID, "error", err)
-			continue
-		}
-		features, err := c.SearchOptional(bbox)
-		if err != nil {
-			slog.Error("chunk search failed", "chunk", meta.ID, "error", err)
-			continue
-		}
-		for _, f := range features {
-			if skipped < offset {
-				skipped++
+		if len(metas) == 0 {
+			if fallback && after == 0 {
+				tier = 0
+				fallback = false
 				continue
 			}
-			if !fw.add(c.GeoJSON(f)) {
+			return
+		}
+		fallback = false
+		for _, meta := range metas {
+			if fw.count >= fw.limit {
 				return
 			}
+			if bbox == nil && skipped+meta.FeatureCount <= offset {
+				skipped += meta.FeatureCount
+				continue
+			}
+			row, err := s.Store.ChunkByID(ctx, info.Name, meta.ID)
+			if err != nil {
+				slog.Error("chunk load failed", "chunk", meta.ID, "error", err)
+				continue
+			}
+			c, err := chunk.Open(row.Data)
+			if err != nil {
+				slog.Error("chunk open failed", "chunk", meta.ID, "error", err)
+				continue
+			}
+			features, err := c.SearchAll()
+			if err != nil {
+				slog.Error("chunk search failed", "chunk", meta.ID, "error", err)
+				continue
+			}
+			for i, f := range features {
+				g := c.GeoJSON(f)
+				if !inBounds(g, bbox) {
+					continue
+				}
+				if skipped < offset {
+					skipped++
+					continue
+				}
+				g.ID = featureID(info, meta.ID, i, g.Properties)
+				if !fw.add(g) {
+					return
+				}
+			}
 		}
+		if len(metas) < s.MaxChunks {
+			return
+		}
+		after = metas[len(metas)-1].ID
 	}
 }
 
-func (s *Server) streamMatches(ctx context.Context, fw *featureWriter, id string, bbox *[4]float64, query string, filter cql.Expr, offset int) {
-	matches, err := s.Store.Matches(ctx, id, bbox, query, filter, fw.limit, offset)
+func (s *Server) streamMatches(ctx context.Context, fw *featureWriter, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int) {
+	matches, err := s.Store.Matches(ctx, info.Name, bbox, query, filter, fw.limit, offset)
 	if err != nil {
-		slog.Error("matches query failed", "collection", id, "error", err)
+		slog.Error("matches query failed", "collection", info.Name, "error", err)
 		return
 	}
-	byChunk := map[int64]map[int]bool{}
+	ords := map[int64]map[int]bool{}
 	var ids []int64
 	for _, m := range matches {
-		ords := byChunk[m.ChunkID]
-		if ords == nil {
-			if len(ids) >= s.MaxChunks {
-				break
-			}
-			ords = map[int]bool{}
-			byChunk[m.ChunkID] = ords
+		set := ords[m.ChunkID]
+		if set == nil {
+			set = map[int]bool{}
+			ords[m.ChunkID] = set
 			ids = append(ids, m.ChunkID)
 		}
-		ords[m.Ord] = true
+		set[m.Ord] = true
 	}
-	rows, err := s.Store.ChunksByIDs(ctx, id, ids)
-	if err != nil {
-		slog.Error("chunks by ids failed", "collection", id, "error", err)
-		return
-	}
-	for _, row := range rows {
-		c, err := chunk.Open(row.Data)
-		if err != nil {
-			slog.Error("chunk open failed", "chunk", row.ID, "error", err)
-			continue
+	for start := 0; start < len(ids); start += s.MaxChunks {
+		end := start + s.MaxChunks
+		if end > len(ids) {
+			end = len(ids)
 		}
-		features, err := c.SearchAll()
+		rows, err := s.Store.ChunksByIDs(ctx, info.Name, ids[start:end])
 		if err != nil {
-			slog.Error("chunk search failed", "chunk", row.ID, "error", err)
-			continue
+			slog.Error("chunks by ids failed", "collection", info.Name, "error", err)
+			return
 		}
-		ords := byChunk[row.ID]
-		for i, f := range features {
-			if !ords[i] {
+		for _, row := range rows {
+			c, err := chunk.Open(row.Data)
+			if err != nil {
+				slog.Error("chunk open failed", "chunk", row.ID, "error", err)
 				continue
 			}
-			g := c.GeoJSON(f)
-			if !inBounds(g, bbox) {
+			features, err := c.SearchAll()
+			if err != nil {
+				slog.Error("chunk search failed", "chunk", row.ID, "error", err)
 				continue
 			}
-			if !fw.add(g) {
-				return
+			set := ords[row.ID]
+			for i, f := range features {
+				if !set[i] {
+					continue
+				}
+				g := c.GeoJSON(f)
+				if !inBounds(g, bbox) {
+					continue
+				}
+				g.ID = featureID(info, row.ID, i, g.Properties)
+				if !fw.add(g) {
+					return
+				}
 			}
 		}
 	}
@@ -374,9 +434,14 @@ type featureWriter struct {
 	first bool
 }
 
-func newFeatureWriter(w http.ResponseWriter, limit int) *featureWriter {
+func newFeatureWriter(w http.ResponseWriter, limit int, matched *int64) *featureWriter {
 	fw := &featureWriter{out: bufio.NewWriter(w), limit: limit, first: true}
-	fw.out.WriteString(`{"type":"FeatureCollection","features":[`)
+	fw.out.WriteString(`{"type":"FeatureCollection"`)
+	if matched != nil {
+		fw.out.WriteString(`,"numberMatched":`)
+		fw.out.WriteString(strconv.FormatInt(*matched, 10))
+	}
+	fw.out.WriteString(`,"features":[`)
 	return fw
 }
 
@@ -474,6 +539,29 @@ func typedLiteral(value string) any {
 	return value
 }
 
+func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr) (int64, bool, error) {
+	if query != "" || filter != nil {
+		count, err := s.Store.CountMatches(ctx, info.Name, bbox, query, filter)
+		if err != nil {
+			return 0, false, err
+		}
+		return count, true, nil
+	}
+	if bbox == nil {
+		return info.FeatureCount, true, nil
+	}
+	return 0, false, nil
+}
+
+func featureID(info store.CollectionInfo, chunkID int64, ord int, props map[string]any) any {
+	if info.IDColumn != nil {
+		if value, ok := props[*info.IDColumn]; ok && value != nil {
+			return value
+		}
+	}
+	return fmt.Sprintf("%d-%d", chunkID, ord)
+}
+
 func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 	if bbox == nil {
 		return true
@@ -495,7 +583,7 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string,
 	}
 	if len(features) == 0 {
 		w.Header().Set("Content-Type", "application/geo+json")
-		fw := newFeatureWriter(w, limit)
+		fw := newFeatureWriter(w, limit, nil)
 		fw.close("")
 		return
 	}
@@ -512,51 +600,68 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 	if query != "" || filter != nil {
 		return s.collectMatches(ctx, id, bbox, query, filter, offset, limit)
 	}
-	metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, tier)
-	if err == nil && len(metas) == 0 && tier > 0 {
-		metas, err = s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, 0)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
 	var features []*flattypes.Feature
 	var header *flattypes.Header
 	skipped := 0
-	for _, meta := range metas {
-		if len(features) >= limit {
-			break
-		}
-		if bbox == nil && skipped+meta.FeatureCount <= offset {
-			skipped += meta.FeatureCount
-			continue
-		}
-		row, err := s.Store.ChunkByID(ctx, id, meta.ID)
+	after := int64(0)
+	fallback := tier > 0
+	for {
+		metas, err := s.Store.ChunkMetas(ctx, id, bbox, s.MaxChunks, tier, after)
 		if err != nil {
 			return nil, nil, err
 		}
-		c, err := chunk.Open(row.Data)
-		if err != nil {
-			return nil, nil, err
-		}
-		if header == nil {
-			header = c.Header()
-		} else if !sameColumns(header, c.Header()) {
-			return nil, nil, errors.New("collection chunks have differing schemas")
-		}
-		feats, err := c.SearchOptional(bbox)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, f := range feats {
-			if skipped < offset {
-				skipped++
+		if len(metas) == 0 {
+			if fallback && after == 0 {
+				tier = 0
+				fallback = false
 				continue
 			}
-			if len(features) >= limit {
-				break
-			}
-			features = append(features, f)
+			break
 		}
+		fallback = false
+		for _, meta := range metas {
+			if len(features) >= limit {
+				return features, header, nil
+			}
+			if bbox == nil && skipped+meta.FeatureCount <= offset {
+				skipped += meta.FeatureCount
+				continue
+			}
+			row, err := s.Store.ChunkByID(ctx, id, meta.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			c, err := chunk.Open(row.Data)
+			if err != nil {
+				return nil, nil, err
+			}
+			if header == nil {
+				header = c.Header()
+			} else if !sameColumns(header, c.Header()) {
+				return nil, nil, errors.New("collection chunks have differing schemas")
+			}
+			feats, err := c.SearchAll()
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, f := range feats {
+				if !inBounds(c.GeoJSON(f), bbox) {
+					continue
+				}
+				if skipped < offset {
+					skipped++
+					continue
+				}
+				if len(features) >= limit {
+					return features, header, nil
+				}
+				features = append(features, f)
+			}
+		}
+		if len(metas) < s.MaxChunks {
+			break
+		}
+		after = metas[len(metas)-1].ID
 	}
 	return features, header, nil
 }
@@ -566,49 +671,52 @@ func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64
 	if err != nil {
 		return nil, nil, err
 	}
-	byChunk := map[int64]map[int]bool{}
+	ords := map[int64]map[int]bool{}
 	var ids []int64
 	for _, m := range matches {
-		ords := byChunk[m.ChunkID]
-		if ords == nil {
-			if len(ids) >= s.MaxChunks {
-				break
-			}
-			ords = map[int]bool{}
-			byChunk[m.ChunkID] = ords
+		set := ords[m.ChunkID]
+		if set == nil {
+			set = map[int]bool{}
+			ords[m.ChunkID] = set
 			ids = append(ids, m.ChunkID)
 		}
-		ords[m.Ord] = true
-	}
-	rows, err := s.Store.ChunksByIDs(ctx, id, ids)
-	if err != nil {
-		return nil, nil, err
+		set[m.Ord] = true
 	}
 	var features []*flattypes.Feature
 	var header *flattypes.Header
-	for _, row := range rows {
-		c, err := chunk.Open(row.Data)
+	for start := 0; start < len(ids); start += s.MaxChunks {
+		end := start + s.MaxChunks
+		if end > len(ids) {
+			end = len(ids)
+		}
+		rows, err := s.Store.ChunksByIDs(ctx, id, ids[start:end])
 		if err != nil {
 			return nil, nil, err
 		}
-		if header == nil {
-			header = c.Header()
-		} else if !sameColumns(header, c.Header()) {
-			return nil, nil, errors.New("collection chunks have differing schemas")
-		}
-		feats, err := c.SearchAll()
-		if err != nil {
-			return nil, nil, err
-		}
-		ords := byChunk[row.ID]
-		for i, f := range feats {
-			if !ords[i] {
-				continue
+		for _, row := range rows {
+			c, err := chunk.Open(row.Data)
+			if err != nil {
+				return nil, nil, err
 			}
-			if !inBounds(c.GeoJSON(f), bbox) {
-				continue
+			if header == nil {
+				header = c.Header()
+			} else if !sameColumns(header, c.Header()) {
+				return nil, nil, errors.New("collection chunks have differing schemas")
 			}
-			features = append(features, f)
+			feats, err := c.SearchAll()
+			if err != nil {
+				return nil, nil, err
+			}
+			set := ords[row.ID]
+			for i, f := range feats {
+				if !set[i] {
+					continue
+				}
+				if !inBounds(c.GeoJSON(f), bbox) {
+					continue
+				}
+				features = append(features, f)
+			}
 		}
 	}
 	return features, header, nil
@@ -666,9 +774,14 @@ func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	raw, err := chunk.Decompress(row.Data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "application/flatgeobuf")
-	w.Write(row.Data)
+	w.Write(raw)
 }
 
 func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
@@ -693,6 +806,11 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	overview, err := parseOverview(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	query := r.URL.Query().Get("q")
 	tile := maptile.New(uint32(x), uint32(y), maptile.Zoom(z))
 	bound := tile.Bound()
@@ -700,6 +818,9 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	var collection *orbgeojson.FeatureCollection
 	if query == "" && filter == nil {
 		tier := tierForZoom(int(z))
+		if overview != nil {
+			tier = *overview
+		}
 		rows, err := s.Store.Chunks(ctx, id, &bbox, s.MaxChunks, tier)
 		if err == nil && len(rows) == 0 && tier > 0 {
 			rows, err = s.Store.Chunks(ctx, id, &bbox, s.MaxChunks, 0)
@@ -761,50 +882,53 @@ func (s *Server) tileMatches(ctx context.Context, id string, bbox [4]float64, qu
 	if err != nil {
 		return nil, err
 	}
-	byChunk := map[int64]map[int]bool{}
+	ords := map[int64]map[int]bool{}
 	var ids []int64
 	for _, m := range matches {
-		ords := byChunk[m.ChunkID]
-		if ords == nil {
-			if len(ids) >= s.MaxChunks {
-				break
-			}
-			ords = map[int]bool{}
-			byChunk[m.ChunkID] = ords
+		set := ords[m.ChunkID]
+		if set == nil {
+			set = map[int]bool{}
+			ords[m.ChunkID] = set
 			ids = append(ids, m.ChunkID)
 		}
-		ords[m.Ord] = true
-	}
-	rows, err := s.Store.ChunksByIDs(ctx, id, ids)
-	if err != nil {
-		return nil, err
+		set[m.Ord] = true
 	}
 	fc := orbgeojson.NewFeatureCollection()
-	for _, row := range rows {
-		c, err := chunk.Open(row.Data)
-		if err != nil {
-			continue
+	for start := 0; start < len(ids); start += s.MaxChunks {
+		end := start + s.MaxChunks
+		if end > len(ids) {
+			end = len(ids)
 		}
-		feats, err := c.SearchAll()
+		rows, err := s.Store.ChunksByIDs(ctx, id, ids[start:end])
 		if err != nil {
-			continue
+			return nil, err
 		}
-		ords := byChunk[row.ID]
-		for i, f := range feats {
-			if !ords[i] {
+		for _, row := range rows {
+			c, err := chunk.Open(row.Data)
+			if err != nil {
 				continue
 			}
-			g := c.GeoJSON(f)
-			if !inBounds(g, &bbox) {
+			feats, err := c.SearchAll()
+			if err != nil {
 				continue
 			}
-			geom := tiles.ToOrb(g.Geometry)
-			if geom == nil {
-				continue
+			set := ords[row.ID]
+			for i, f := range feats {
+				if !set[i] {
+					continue
+				}
+				g := c.GeoJSON(f)
+				if !inBounds(g, &bbox) {
+					continue
+				}
+				geom := tiles.ToOrb(g.Geometry)
+				if geom == nil {
+					continue
+				}
+				feature := orbgeojson.NewFeature(geom)
+				feature.Properties = g.Properties
+				fc.Append(feature)
 			}
-			feature := orbgeojson.NewFeature(geom)
-			feature.Properties = g.Properties
-			fc.Append(feature)
 		}
 	}
 	return fc, nil

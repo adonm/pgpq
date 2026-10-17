@@ -27,7 +27,39 @@ import (
 
 var ErrInvalid = errors.New("invalid upload")
 
-const chunkSize = 50000
+const (
+	targetChunkBytes = 2 << 20
+	maxChunkFeatures = 50000
+)
+
+type sizer struct {
+	est       int
+	threshold int
+	ratio     float64
+}
+
+func newSizer() *sizer {
+	return &sizer{threshold: targetChunkBytes, ratio: 1}
+}
+
+func (s *sizer) add(f chunk.InputFeature) {
+	s.est += 52 + len(f.Geometry.Coordinates)
+	for _, value := range f.Properties {
+		s.est += len(value) + 3
+	}
+}
+
+func (s *sizer) full(features int) bool {
+	return s.est >= s.threshold || features >= maxChunkFeatures
+}
+
+func (s *sizer) reset(encoded int, features int) {
+	if features > 0 && s.est > 0 {
+		s.ratio = 0.6*s.ratio + 0.4*float64(encoded)/float64(s.est)
+		s.threshold = int(float64(targetChunkBytes) / s.ratio)
+	}
+	s.est = 0
+}
 
 type Options struct {
 	Collection string
@@ -66,11 +98,15 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	}
 	defer ing.Rollback(ctx)
 	result := Result{Created: created}
-	batch := make([]chunk.InputFeature, 0, chunkSize)
+	sizer := newSizer()
+	batch := make([]chunk.InputFeature, 0, 1024)
 	flush := func() error {
-		if err := putChunk(ctx, ing, opts.Collection, cols, batch, 0); err != nil {
+		encoded, err := putChunk(ctx, ing, opts.Collection, cols, batch, 0)
+		if err != nil {
 			return err
 		}
+		sizer.reset(encoded, len(batch))
+		batch = batch[:0]
 		result.Chunks++
 		return nil
 	}
@@ -87,12 +123,12 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 			return Result{}, invalid(err)
 		}
 		batch = append(batch, feature)
+		sizer.add(feature)
 		result.Features++
-		if len(batch) == chunkSize {
+		if sizer.full(len(batch)) {
 			if err := flush(); err != nil {
 				return Result{}, err
 			}
-			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
@@ -130,26 +166,26 @@ type columnInfo struct {
 	Type string `json:"type"`
 }
 
-func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column, batch []chunk.InputFeature, tier int) error {
+func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column, batch []chunk.InputFeature, tier int) (int, error) {
 	data, err := chunk.EncodeCols(collection, cols, batch)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	c, err := chunk.Open(data)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	env, ok := c.Envelope()
 	if !ok {
-		return errors.New("ingest: chunk missing envelope")
+		return 0, errors.New("ingest: chunk missing envelope")
 	}
 	sum := sha256.Sum256(data)
 	columns, err := json.Marshal(columnList(c.Columns()))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	payload := store.Payload{
-		Data: data, Count: c.Count(), Tier: tier,
+		Data: chunk.Compress(data), Size: len(data), Count: c.Count(), Tier: tier,
 		MinX: env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
 		Cover:    cover.Chunk(env[0], env[1], env[2], env[3]),
 		Checksum: hex.EncodeToString(sum[:]),
@@ -157,27 +193,30 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 	}
 	id, err := ing.PutChunk(ctx, payload)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if tier > 0 {
-		return nil
+		return len(data), nil
 	}
 	docs := make([]string, len(batch))
 	for i := range batch {
 		docs[i] = chunk.Text(batch[i].Properties)
 	}
 	if err := ing.PutChunkText(ctx, id, docs); err != nil {
-		return err
+		return 0, err
 	}
 	props := make([]string, len(batch))
 	for i := range batch {
 		body, err := json.Marshal(batch[i].Properties)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		props[i] = string(body)
 	}
-	return ing.PutChunkProps(ctx, id, props)
+	if err := ing.PutChunkProps(ctx, id, props); err != nil {
+		return 0, err
+	}
+	return len(data), nil
 }
 
 func columnList(cols []chunk.Column) []columnInfo {
@@ -196,14 +235,21 @@ func overviews(ctx context.Context, ing *store.Ingest, collection string, cols [
 	if err := ing.DeleteChunksAboveTier(ctx, 0); err != nil {
 		return err
 	}
-	tiers := []struct {
-		tier    int
-		stride  int
-		tol     float64
-		minDiag float64
-	}{
-		{tier: 1, stride: 10, tol: 0.01, minDiag: 0.05},
-		{tier: 2, stride: 100, tol: 0.05, minDiag: 0.2},
+	specs := []*tierSpec{
+		{tier: 1, stride: 10, tol: 0.01, minDiag: 0.05, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
+		{tier: 2, stride: 100, tol: 0.05, minDiag: 0.2, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
+	}
+	flush := func(spec *tierSpec) error {
+		if len(spec.batch) == 0 {
+			return nil
+		}
+		encoded, err := putChunk(ctx, ing, collection, cols, spec.batch, spec.tier)
+		if err != nil {
+			return err
+		}
+		spec.sizer.reset(encoded, len(spec.batch))
+		spec.batch = spec.batch[:0]
+		return nil
 	}
 	for _, row := range rows {
 		c, err := chunk.Open(row.Data)
@@ -214,60 +260,81 @@ func overviews(ctx context.Context, ing *store.Ingest, collection string, cols [
 		if err != nil {
 			return err
 		}
-		for _, spec := range tiers {
-			batch := make([]chunk.InputFeature, 0, len(feats)/spec.stride+1)
+		for _, spec := range specs {
 			for i, f := range feats {
 				if i%spec.stride != 0 {
 					continue
 				}
-				g := c.GeoJSON(f)
-				geom := tiles.ToOrb(g.Geometry)
-				if geom == nil {
+				feature, ok := tierFeature(c, f, spec)
+				if !ok {
 					continue
 				}
-				if _, ok := geom.(orb.Collection); ok {
-					continue
-				}
-				simp := geom
-				if !pointFamily(geom) {
-					simp = simplify.DouglasPeucker(spec.tol).Simplify(geom)
-					if simp == nil {
-						continue
-					}
-					bound := simp.Bound()
-					dx := bound.Max[0] - bound.Min[0]
-					dy := bound.Max[1] - bound.Min[1]
-					if dx*dx+dy*dy < spec.minDiag*spec.minDiag {
-						continue
+				spec.batch = append(spec.batch, feature)
+				spec.sizer.add(feature)
+				if spec.sizer.full(len(spec.batch)) {
+					if err := flush(spec); err != nil {
+						return err
 					}
 				}
-				body, err := json.Marshal(orbgeojson.NewGeometry(simp))
-				if err != nil {
-					continue
-				}
-				var raw chunk.RawGeometry
-				if err := json.Unmarshal(body, &raw); err != nil {
-					continue
-				}
-				props := make(map[string]json.RawMessage, len(g.Properties))
-				for name, value := range g.Properties {
-					encoded, err := json.Marshal(value)
-					if err != nil {
-						continue
-					}
-					props[name] = encoded
-				}
-				batch = append(batch, chunk.InputFeature{Geometry: raw, Properties: props})
-			}
-			if len(batch) == 0 {
-				continue
-			}
-			if err := putChunk(ctx, ing, collection, cols, batch, spec.tier); err != nil {
-				return err
 			}
 		}
 	}
+	for _, spec := range specs {
+		if err := flush(spec); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+type tierSpec struct {
+	tier    int
+	stride  int
+	tol     float64
+	minDiag float64
+	batch   []chunk.InputFeature
+	sizer   *sizer
+}
+
+func tierFeature(c *chunk.Chunk, f *flattypes.Feature, spec *tierSpec) (chunk.InputFeature, bool) {
+	g := c.GeoJSON(f)
+	geom := tiles.ToOrb(g.Geometry)
+	if geom == nil {
+		return chunk.InputFeature{}, false
+	}
+	if _, ok := geom.(orb.Collection); ok {
+		return chunk.InputFeature{}, false
+	}
+	simp := geom
+	if !pointFamily(geom) {
+		simp = simplify.DouglasPeucker(spec.tol).Simplify(geom)
+		if simp == nil {
+			return chunk.InputFeature{}, false
+		}
+		bound := simp.Bound()
+		dx := bound.Max[0] - bound.Min[0]
+		dy := bound.Max[1] - bound.Min[1]
+		if dx*dx+dy*dy < spec.minDiag*spec.minDiag {
+			return chunk.InputFeature{}, false
+		}
+	}
+	body, err := json.Marshal(orbgeojson.NewGeometry(simp))
+	if err != nil {
+		return chunk.InputFeature{}, false
+	}
+	var raw chunk.RawGeometry
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return chunk.InputFeature{}, false
+	}
+	props := make(map[string]json.RawMessage, len(g.Properties))
+	for name, value := range g.Properties {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			continue
+		}
+		props[name] = encoded
+	}
+	return chunk.InputFeature{Geometry: raw, Properties: props}, true
 }
 
 func pointFamily(g orb.Geometry) bool {

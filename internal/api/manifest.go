@@ -47,7 +47,7 @@ func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutp
 	if err != nil {
 		return nil, err
 	}
-	metas, err := s.Store.ChunkMetas(ctx, in.ID, nil, 1000000, 0)
+	metas, err := s.Store.ChunkMetas(ctx, in.ID, nil, 1000000, 0, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -43,6 +43,7 @@ type Store struct {
 
 type Payload struct {
 	Data       []byte
+	Size       int
 	Count      int
 	Tier       int
 	MinX, MinY float64
@@ -79,6 +80,7 @@ type CollectionInfo struct {
 	FeatureCount int64
 	MinX, MinY   *float64
 	MaxX, MaxY   *float64
+	IDColumn     *string
 }
 
 type FeatureMatch struct {
@@ -337,7 +339,7 @@ func putChunk(ctx context.Context, conn db, collection string, payload Payload) 
 		insert into chunks (collection, tier, feature_count, size_bytes, minx, miny, maxx, maxy, cover, checksum, columns, data)
 		values ($1, $2, $3, $4, $5, $6, $7, $8, $9::int8multirange, $10, $11::jsonb, $12)
 		returning id`,
-		collection, payload.Tier, payload.Count, len(payload.Data),
+		collection, payload.Tier, payload.Count, payload.Size,
 		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY, payload.Cover,
 		payload.Checksum, payload.Columns, payload.Data).Scan(&id)
 	return id, err
@@ -422,9 +424,13 @@ func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64,
 	return chunks(ctx, s.Pool, collection, bbox, limit, tier)
 }
 
-func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit, tier int) ([]ChunkMeta, error) {
+func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit, tier int, after int64) ([]ChunkMeta, error) {
 	query := `select id, feature_count, size_bytes, minx, miny, maxx, maxy, checksum, columns from chunks where collection = $1 and tier = $2`
 	args := []any{collection, tier}
+	if after > 0 {
+		query += fmt.Sprintf(` and id > $%d`, len(args)+1)
+		args = append(args, after)
+	}
 	if fragment, extra := bboxPredicate("", bbox, len(args)+1); fragment != "" {
 		query += fragment
 		args = append(args, extra...)
@@ -472,10 +478,7 @@ func scanChunks(ctx context.Context, conn db, query string, args ...any) ([]Chun
 	return out, rows.Err()
 }
 
-func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
-	if query == "" && filter == nil {
-		return nil, nil
-	}
+func matchesWhere(collection string, bbox *[4]float64, query string, filter cql.Expr) (string, string, []any) {
 	from := `chunk_props m`
 	where := `m.collection = $1`
 	args := []any{collection}
@@ -497,6 +500,14 @@ func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64
 		where += fragment
 		args = append(args, extra...)
 	}
+	return from, where, args
+}
+
+func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+	if query == "" && filter == nil {
+		return nil, nil
+	}
+	from, where, args := matchesWhere(collection, bbox, query, filter)
 	args = append(args, limit, offset)
 	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by m.chunk_id, m.feature_ord limit $%d offset $%d`,
 		from, where, len(args)-1, len(args))
@@ -516,6 +527,13 @@ func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64
 	return out, rows.Err()
 }
 
+func (s *Store) CountMatches(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr) (int64, error) {
+	from, where, args := matchesWhere(collection, bbox, query, filter)
+	var count int64
+	err := s.Pool.QueryRow(ctx, fmt.Sprintf(`select count(*) from %s where %s`, from, where), args...).Scan(&count)
+	return count, err
+}
+
 func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (ChunkRow, error) {
 	var row ChunkRow
 	err := s.Pool.QueryRow(ctx, `
@@ -528,7 +546,7 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, chunk_count, feature_count, minx, miny, maxx, maxy from collections`
+const collectionColumns = `select name, chunk_count, feature_count, minx, miny, maxx, maxy, id_column from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
@@ -540,7 +558,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	for rows.Next() {
 		var info CollectionInfo
 		if err := rows.Scan(&info.Name, &info.ChunkCount, &info.FeatureCount,
-			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY); err != nil {
+			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.IDColumn); err != nil {
 			return nil, err
 		}
 		out = append(out, info)
@@ -552,7 +570,7 @@ func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, er
 	var info CollectionInfo
 	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
 		Scan(&info.Name, &info.ChunkCount, &info.FeatureCount,
-			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY)
+			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.IDColumn)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return info, ErrNotFound
 	}

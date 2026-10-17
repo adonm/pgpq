@@ -9,9 +9,11 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+	"github.com/flatgeobuf/flatgeobuf/src/go/index"
 
 	"github.com/adonm/postfgb/internal/api"
 	"github.com/adonm/postfgb/internal/chunk"
@@ -93,9 +95,11 @@ func genFeatures(args []string) {
 	fs.Parse(args)
 	rng := rand.New(rand.NewSource(*seed))
 	features := make([]chunk.InputFeature, *n)
+	keys := make([]uint32, *n)
 	for i := range features {
 		x := *minX + rng.Float64()*(*maxX-*minX)
 		y := *minY + rng.Float64()*(*maxY-*minY)
+		keys[i] = hilbertKey(x, y, *minX, *minY, *maxX, *maxY)
 		features[i] = chunk.InputFeature{
 			Geometry: chunk.RawGeometry{
 				Type:        "Point",
@@ -107,6 +111,15 @@ func genFeatures(args []string) {
 			},
 		}
 	}
+	order := make([]int, len(features))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return keys[order[a]] < keys[order[b]] })
+	sorted := make([]chunk.InputFeature, len(features))
+	for i, j := range order {
+		sorted[i] = features[j]
+	}
 	f, err := os.Create(*out)
 	if err != nil {
 		fatal(err)
@@ -116,7 +129,19 @@ func genFeatures(args []string) {
 		{Name: "i", Type: flattypes.ColumnTypeLong},
 		{Name: "name", Type: flattypes.ColumnTypeString},
 	}
-	if _, err := chunk.WriteFile(f, "features", cols, features); err != nil {
+	if _, err := chunk.WriteFile(f, "features", cols, sorted); err != nil {
 		fatal(err)
 	}
+}
+
+func hilbertKey(x, y, minX, minY, maxX, maxY float64) uint32 {
+	const hilbertMax = 0xFFFF
+	var hx, hy uint32
+	if maxX > minX {
+		hx = uint32(float64(hilbertMax) * (x - minX) / (maxX - minX))
+	}
+	if maxY > minY {
+		hy = uint32(float64(hilbertMax) * (y - minY) / (maxY - minY))
+	}
+	return index.Hilbert(hx, hy)
 }

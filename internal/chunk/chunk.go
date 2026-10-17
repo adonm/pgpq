@@ -29,16 +29,21 @@ type Geometry struct {
 
 type Feature struct {
 	Type       string         `json:"type"`
+	ID         any            `json:"id,omitempty"`
 	Geometry   *Geometry      `json:"geometry"`
 	Properties map[string]any `json:"properties,omitempty"`
 }
 
 func Open(data []byte) (*Chunk, error) {
-	fgb, err := flatgeobuf.NewWithData(data)
+	raw, err := Decompress(data)
 	if err != nil {
 		return nil, err
 	}
-	return &Chunk{Data: data, header: fgb.Header(), fgb: fgb}, nil
+	fgb, err := flatgeobuf.NewWithData(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &Chunk{Data: raw, header: fgb.Header(), fgb: fgb}, nil
 }
 
 func (c *Chunk) Count() int {

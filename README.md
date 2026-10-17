@@ -10,7 +10,7 @@ Design decisions are recorded in [DESIGN.md](DESIGN.md).
 
 ## How it works
 
-- Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and stored as `bytea` rows in per-collection partitions with per-collection indexes; each collection is also exposed as a `layers.<name>` SQL view.
+- Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) sized to ~2 MiB by a self-calibrating estimator, zstd-compressed in Go, and stored as `bytea` rows in per-collection partitions with per-collection indexes; each collection is also exposed as a `layers.<name>` SQL view.
 - Chunk bounds are plain float columns plus an S2 cell covering stored as an `int8multirange`; a GiST index prunes candidate chunks with one range-overlap predicate.
 - The app computes the S2 coverings in Go, so the database only compares ranges and floats: no geometry parsing, no PostGIS. Real spatial work happens in memory, over the FlatGeobuf Hilbert R-trees.
 - Fulltext lives in a sidecar table (`tsvector`/GIN) populated at ingest; `?q=` intersects text matches with chunk and feature level spatial filtering.
@@ -52,14 +52,16 @@ curl -X PUT --data-binary @features.fgb "localhost:8080/collections/demo/data"
 | `/conformance` | conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged (50,000 default); `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
+| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged (50,000 default); `overview=auto|0|1|2` picks or bypasses the overview tier; `numberMatched=true` adds the match count; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
+| `/collections/{id}/items/{featureId}` | single feature; ids come from an id-like property (`id`, `fid`, ...) or the synthetic `chunkID-ord` |
+| `/collections/{id}/queryables` | JSON Schema of the filterable properties |
 | `PUT /collections/{id}/data?sortable=` | create-or-replace the collection from a whole FlatGeobuf upload; synchronous, transactional, reprojected to WGS84; `sortable` declares up to 4 indexed columns (admin token) |
 | `DELETE /collections/{id}` | drop a collection and its partitions (admin token) |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
 | `/collections/{id}/export?format=` | filtered features converted on the fly: fgb, geojson, gpkg, parquet, shp, kml, gpx (needs `--rustgis-cli` or `--ogr2ogr`; admin token when configured) |
 | `/collections/{id}/tiles` | tileset list |
-| `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile; accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms |
+| `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile; accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms and honor `overview=` |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
 | `/api` | OpenAPI 3.0 definition (OGC content type) |
 
@@ -94,7 +96,7 @@ ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/benc
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (create-or-replace PUT, transactional, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, OGC API Features with next-link paging (50,000 default), MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, on-demand filtered exports through rustgis-cli or ogr2ogr, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (read correctness and overview overrides, union views, client features, ops).
+Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (create-or-replace PUT, transactional, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, on-demand filtered exports through rustgis-cli or ogr2ogr, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (union views, client features, ops).
 
 ## License
 
