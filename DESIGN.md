@@ -40,7 +40,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## Read path
 
-- The read surface is CORS-open (`Access-Control-Allow-Origin: *`, ETag and Content-Crs exposed) so browser clients — RustGIS, the embedded `/viewer` — can query any deployment directly; the browser tooling is one CDN-backed static page, not a second API.
+- The read surface is CORS-open (`Access-Control-Allow-Origin: *`, ETag and Content-Crs exposed) so browser clients — the RustGIS web app embedded at `/viewer` via its `?embed&data=` deep link, or any RustGIS build elsewhere — can query any deployment directly; the browser tooling is the RustGIS WASM app, not a second API.
 
 - Unfiltered scans stream chunk windows in id order with no fixed chunk cap; offset paging stays exact at any collection size.
 - Filtered requests fan out over matched chunks under a per-request byte budget (`--max-chunk-bytes`, 32 MiB by default) so fetch windows stay bounded no matter how large individual chunks are; short pages always carry honest next links.

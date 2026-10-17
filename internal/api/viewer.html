@@ -3,33 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>postfgb</title>
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.css">
-<script src="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.js"></script>
+<title>postfgb · RustGIS</title>
 <style>
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;font:13px/1.4 ui-sans-serif,system-ui,sans-serif;background:#111;color:#e5e5e5}
-#app{display:grid;grid-template-columns:280px 1fr;height:100%}
+#app{display:grid;grid-template-columns:300px 1fr;height:100%}
 #side{background:#18181b;border-right:1px solid #27272a;display:flex;flex-direction:column;overflow:hidden}
 header{padding:12px 14px;border-bottom:1px solid #27272a;display:flex;align-items:center;justify-content:space-between}
 header h1{margin:0;font-size:14px;font-weight:600;letter-spacing:.2px}
 header a{color:#71717a;text-decoration:none;font-size:11px;margin-left:8px}
 header a:hover{color:#e5e5e5}
-#controls{padding:10px 14px;border-bottom:1px solid #27272a;display:grid;gap:6px}
-input{width:100%;background:#09090b;color:#e5e5e5;border:1px solid #27272a;border-radius:4px;padding:6px 8px;font:12px ui-monospace,monospace}
-input:focus{outline:none;border-color:#38bdf8}
 #list{overflow-y:auto;flex:1;padding:6px}
-.item{padding:8px 10px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px}
+.item{padding:8px 10px;border-radius:4px;cursor:pointer}
 .item:hover{background:#27272a}
 .item.active{background:#1e293b}
-.swatch{width:10px;height:10px;border-radius:2px;flex:none}
-.meta{min-width:0;flex:1}
 .name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sub{font-size:11px;color:#71717a}
-#map{height:100%;width:100%}
-.maplibregl-popup-content{background:#18181b;color:#e5e5e5;padding:10px 12px;border:1px solid #27272a;border-radius:6px;max-width:340px;max-height:280px;overflow:auto;font:11px/1.45 ui-monospace,monospace}
-.maplibregl-popup-tip{border-top-color:#18181b!important;border-bottom-color:#18181b!important}
-.k{color:#94a3b8}
+.hint{padding:10px 14px;font-size:11px;color:#71717a;border-top:1px solid #27272a}
+.hint p{margin:0 0 6px}
+#toolbar{padding:10px 14px;border-bottom:1px solid #27272a;display:grid;gap:6px;font-size:11px;color:#71717a}
+#toolbar label{display:flex;align-items:center;gap:6px}
+input[type=number],input[type=text]{width:100%;background:#09090b;color:#e5e5e5;border:1px solid #27272a;border-radius:4px;padding:5px 7px;font:11px ui-monospace,monospace}
+button{background:#1e293b;color:#e5e5e5;border:1px solid #334155;border-radius:4px;padding:6px 8px;font:12px inherit;cursor:pointer}
+button:hover{background:#334155}
+button.ghost{background:transparent;border-color:#27272a;color:#94a3b8}
+button.ghost:hover{color:#e5e5e5;border-color:#334155}
+#main{position:relative;display:flex;flex-direction:column}
+#bar{position:absolute;inset:0 auto auto 0;width:100%;display:flex;gap:8px;align-items:center;padding:6px 10px;background:rgba(17,17,17,.85);backdrop-filter:blur(4px);border-bottom:1px solid #27272a;font:11px ui-monospace,monospace;color:#94a3b8;z-index:2}
+#bar .url{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl}
+iframe{border:0;width:100%;height:100%;background:#0b0b0d}
+#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#52525b;flex-direction:column;gap:8px}
 </style>
 </head>
 <body>
@@ -39,101 +42,65 @@ input:focus{outline:none;border-color:#38bdf8}
       <h1>postfgb</h1>
       <nav><a href="/collections">OGC</a><a href="/stac">STAC</a><a href="/api">OpenAPI</a></nav>
     </header>
-    <div id="controls">
-      <input id="q" placeholder="q= fulltext (Enter)">
-      <input id="filter" placeholder="filter= CQL2, e.g. kind = 'alpha'">
+    <div id="toolbar">
+      <button id="stac" class="ghost">Open STAC search in RustGIS</button>
+      <label>Max features <input id="limit" type="number" min="0" step="100000" placeholder="all"></label>
+      <button id="opentab" class="ghost" disabled>Open in a new tab</button>
     </div>
     <div id="list"></div>
+    <div class="hint">
+      <p>Collections open in the <b>RustGIS</b> web app as FlatGeobuf downloads (data stays on your server; CORS is open).</p>
+      <p>Huge collections default to the first 200,000 features — lower “Max features” or clear it to fetch everything.</p>
+    </div>
   </aside>
-  <div id="map"></div>
+  <div id="main">
+    <div id="bar"><span>rustgis</span><span class="url" id="url"></span><button id="copy" class="ghost">copy</button></div>
+    <div id="empty">Pick a collection…</div>
+    <iframe id="app-frame" title="RustGIS" allow="fullscreen"></iframe>
+  </div>
 </div>
 <script>
-const palette = ['#38bdf8','#f472b6','#34d399','#fbbf24','#a78bfa','#fb7185','#22d3ee','#f97316'];
-const map = new maplibregl.Map({
-  container: 'map',
-  center: [7.42, 43.74],
-  zoom: 2,
-  style: {
-    version: 8,
-    sources: {
-      osm: {
-        type: 'raster',
-        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-        tileSize: 256,
-        attribution: '© OpenStreetMap'
-      }
-    },
-    layers: [{id: 'osm', type: 'raster', source: 'osm', paint: {'raster-brightness-max': 0.55, 'raster-saturation': -0.6}}]
-  }
-});
-map.addControl(new maplibregl.NavigationControl(), 'top-right');
-
+const RUSTGIS = 'https://web.rustgis.app/';
+const frame = document.getElementById('app-frame');
+const urlLabel = document.getElementById('url');
+const limitInput = document.getElementById('limit');
+const openTab = document.getElementById('opentab');
 let collections = [];
-let active = new Set();
+let current = null;
 
-function tileURL(id) {
+function dataURL(col, limit) {
+  const url = new URL(`${location.origin}/collections/${encodeURIComponent(col.id)}/items`);
+  url.searchParams.set('f', 'flatgeobuf');
+  if (limit > 0) url.searchParams.set('limit', limit);
+  return url.toString();
+}
+
+function rustgisURL(col) {
   const params = new URLSearchParams();
-  const q = document.getElementById('q').value.trim();
-  const filter = document.getElementById('filter').value.trim();
-  if (q) params.set('q', q);
-  if (filter) params.set('filter', filter);
-  const qs = params.toString();
-  return `${location.origin}/collections/${encodeURIComponent(id)}/tiles/WebMercatorQuad/{z}/{x}/{y}${qs ? '?' + qs : ''}`;
-}
-
-function addCollection(col) {
-  const id = col.id;
-  const color = col.color;
-  const src = `src-${id}`;
-  if (map.getSource(src)) removeCollection(id);
-  map.addSource(src, {type: 'vector', tiles: [tileURL(id)], minzoom: 0, maxzoom: 16});
-  map.addLayer({
-    id: `fill-${id}`, type: 'fill', source: src, 'source-layer': id,
-    filter: ['==', ['$type'], 'Polygon'],
-    paint: {'fill-color': color, 'fill-opacity': 0.35, 'fill-outline-color': color}
-  });
-  map.addLayer({
-    id: `line-${id}`, type: 'line', source: src, 'source-layer': id,
-    filter: ['in', ['$type'], 'LineString', 'Polygon'],
-    paint: {'line-color': color, 'line-width': 1.5}
-  });
-  map.addLayer({
-    id: `pt-${id}`, type: 'circle', source: src, 'source-layer': id,
-    filter: ['==', ['$type'], 'Point'],
-    paint: {'circle-color': color, 'circle-radius': 4, 'circle-stroke-color': '#09090b', 'circle-stroke-width': 1}
-  });
-}
-
-function removeCollection(id) {
-  for (const prefix of ['fill-', 'line-', 'pt-']) {
-    if (map.getLayer(prefix + id)) map.removeLayer(prefix + id);
+  params.set('embed', '');
+  params.set('blank', '');
+  if (col) {
+    params.set('data', dataURL(col, effectiveLimit(col)));
+    const bbox = col.extent?.spatial?.bbox?.[0];
+    if (bbox && bbox.length === 4) params.set('extent', bbox.join(','));
   }
-  if (map.getSource(`src-${id}`)) map.removeSource(`src-${id}`);
+  return RUSTGIS + '?' + params.toString();
 }
 
-function fit(col) {
-  const bbox = col.extent?.spatial?.bbox?.[0];
-  if (bbox && bbox.length === 4) {
-    map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {padding: 40, maxZoom: 16, duration: 500});
-  }
+function effectiveLimit(col) {
+  const typed = parseInt(limitInput.value, 10);
+  if (limitInput.value.trim() !== '' && !isNaN(typed)) return Math.max(0, typed);
+  return col.featureCount > 2000000 ? 200000 : 0;
 }
 
-function toggle(col, zoom) {
-  if (active.has(col.id)) {
-    active.delete(col.id);
-    removeCollection(col.id);
-  } else {
-    active.add(col.id);
-    addCollection(col);
-    if (zoom) fit(col);
-  }
+function load(col) {
+  current = col;
+  const src = rustgisURL(col);
+  frame.src = src;
+  urlLabel.textContent = src;
+  openTab.disabled = false;
+  document.getElementById('empty').style.display = 'none';
   renderList();
-}
-
-function refreshTiles() {
-  for (const col of collections) {
-    if (active.has(col.id)) addCollection(col);
-  }
 }
 
 function renderList() {
@@ -141,55 +108,58 @@ function renderList() {
   list.innerHTML = '';
   for (const col of collections) {
     const row = document.createElement('div');
-    row.className = 'item' + (active.has(col.id) ? ' active' : '');
+    row.className = 'item' + (current && current.id === col.id ? ' active' : '');
+    const count = col.featureCount >= 0 ? col.featureCount.toLocaleString() + ' features' : 'count unknown';
     row.innerHTML = `
-      <span class="swatch" style="background:${col.color}"></span>
-      <div class="meta">
-        <div class="name"></div>
-        <div class="sub"></div>
-      </div>`;
+      <div class="name"></div>
+      <div class="sub">${escapeHTML(col.id)} · ${escapeHTML(count)}${col.kind === 'view' ? ' · view' : ''}</div>`;
     row.querySelector('.name').textContent = col.title || col.id;
-    row.querySelector('.sub').textContent = `${col.id} · ${col.kind || 'native'}`;
-    row.onclick = () => toggle(col, true);
+    row.onclick = () => load(col);
     list.appendChild(row);
   }
 }
 
-map.on('click', (e) => {
-  const layers = [];
-  for (const id of active) {
-    for (const prefix of ['pt-', 'line-', 'fill-']) {
-      if (map.getLayer(prefix + id)) layers.push(prefix + id);
-    }
-  }
-  if (!layers.length) return;
-  const feats = map.queryRenderedFeatures(e.point, {layers});
-  if (!feats.length) return;
-  const f = feats[0];
-  const rows = [`<div><b>${escapeHTML(f.sourceLayer)}</b>${f.id !== undefined ? ` <span class="k">#${escapeHTML(String(f.id))}</span>` : ''}</div>`];
-  for (const [k, v] of Object.entries(f.properties || {})) {
-    rows.push(`<div><span class="k">${escapeHTML(k)}:</span> ${escapeHTML(String(v))}</div>`);
-  }
-  new maplibregl.Popup({closeButton: false}).setLngLat(e.lngLat).setHTML(rows.join('')).addTo(map);
-});
-
 function escapeHTML(s) {
-  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-for (const id of ['q', 'filter']) {
-  document.getElementById(id).addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') refreshTiles();
-  });
+async function featureCount(id) {
+  try {
+    const res = await fetch(`/collections/${encodeURIComponent(id)}/items?limit=1&numberMatched=true`);
+    const body = await res.json();
+    return typeof body.numberMatched === 'number' ? body.numberMatched : -1;
+  } catch {
+    return -1;
+  }
 }
 
-map.on('load', async () => {
-  const res = await fetch('/collections');
-  const data = await res.json();
-  collections = (data.collections || []).map((c, i) => ({...c, color: palette[i % palette.length]}));
-  renderList();
-  if (collections.length) toggle(collections[0], true);
+limitInput.addEventListener('change', () => { if (current) load(current); });
+openTab.addEventListener('click', () => { if (current) window.open(rustgisURL(current), '_blank', 'noopener'); });
+document.getElementById('copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(frame.src); document.getElementById('copy').textContent = 'copied'; }
+  catch { document.getElementById('copy').textContent = 'copy failed'; }
+  setTimeout(() => { document.getElementById('copy').textContent = 'copy'; }, 1200);
 });
+document.getElementById('stac').addEventListener('click', () => {
+  const src = RUSTGIS + '?embed&stac=' + encodeURIComponent(location.origin + '/stac');
+  frame.src = src;
+  urlLabel.textContent = src;
+  current = null;
+  document.getElementById('empty').style.display = 'none';
+  renderList();
+});
+
+(async () => {
+  const res = await fetch('/collections');
+  const body = await res.json();
+  collections = (body.collections || []).map(c => ({...c, featureCount: -1}));
+  renderList();
+  await Promise.all(collections.map(async col => { col.featureCount = await featureCount(col.id); }));
+  collections.sort((a, b) => (b.featureCount - a.featureCount));
+  renderList();
+  const first = collections.find(col => col.featureCount >= 0 && col.featureCount <= 2000000) || collections[0];
+  if (first) load(first);
+})();
 </script>
 </body>
 </html>

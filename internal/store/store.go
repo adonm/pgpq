@@ -265,6 +265,11 @@ func ValidName(name string) bool {
 
 var chunkPartitions = []string{"chunks", "chunk_text", "chunk_props"}
 
+const (
+	matchOrderedBudget = 500 * time.Millisecond
+	maxMatchBudget     = 4 * time.Second
+)
+
 type Ingest struct {
 	tx         pgx.Tx
 	collection string
@@ -376,6 +381,9 @@ func (i *Ingest) swap(ctx context.Context) error {
 			return err
 		}
 		if err := i.renameIndexes(ctx, parent+"_"+i.collection); err != nil {
+			return err
+		}
+		if _, err := i.tx.Exec(ctx, `analyze `+final); err != nil {
 			return err
 		}
 	}
@@ -822,11 +830,41 @@ func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64
 	if query == "" && filter == nil {
 		return nil, nil
 	}
+	budget := matchOrderedBudget + time.Duration(limit+offset)*20*time.Microsecond
+	if budget > maxMatchBudget {
+		budget = maxMatchBudget
+	}
+	probe, cancel := context.WithTimeout(ctx, budget)
+	matches, err := s.matchesInIndexOrder(probe, collection, bbox, query, filter, limit, offset)
+	cancel()
+	if err == nil || !matchTimedOut(err) {
+		return matches, err
+	}
+	return s.matchesByIndexScan(ctx, collection, bbox, query, filter, limit, offset)
+}
+
+func (s *Store) matchesInIndexOrder(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
 	from, where, args := matchesWhere(collection, bbox, query, filter)
 	args = append(args, limit, offset)
 	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by m.chunk_id, m.feature_ord limit $%d offset $%d`,
 		from, where, len(args)-1, len(args))
 	return scanMatches(ctx, s.Pool, sql, args...)
+}
+
+func (s *Store) matchesByIndexScan(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+	from, where, args := matchesWhere(collection, bbox, query, filter)
+	args = append(args, limit, offset)
+	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by (m.chunk_id + 0), m.feature_ord limit $%d offset $%d`,
+		from, where, len(args)-1, len(args))
+	return scanMatches(ctx, s.Pool, sql, args...)
+}
+
+func matchTimedOut(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "57014"
 }
 
 func (s *Store) Sorted(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, order []string, limit, offset int) ([]FeatureMatch, error) {
