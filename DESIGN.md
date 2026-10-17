@@ -15,7 +15,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 - `chunks`, `chunk_text` and `chunk_props` are LIST-partitioned by collection: every collection owns three physical partitions with their own heaps and indexes, which removes today's cross-collection GIN noise and scopes vacuum and drop.
 - Chunk ids stay globally unique (identity on the parent). Primary keys: `(collection, id)` and `(collection, chunk_id, feature_ord)`.
 - All queries already carry `collection = $1`, so partition pruning turns access into per-collection index scans with unchanged SQL.
-- Each collection also gets a `layers.<name>` SQL view over its chunks for database-side introspection, GeoPackage-style.
+- Each collection also gets a `layers.<name>` SQL view over its tier-0 chunks for database-side introspection, GeoPackage-style.
 - The `collections` catalog row carries per-collection stats (feature count, spatial and temporal extent, kind, members, declared sortable columns), maintained in the ingest transaction; the collection endpoints never scan chunk tables.
 - The core path requires zero PostgreSQL extensions; the legacy `pg_trgm` create is removed.
 

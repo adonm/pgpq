@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -162,9 +163,50 @@ func (s *Store) Capabilities(ctx context.Context) (map[string]bool, error) {
 	return caps, rows.Err()
 }
 
+var collectionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$`)
+
+var chunkPartitions = []string{"chunks", "chunk_text", "chunk_props"}
+
 func (s *Store) EnsureCollection(ctx context.Context, name string) error {
-	_, err := s.Pool.Exec(ctx,
-		`insert into collections (name) values ($1) on conflict (name) do nothing`, name)
+	if !collectionName.MatchString(name) {
+		return fmt.Errorf("invalid collection name %q", name)
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, parent := range chunkPartitions {
+		partition := pgx.Identifier{parent + "_" + name}.Sanitize()
+		if _, err := tx.Exec(ctx, `create table if not exists `+partition+` partition of `+parent+` for values in ('`+name+`')`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `create schema if not exists layers`); err != nil {
+		return err
+	}
+	view := pgx.Identifier{"layers", name}.Sanitize()
+	if _, err := tx.Exec(ctx, `create or replace view `+view+` as select * from chunks where collection = '`+name+`' and tier = 0`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `insert into collections (name) values ($1) on conflict (name) do nothing`, name); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) RefreshStats(ctx context.Context, name string) error {
+	_, err := s.Pool.Exec(ctx, `
+		update collections set
+			chunk_count = s.chunks,
+			feature_count = s.features,
+			minx = s.minx, miny = s.miny, maxx = s.maxx, maxy = s.maxy
+		from (
+			select count(*) chunks, coalesce(sum(feature_count), 0) features,
+			       min(minx) minx, min(miny) miny, max(maxx) maxx, max(maxy) maxy
+			from chunks where collection = $1 and tier = 0
+		) s
+		where collections.name = $1`, name)
 	return err
 }
 
@@ -180,7 +222,7 @@ func (s *Store) PutChunk(ctx context.Context, collection string, payload Payload
 	return id, err
 }
 
-func (s *Store) PutChunkText(ctx context.Context, chunkID int64, docs []string) error {
+func (s *Store) PutChunkText(ctx context.Context, collection string, chunkID int64, docs []string) error {
 	if len(docs) == 0 {
 		return nil
 	}
@@ -189,14 +231,14 @@ func (s *Store) PutChunkText(ctx context.Context, chunkID int64, docs []string) 
 		ords[i] = int32(i)
 	}
 	_, err := s.Pool.Exec(ctx, `
-		insert into chunk_text (chunk_id, feature_ord, tsv)
-		select $1, ord, to_tsvector('simple', doc)
-		from unnest($2::int[], $3::text[]) as input(ord, doc)
-		where doc <> ''`, chunkID, ords, docs)
+		insert into chunk_text (collection, chunk_id, feature_ord, tsv)
+		select $1, $2, ord, to_tsvector('simple', doc)
+		from unnest($3::int[], $4::text[]) as input(ord, doc)
+		where doc <> ''`, collection, chunkID, ords, docs)
 	return err
 }
 
-func (s *Store) PutChunkProps(ctx context.Context, chunkID int64, docs []string) error {
+func (s *Store) PutChunkProps(ctx context.Context, collection string, chunkID int64, docs []string) error {
 	if len(docs) == 0 {
 		return nil
 	}
@@ -205,21 +247,21 @@ func (s *Store) PutChunkProps(ctx context.Context, chunkID int64, docs []string)
 		ords[i] = int32(i)
 	}
 	_, err := s.Pool.Exec(ctx, `
-		insert into chunk_props (chunk_id, feature_ord, props)
-		select $1, ord, doc::jsonb
-		from unnest($2::int[], $3::text[]) as input(ord, doc)
-		where doc <> '' and doc <> '{}' and doc <> 'null'`, chunkID, ords, docs)
+		insert into chunk_props (collection, chunk_id, feature_ord, props)
+		select $1, $2, ord, doc::jsonb
+		from unnest($3::int[], $4::text[]) as input(ord, doc)
+		where doc <> '' and doc <> '{}' and doc <> 'null'`, collection, chunkID, ords, docs)
 	return err
 }
 
-func bboxPredicate(bbox *[4]float64, next int) (string, []any) {
+func bboxPredicate(prefix string, bbox *[4]float64, next int) (string, []any) {
 	if bbox == nil {
 		return "", nil
 	}
 	minx, miny, maxx, maxy := next+1, next+2, next+3, next+4
 	fragment := fmt.Sprintf(
-		` and cover && $%d::int8multirange and not (maxx < $%d or minx > $%d or maxy < $%d or miny > $%d)`,
-		next, minx, maxx, miny, maxy)
+		` and %scover && $%d::int8multirange and not (%smaxx < $%d or %sminx > $%d or %smaxy < $%d or %sminy > $%d)`,
+		prefix, next, prefix, minx, prefix, maxx, prefix, miny, prefix, maxy)
 	return fragment, []any{cover.Query(bbox[0], bbox[1], bbox[2], bbox[3]), bbox[0], bbox[1], bbox[2], bbox[3]}
 }
 
@@ -231,7 +273,7 @@ func (s *Store) DeleteChunksAboveTier(ctx context.Context, collection string, ti
 func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {
 	query := `select id, feature_count, minx, miny, maxx, maxy, data from chunks where collection = $1 and tier = $2`
 	args := []any{collection, tier}
-	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
+	if fragment, extra := bboxPredicate("", bbox, len(args)+1); fragment != "" {
 		query += fragment
 		args = append(args, extra...)
 	}
@@ -243,7 +285,7 @@ func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64,
 func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit, tier int) ([]ChunkMeta, error) {
 	query := `select id, feature_count, size_bytes, minx, miny, maxx, maxy, checksum, columns from chunks where collection = $1 and tier = $2`
 	args := []any{collection, tier}
-	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
+	if fragment, extra := bboxPredicate("", bbox, len(args)+1); fragment != "" {
 		query += fragment
 		args = append(args, extra...)
 	}
@@ -265,12 +307,12 @@ func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]floa
 	return out, rows.Err()
 }
 
-func (s *Store) ChunksByIDs(ctx context.Context, ids []int64) ([]ChunkRow, error) {
+func (s *Store) ChunksByIDs(ctx context.Context, collection string, ids []int64) ([]ChunkRow, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	return s.scanChunks(ctx,
-		`select id, feature_count, minx, miny, maxx, maxy, data from chunks where id = any($1) order by id`, ids)
+		`select id, feature_count, minx, miny, maxx, maxy, data from chunks where collection = $1 and id = any($2) order by id`, collection, ids)
 }
 
 func (s *Store) scanChunks(ctx context.Context, query string, args ...any) ([]ChunkRow, error) {
@@ -295,32 +337,30 @@ func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64
 		return nil, nil
 	}
 	sql := `select m.chunk_id, m.feature_ord from `
+	from := `chunk_props m`
+	where := `m.collection = $1`
 	args := []any{collection}
 	switch {
 	case query != "" && filter != nil:
+		from = `chunk_text m join chunk_props p on p.collection = m.collection and p.chunk_id = m.chunk_id and p.feature_ord = m.feature_ord`
 		args = append(args, query)
-		where := filter.SQL("p.props", &args)
-		sql += fmt.Sprintf(`chunk_text m
-			join chunk_props p on p.chunk_id = m.chunk_id and p.feature_ord = m.feature_ord
-			join chunks ch on ch.id = m.chunk_id
-			where ch.collection = $1 and m.tsv @@ websearch_to_tsquery('simple', $2) and %s`, where)
+		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2) and ` + filter.SQL("p.props", &args)
 	case query != "":
+		from = `chunk_text m`
 		args = append(args, query)
-		sql += `chunk_text m
-			join chunks ch on ch.id = m.chunk_id
-			where ch.collection = $1 and m.tsv @@ websearch_to_tsquery('simple', $2)`
+		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2)`
 	default:
-		where := filter.SQL("m.props", &args)
-		sql += fmt.Sprintf(`chunk_props m
-			join chunks ch on ch.id = m.chunk_id
-			where ch.collection = $1 and %s`, where)
+		where += ` and ` + filter.SQL("m.props", &args)
 	}
-	if fragment, extra := bboxPredicate(bbox, len(args)+1); fragment != "" {
-		sql += fragment
+	if bbox != nil {
+		from += ` join chunks ch on ch.collection = m.collection and ch.id = m.chunk_id`
+		fragment, extra := bboxPredicate("ch.", bbox, len(args)+1)
+		where += fragment
 		args = append(args, extra...)
 	}
-	sql += fmt.Sprintf(` order by m.chunk_id, m.feature_ord limit $%d offset $%d`, len(args)+1, len(args)+2)
 	args = append(args, limit, offset)
+	sql += fmt.Sprintf(`%s where %s order by m.chunk_id, m.feature_ord limit $%d offset $%d`,
+		from, where, len(args)-1, len(args))
 	rows, err := s.Pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
@@ -349,19 +389,10 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionStats = `
-	select c.name,
-	       count(ch.id)::bigint,
-	       coalesce(sum(ch.feature_count), 0)::bigint,
-	       min(ch.minx), min(ch.miny), max(ch.maxx), max(ch.maxy)
-	from collections c
-	left join chunks ch on ch.collection = c.name and ch.tier = 0
-	%s
-	group by c.name
-	order by c.name`
+const collectionColumns = `select name, chunk_count, feature_count, minx, miny, maxx, maxy from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
-	rows, err := s.Pool.Query(ctx, fmt.Sprintf(collectionStats, ""))
+	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +411,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 
 func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, error) {
 	var info CollectionInfo
-	err := s.Pool.QueryRow(ctx, fmt.Sprintf(collectionStats, "where c.name = $1"), name).
+	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
 		Scan(&info.Name, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY)
 	if errors.Is(err, pgx.ErrNoRows) {

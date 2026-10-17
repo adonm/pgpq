@@ -333,7 +333,7 @@ func (s *Server) streamMatches(ctx context.Context, fw *featureWriter, id string
 		}
 		ords[m.Ord] = true
 	}
-	rows, err := s.Store.ChunksByIDs(ctx, ids)
+	rows, err := s.Store.ChunksByIDs(ctx, id, ids)
 	if err != nil {
 		slog.Error("chunks by ids failed", "collection", id, "error", err)
 		return
@@ -578,7 +578,7 @@ func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64
 		}
 		ords[m.Ord] = true
 	}
-	rows, err := s.Store.ChunksByIDs(ctx, ids)
+	rows, err := s.Store.ChunksByIDs(ctx, id, ids)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -766,7 +766,7 @@ func (s *Server) tileMatches(ctx context.Context, id string, bbox [4]float64, qu
 		}
 		ords[m.Ord] = true
 	}
-	rows, err := s.Store.ChunksByIDs(ctx, ids)
+	rows, err := s.Store.ChunksByIDs(ctx, id, ids)
 	if err != nil {
 		return nil, err
 	}

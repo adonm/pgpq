@@ -178,6 +178,9 @@ func ingest(args []string) {
 	if *overviews {
 		buildOverviews(ctx, st, *collection)
 	}
+	if err := st.RefreshStats(ctx, *collection); err != nil {
+		fatal(err)
+	}
 	slog.Info("done", "features", total, "chunks", chunks)
 }
 
@@ -228,7 +231,7 @@ func putChunk(ctx context.Context, st *store.Store, collection string, batch []c
 	for i := range batch {
 		docs[i] = chunk.Text(batch[i].Properties)
 	}
-	if err := st.PutChunkText(ctx, id, docs); err != nil {
+	if err := st.PutChunkText(ctx, collection, id, docs); err != nil {
 		fatal(err)
 	}
 	props := make([]string, len(batch))
@@ -239,7 +242,7 @@ func putChunk(ctx context.Context, st *store.Store, collection string, batch []c
 		}
 		props[i] = string(body)
 	}
-	if err := st.PutChunkProps(ctx, id, props); err != nil {
+	if err := st.PutChunkProps(ctx, collection, id, props); err != nil {
 		fatal(err)
 	}
 }
