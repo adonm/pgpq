@@ -77,7 +77,7 @@ just layercake settlements "-74.05 40.65 -73.92 40.82"   # NYC, ~3 s
 just layercake buildings "7.40 43.72 7.44 43.76"         # Monaco, ~10 s
 ```
 
-The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` and an optional `-spat` bbox; omit the bbox to stream an entire layer (settlements is 188 MiB, buildings is 42.9 GiB planet-wide). Layer types are normalized with `-nlt GEOMETRY` by default so mixed-geometry layers (highways, POIs) load as-is. Layers land with their real tags, OSM timestamps (time filtering and `extent.temporal` come along) and polygon geometry. `just fixtures` loads the six main layers over one shared bbox, ready for view and union tests.
+The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` and an optional `-spat` bbox; omit the bbox to stream an entire layer (settlements is 188 MiB, buildings is 42.9 GiB planet-wide). Layer types are normalized with `-nlt GEOMETRY` by default so mixed-geometry layers (highways, POIs) load as-is, and list-valued tag columns are flattened to scalars because FlatGeobuf has no list types. Layers land with their real tags, OSM timestamps (time filtering and `extent.temporal` come along) and polygon geometry. `just fixtures` loads the six main layers over one shared bbox, ready for view and union tests.
 
 ## Benchmarks
 

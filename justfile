@@ -47,7 +47,6 @@ demo: pg-up fixtures
 serve:
     go run ./cmd/postfgb serve --dsn "{{dsn}}"
 
-demo: pg-up gen ingest
 
 export coll format out:
     docker run --rm --network host -v "{{justfile_directory()}}:/work" -w /work {{gdal}} ogr2ogr -f "{{format}}" "/work/{{out}}" "OAPIF:{{url}}" "{{coll}}"
@@ -59,4 +58,4 @@ bench:
     bench/run.sh
 
 layercake layer bbox="" nlt="GEOMETRY":
-    LAYER={{layer}} BBOX="{{bbox}}" NLT={{nlt}} docker run --rm -i -e LAYER -e BBOX -e NLT {{gdal}} bash -c 'set -euo pipefail; SPAT=""; if [ -n "$BBOX" ]; then SPAT="-spat $BBOX"; fi; NLTARG=""; if [ -n "$NLT" ]; then NLTARG="-nlt $NLT"; fi; ogr2ogr -f FlatGeobuf /tmp/out.fgb "/vsicurl/https://data.openstreetmap.us/layercake/${LAYER}.parquet" "$LAYER" $SPAT $NLTARG -lco SPATIAL_INDEX=NO && exec cat /tmp/out.fgb' | curl -sfS -X PUT --data-binary @- "{{url}}/collections/{{layer}}/data"
+    LAYER={{layer}} BBOX="{{bbox}}" NLT={{nlt}} docker run --rm -i -e LAYER -e BBOX -e NLT {{gdal}} bash -c 'set -euo pipefail; SPAT=""; if [ -n "$BBOX" ]; then SPAT="-spat $BBOX"; fi; NLTARG=""; if [ -n "$NLT" ]; then NLTARG="-nlt $NLT"; fi; ogr2ogr -f FlatGeobuf /tmp/out.fgb "/vsicurl/https://data.openstreetmap.us/layercake/${LAYER}.parquet" "$LAYER" $SPAT $NLTARG -mapFieldType StringList=String,IntegerList=Integer,RealList=Real,Integer64List=Integer64 -lco SPATIAL_INDEX=NO && exec cat /tmp/out.fgb' | curl -sfS -X PUT --data-binary @- "{{url}}/collections/{{layer}}/data"

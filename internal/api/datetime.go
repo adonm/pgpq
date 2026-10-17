@@ -7,30 +7,34 @@ import (
 	"time"
 
 	"github.com/adonm/postfgb/internal/cql"
-	"github.com/adonm/postfgb/internal/store"
 )
 
-func datetimeFilter(r *http.Request, info store.CollectionInfo) (cql.Expr, error) {
+type timeWindow struct {
+	lo, hi time.Time
+	set    bool
+}
+
+func parseTimeWindow(r *http.Request) (timeWindow, error) {
 	value := r.URL.Query().Get("datetime")
 	if value == "" {
-		return nil, nil
-	}
-	if info.TimeColumn == nil || *info.TimeColumn == "" {
-		return nil, errors.New("collection has no time column")
+		return timeWindow{}, nil
 	}
 	lo, hi, err := parseDatetime(value)
 	if err != nil {
-		return nil, err
+		return timeWindow{}, err
 	}
-	col := *info.TimeColumn
+	return timeWindow{lo: lo, hi: hi, set: true}, nil
+}
+
+func datetimeExpr(col string, tw timeWindow) cql.Expr {
 	var expr cql.Expr
-	if !lo.IsZero() {
-		expr = cql.And(expr, &cql.Compare{Prop: col, Op: ">=", Value: lo})
+	if !tw.lo.IsZero() {
+		expr = cql.And(expr, &cql.Compare{Prop: col, Op: ">=", Value: tw.lo})
 	}
-	if !hi.IsZero() {
-		expr = cql.And(expr, &cql.Compare{Prop: col, Op: "<=", Value: hi})
+	if !tw.hi.IsZero() {
+		expr = cql.And(expr, &cql.Compare{Prop: col, Op: "<=", Value: tw.hi})
 	}
-	return expr, nil
+	return expr
 }
 
 func parseDatetime(value string) (time.Time, time.Time, error) {

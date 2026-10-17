@@ -358,12 +358,18 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	dt, err := datetimeFilter(r, info)
+	tw, err := parseTimeWindow(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	filter = cql.And(filter, dt)
+	if tw.set && info.Kind != "view" {
+		if info.TimeColumn == nil || *info.TimeColumn == "" {
+			http.Error(w, "collection has no time column", http.StatusBadRequest)
+			return
+		}
+		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, tw))
+	}
 	order, err := s.sortOrder(ctx, r, info)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -372,7 +378,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	var matched *int64
 	if r.URL.Query().Get("numberMatched") == "true" {
-		count, ok, err := s.countMatches(ctx, info, bbox, query, filter)
+		count, ok, err := s.countMatches(ctx, info, bbox, query, filter, tw)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -395,7 +401,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		if crsFn != nil {
 			sink = &crsWriter{base: sink, fn: crsFn}
 		}
-		s.streamView(ctx, sink, info, bbox, query, filter, offset, overview)
+		s.streamView(ctx, sink, info, bbox, query, filter, offset, overview, tw)
 		fw.close(pageLink(r, limit, offset, fw.count))
 		return
 	}
@@ -685,9 +691,9 @@ func typedLiteral(value string) any {
 	return value
 }
 
-func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr) (int64, bool, error) {
+func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, tw timeWindow) (int64, bool, error) {
 	if info.Kind == "view" {
-		if bbox != nil || query != "" || filter != nil {
+		if bbox != nil || query != "" || filter != nil || tw.set {
 			return 0, false, nil
 		}
 		members, err := parseMembers(info)
@@ -997,12 +1003,18 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	dt, err := datetimeFilter(r, info)
+	dt, err := parseTimeWindow(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	filter = cql.And(filter, dt)
+	if dt.set && info.Kind != "view" {
+		if info.TimeColumn == nil || *info.TimeColumn == "" {
+			http.Error(w, "collection has no time column", http.StatusBadRequest)
+			return
+		}
+		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, dt))
+	}
 	query := r.URL.Query().Get("q")
 	tile := maptile.New(uint32(x), uint32(y), maptile.Zoom(z))
 	bound := tile.Bound()
@@ -1041,7 +1053,7 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	var collection *orbgeojson.FeatureCollection
 	switch {
 	case info.Kind == "view":
-		collection, err = s.viewTile(ctx, info, bbox, query, filter, tier)
+		collection, err = s.viewTile(ctx, info, bbox, query, filter, tier, dt)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

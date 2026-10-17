@@ -85,7 +85,7 @@ func (s *Server) memberFilter(member viewMember) (cql.Expr, error) {
 	return cql.Parse(member.Filter)
 }
 
-func (s *Server) streamView(ctx context.Context, fw featureSink, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int, overview *int) {
+func (s *Server) streamView(ctx context.Context, fw featureSink, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int, overview *int, tw timeWindow) {
 	members, err := parseMembers(info)
 	if err != nil {
 		slog.Error("view members parse failed", "collection", info.Name, "error", err)
@@ -107,6 +107,12 @@ func (s *Server) streamView(ctx context.Context, fw featureSink, info store.Coll
 			continue
 		}
 		effective := cql.And(memberFilter, cql.Rename(filter, member.renameFn()))
+		if tw.set {
+			if mi.TimeColumn == nil || *mi.TimeColumn == "" {
+				continue
+			}
+			effective = cql.And(effective, datetimeExpr(*mi.TimeColumn, tw))
+		}
 		sink := &memberWriter{base: fw, member: member}
 		if effective == nil && query == "" {
 			tier := 0
@@ -133,7 +139,7 @@ func (s *Server) streamView(ctx context.Context, fw featureSink, info store.Coll
 	}
 }
 
-func (s *Server) viewTile(ctx context.Context, info store.CollectionInfo, bbox [4]float64, query string, filter cql.Expr, tier int) (*orbgeojson.FeatureCollection, error) {
+func (s *Server) viewTile(ctx context.Context, info store.CollectionInfo, bbox [4]float64, query string, filter cql.Expr, tier int, tw timeWindow) (*orbgeojson.FeatureCollection, error) {
 	members, err := parseMembers(info)
 	if err != nil {
 		return nil, err
@@ -149,6 +155,12 @@ func (s *Server) viewTile(ctx context.Context, info store.CollectionInfo, bbox [
 			continue
 		}
 		effective := cql.And(memberFilter, cql.Rename(filter, member.renameFn()))
+		if tw.set {
+			if mi.TimeColumn == nil || *mi.TimeColumn == "" {
+				continue
+			}
+			effective = cql.And(effective, datetimeExpr(*mi.TimeColumn, tw))
+		}
 		var source *orbgeojson.FeatureCollection
 		if effective == nil && query == "" {
 			rows, err := s.Store.Chunks(ctx, mi.Name, &bbox, s.MaxChunks, tier)
