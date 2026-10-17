@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -356,8 +357,8 @@ func overviews(ctx context.Context, ing *store.Ingest, collection string, cols [
 		return err
 	}
 	specs := []*tierSpec{
-		{tier: 1, stride: 10, tol: 0.01, minDiag: 0.05, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
-		{tier: 2, stride: 100, tol: 0.05, minDiag: 0.2, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
+		{tier: 1, stride: 10, tol: 0.01, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
+		{tier: 2, stride: 100, tol: 0.05, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
 	}
 	flush := func(spec *tierSpec) error {
 		if len(spec.batch) == 0 {
@@ -408,12 +409,11 @@ func overviews(ctx context.Context, ing *store.Ingest, collection string, cols [
 }
 
 type tierSpec struct {
-	tier    int
-	stride  int
-	tol     float64
-	minDiag float64
-	batch   []chunk.InputFeature
-	sizer   *sizer
+	tier   int
+	stride int
+	tol    float64
+	batch  []chunk.InputFeature
+	sizer  *sizer
 }
 
 func tierFeature(c *chunk.Chunk, f *flattypes.Feature, spec *tierSpec) (chunk.InputFeature, bool) {
@@ -427,15 +427,12 @@ func tierFeature(c *chunk.Chunk, f *flattypes.Feature, spec *tierSpec) (chunk.In
 	}
 	simp := geom
 	if !pointFamily(geom) {
-		simp = simplify.DouglasPeucker(spec.tol).Simplify(geom)
-		if simp == nil {
-			return chunk.InputFeature{}, false
-		}
-		bound := simp.Bound()
-		dx := bound.Max[0] - bound.Min[0]
-		dy := bound.Max[1] - bound.Min[1]
-		if dx*dx+dy*dy < spec.minDiag*spec.minDiag {
-			return chunk.InputFeature{}, false
+		bound := geom.Bound()
+		if math.Hypot(bound.Max[0]-bound.Min[0], bound.Max[1]-bound.Min[1]) > spec.tol*4 {
+			simp = simplify.DouglasPeucker(spec.tol).Simplify(geom)
+			if simp == nil {
+				return chunk.InputFeature{}, false
+			}
 		}
 	}
 	body, err := json.Marshal(orbgeojson.NewGeometry(simp))

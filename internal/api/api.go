@@ -1034,10 +1034,7 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case query == "" && filter == nil:
-		rows, err := s.Store.Chunks(ctx, id, &bbox, s.MaxChunks, tier)
-		if err == nil && len(rows) == 0 && tier > 0 {
-			rows, err = s.Store.Chunks(ctx, id, &bbox, s.MaxChunks, 0)
-		}
+		rows, err := s.tileChunks(ctx, id, &bbox, tier)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1062,6 +1059,9 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	filterShapes(collection, shapes)
+	if len(collection.Features) > maxTileFeatures {
+		collection.Features = strideSample(collection.Features, maxTileFeatures)
+	}
 	data, empty, err := tiles.Bytes(id, collection, tile)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1154,15 +1154,64 @@ func (s *Server) tileMatches(ctx context.Context, info store.CollectionInfo, bbo
 	return fc, nil
 }
 
+const (
+	maxTileFeatures = 250000
+	tileChunkMax    = 8
+)
+
+func (s *Server) tileChunks(ctx context.Context, collection string, bbox *[4]float64, tier int) ([]store.ChunkRow, error) {
+	metas, err := s.Store.ChunkMetas(ctx, collection, bbox, s.MaxChunks, tier, 0)
+	if err != nil {
+		return nil, err
+	}
+	if len(metas) == 0 && tier > 0 {
+		if metas, err = s.Store.ChunkMetas(ctx, collection, bbox, s.MaxChunks, 0, 0); err != nil {
+			return nil, err
+		}
+	}
+	if len(metas) > tileChunkMax {
+		stride := (len(metas) + tileChunkMax - 1) / tileChunkMax
+		kept := metas[:0]
+		for i := 0; i < len(metas); i += stride {
+			kept = append(kept, metas[i])
+		}
+		metas = kept
+	}
+	ids := make([]int64, len(metas))
+	for i, meta := range metas {
+		ids[i] = meta.ID
+	}
+	rows := s.fetchRows(ctx, collection, ids)
+	kept := rows[:0]
+	for _, row := range rows {
+		if row.Data != nil {
+			kept = append(kept, row)
+		}
+	}
+	return kept, nil
+}
+
 func tierForZoom(z int) int {
 	switch {
-	case z <= 2:
-		return 2
 	case z <= 4:
+		return 2
+	case z <= 7:
 		return 1
 	default:
 		return 0
 	}
+}
+
+func strideSample(features []*orbgeojson.Feature, max int) []*orbgeojson.Feature {
+	if len(features) <= max {
+		return features
+	}
+	stride := (len(features) + max - 1) / max
+	kept := features[:0]
+	for i := 0; i < len(features); i += stride {
+		kept = append(kept, features[i])
+	}
+	return kept
 }
 
 func tierForBounds(bbox *[4]float64) int {

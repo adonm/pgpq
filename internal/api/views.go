@@ -176,10 +176,7 @@ func (s *Server) viewTile(ctx context.Context, info store.CollectionInfo, bbox [
 		}
 		var source *orbgeojson.FeatureCollection
 		if effective == nil && query == "" {
-			rows, err := s.Store.Chunks(ctx, mi.Name, &bbox, s.MaxChunks, tier)
-			if err == nil && len(rows) == 0 && tier > 0 {
-				rows, err = s.Store.Chunks(ctx, mi.Name, &bbox, s.MaxChunks, 0)
-			}
+			rows, err := s.tileChunks(ctx, mi.Name, &bbox, tier)
 			if err != nil {
 				continue
 			}
