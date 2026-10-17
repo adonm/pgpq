@@ -21,7 +21,7 @@ Design decisions are recorded in [DESIGN.md](DESIGN.md).
 - A view is catalog metadata: an ordered member list with per-member CQL2 filters and column mappings (union-by-name, projection and rename); items, tiles and manifests union members live, and views are read-only and one level deep.
 - Read clients can fetch `/collections/{id}/manifest` and prune chunks locally, downloading only the FlatGeobuf chunks they need; chunk responses are immutable, with `Cache-Control` and ETags.
 - The raw chunk and manifest endpoints can be locked with `--admin-token` (bearer auth); OGC endpoints stay open and always apply server-side filtering. Filtered FlatGeobuf is served as an alternate encoding of items, never as raw chunks, so clients cannot bypass filters.
-- CQL2-text `filter=` supports comparisons, `IN`, `BETWEEN`, `LIKE`, `IS NULL` and `AND`/`OR`/`NOT`; clauses compile to type-guarded SQL over the jsonb sidecar, with equality served by GIN containment.
+- CQL2-text `filter=` supports comparisons, `IN`, `BETWEEN`, `LIKE`, `IS NULL` and `AND`/`OR`/`NOT`; clauses compile to type-guarded SQL over the jsonb sidecar, with equality served by GIN containment. Spatial `S_INTERSECTS(geometry, ...)` accepts polygonal WKT or GeoJSON: chunks are pruned by the shape's bounds and features are tested exactly in Go (top-level AND only).
 - The server is one small Go binary: huma for the OGC metadata endpoints, streaming handlers for items, tiles, and raw chunks.
 
 The core path needs zero PostgreSQL extensions and runs on plain Amazon Aurora PostgreSQL (16–18); optional accelerators are discovered at startup via `pg_available_extensions`.

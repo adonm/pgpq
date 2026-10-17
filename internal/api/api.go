@@ -24,6 +24,7 @@ import (
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
+	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
 	"github.com/adonm/postfgb/internal/tiles"
 )
@@ -370,6 +371,20 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, tw))
 	}
+	extracted, spatials, err := cql.ExtractSpatial(filter)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	filter = extracted
+	shapes := spatialShapes(spatials)
+	bbox, ok := mergeBBox(bbox, shapes)
+	if !ok {
+		w.Header().Set("Content-Type", "application/geo+json")
+		fw := newFeatureWriter(w, limit, nil)
+		fw.close("")
+		return
+	}
 	order, err := s.sortOrder(ctx, r, info)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -377,7 +392,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query().Get("q")
 	var matched *int64
-	if r.URL.Query().Get("numberMatched") == "true" {
+	if r.URL.Query().Get("numberMatched") == "true" && len(shapes) == 0 {
 		count, ok, err := s.countMatches(ctx, info, bbox, query, filter, tw)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -401,12 +416,15 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		if crsFn != nil {
 			sink = &crsWriter{base: sink, fn: crsFn}
 		}
+		if len(shapes) > 0 {
+			sink = &spatialWriter{base: sink, shapes: shapes}
+		}
 		s.streamView(ctx, sink, info, bbox, query, filter, offset, overview, tw)
 		fw.close(pageLink(r, limit, offset, fw.count))
 		return
 	}
 	if flatgeobuf {
-		s.writeFGB(ctx, w, id, bbox, query, filter, order, offset, limit, 0)
+		s.writeFGB(ctx, w, id, bbox, query, filter, order, shapes, offset, limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
@@ -418,6 +436,9 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	if crsFn != nil {
 		sink = &crsWriter{base: sink, fn: crsFn}
 	}
+	if len(shapes) > 0 {
+		sink = &spatialWriter{base: sink, shapes: shapes}
+	}
 	switch {
 	case order != nil:
 		s.streamSorted(ctx, sink, info, bbox, query, filter, order, offset)
@@ -427,6 +448,9 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		tier := tierForBounds(bbox)
 		if overview != nil {
 			tier = *overview
+		}
+		if len(shapes) > 0 {
+			tier = 0
 		}
 		s.streamBBox(ctx, sink, info, bbox, offset, tier)
 	}
@@ -748,8 +772,8 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
-func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, offset, limit, tier int) {
-	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, order, offset, limit, tier)
+func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit, tier int) {
+	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, order, shapes, offset, limit, tier)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -769,12 +793,12 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, id string,
 	w.Write(data)
 }
 
-func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	if len(order) > 0 {
-		return s.collectSorted(ctx, id, bbox, query, filter, order, offset, limit)
+		return s.collectSorted(ctx, id, bbox, query, filter, order, shapes, offset, limit)
 	}
 	if query != "" || filter != nil {
-		return s.collectMatches(ctx, id, bbox, query, filter, offset, limit)
+		return s.collectMatches(ctx, id, bbox, query, filter, shapes, offset, limit)
 	}
 	var features []*flattypes.Feature
 	var header *flattypes.Header
@@ -830,7 +854,11 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 				return nil, nil, err
 			}
 			for _, f := range feats {
-				if !inBounds(c.GeoJSON(f), bbox) {
+				g := c.GeoJSON(f)
+				if !inBounds(g, bbox) {
+					continue
+				}
+				if len(shapes) > 0 && !intersectsShapes(shapes, tiles.ToOrb(g.Geometry)) {
 					continue
 				}
 				if skipped < offset {
@@ -851,15 +879,15 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 	return features, header, nil
 }
 
-func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	matches, err := s.Store.Matches(ctx, id, bbox, query, filter, limit, offset)
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.collectMatchRows(ctx, id, bbox, matches)
+	return s.collectMatchRows(ctx, id, bbox, shapes, matches)
 }
 
-func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float64, matches []store.FeatureMatch) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float64, shapes []geo.Shape, matches []store.FeatureMatch) ([]*flattypes.Feature, *flattypes.Header, error) {
 	ords := map[int64]map[int]bool{}
 	var ids []int64
 	for _, m := range matches {
@@ -902,7 +930,11 @@ func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float
 				if !set[i] {
 					continue
 				}
-				if !inBounds(c.GeoJSON(f), bbox) {
+				g := c.GeoJSON(f)
+				if !inBounds(g, bbox) {
+					continue
+				}
+				if len(shapes) > 0 && !intersectsShapes(shapes, tiles.ToOrb(g.Geometry)) {
 					continue
 				}
 				features = append(features, f)
@@ -1015,6 +1047,13 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		}
 		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, dt))
 	}
+	extracted, spatials, err := cql.ExtractSpatial(filter)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	filter = extracted
+	shapes := spatialShapes(spatials)
 	query := r.URL.Query().Get("q")
 	tile := maptile.New(uint32(x), uint32(y), maptile.Zoom(z))
 	bound := tile.Bound()
@@ -1026,6 +1065,9 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		if overview != nil {
 			tier = *overview
 		}
+	}
+	if len(shapes) > 0 {
+		tier = 0
 	}
 	version, err := s.cacheVersion(ctx, info)
 	if err != nil {
@@ -1086,6 +1128,7 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	filterShapes(collection, shapes)
 	data, empty, err := tiles.Bytes(id, collection, tile)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

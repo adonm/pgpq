@@ -9,7 +9,9 @@ import (
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
+	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
+	"github.com/adonm/postfgb/internal/tiles"
 )
 
 const sortedCacheBudget = 32 << 20
@@ -90,7 +92,7 @@ func (s *Server) streamSorted(ctx context.Context, sink featureSink, info store.
 	}
 }
 
-func (s *Server) collectSorted(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectSorted(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	matches, err := s.Store.Sorted(ctx, id, bbox, query, filter, order, limit, offset)
 	if err != nil {
 		return nil, nil, err
@@ -111,7 +113,11 @@ func (s *Server) collectSorted(ctx context.Context, id string, bbox *[4]float64,
 		} else if !sameColumns(header, entry.chunk.Header()) {
 			return nil, nil, errors.New("collection chunks have differing schemas")
 		}
-		if !inBounds(entry.chunk.GeoJSON(entry.feats[m.Ord]), bbox) {
+		g := entry.chunk.GeoJSON(entry.feats[m.Ord])
+		if !inBounds(g, bbox) {
+			continue
+		}
+		if len(shapes) > 0 && !intersectsShapes(shapes, tiles.ToOrb(g.Geometry)) {
 			continue
 		}
 		features = append(features, entry.feats[m.Ord])
