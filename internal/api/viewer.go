@@ -15,7 +15,6 @@ import (
 
 const (
 	rustgisWeb         = "https://web.rustgis.app/"
-	projectLayerMax    = 2000000
 	projectTileMaxZoom = 16
 	projectCameraWorld = 40075016.685578488 / 512
 )
@@ -107,6 +106,7 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 	base := baseURL(r)
 	layers := []map[string]any{}
 	tiles := []map[string]any{}
+	children := []map[string]any{}
 	next := 1
 	for _, info := range infos {
 		title := info.Name
@@ -127,13 +127,18 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 			"overlay":     true,
 			"layers":      []string{info.Name},
 		})
-		if s.projectFeatureCount(r, info) > projectLayerMax {
+		if s.projectFeatureCount(r, info) > flatgeobufLimit {
 			continue
 		}
 		geometry := s.collectionGeometryType(r, info)
 		if geometry == "" {
 			continue
 		}
+		children = append(children, map[string]any{
+			"layer":      next,
+			"collection": info.Name,
+			"source_url": base + "/collections/" + escaped + "/items",
+		})
 		layers = append(layers, map[string]any{
 			"id":      next,
 			"name":    title,
@@ -163,17 +168,29 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 		})
 		next++
 	}
+	groups := []map[string]any{}
+	if len(children) > 0 {
+		groups = append(groups, map[string]any{
+			"id":       1,
+			"name":     "postfgb",
+			"url":      base + "/collections",
+			"kind":     "ogcapi",
+			"expanded": false,
+			"children": children,
+		})
+	}
 	project := map[string]any{
 		"format":     1,
 		"name":       "postfgb",
 		"active_map": 0,
 		"maps": []map[string]any{{
-			"name":          "postfgb",
-			"layers":        layers,
-			"tiles":         tiles,
-			"basemap":       "Paper",
-			"projection":    "WebMercator",
-			"next_layer_id": next,
+			"name":           "postfgb",
+			"layers":         layers,
+			"service_groups": groups,
+			"tiles":          tiles,
+			"basemap":        "Paper",
+			"projection":     "WebMercator",
+			"next_layer_id":  next,
 			"camera": map[string]any{
 				"center": map[string]float64{"x": 0, "y": 0},
 				"res":    projectCameraWorld,
@@ -239,13 +256,13 @@ func (s *Server) projectFeatureCount(r *http.Request, info store.CollectionInfo)
 	}
 	members, err := parseMembers(info)
 	if err != nil {
-		return projectLayerMax + 1
+		return flatgeobufLimit + 1
 	}
 	var total int64
 	for _, member := range members {
 		mi, err := s.Store.Collection(r.Context(), member.Collection)
 		if err != nil {
-			return projectLayerMax + 1
+			return flatgeobufLimit + 1
 		}
 		total += mi.FeatureCount
 	}
