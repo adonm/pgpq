@@ -34,7 +34,6 @@ type Server struct {
 	MaxChunks    int
 	DefaultLimit int
 	AdminToken   string
-	RustgisCLI   string
 	OGR2OGR      string
 	sweepMu      sync.Mutex
 	lastSweep    time.Time
@@ -43,7 +42,6 @@ type Server struct {
 type Config struct {
 	Store      *store.Store
 	AdminToken string
-	RustgisCLI string
 	OGR2OGR    string
 }
 
@@ -64,7 +62,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	api := humago.New(mux, huma.DefaultConfig("postfgb", "0.1.0"))
 	s := &Server{
 		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 50000,
-		AdminToken: cfg.AdminToken, RustgisCLI: cfg.RustgisCLI, OGR2OGR: cfg.OGR2OGR,
+		AdminToken: cfg.AdminToken, OGR2OGR: cfg.OGR2OGR,
 	}
 	s.register(api)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)

@@ -40,7 +40,6 @@ func serve(args []string) {
 	addr := fs.String("addr", ":8080", "listen address")
 	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
 	adminToken := fs.String("admin-token", os.Getenv("POSTFGB_ADMIN_TOKEN"), "bearer token for the manifest, chunk, export and ingest endpoints")
-	rustgisCLI := fs.String("rustgis-cli", os.Getenv("POSTFGB_RUSTGIS_CLI"), "rustgis-cli binary used by the export endpoint")
 	ogr2ogr := fs.String("ogr2ogr", os.Getenv("POSTFGB_OGR2OGR"), "ogr2ogr binary used by the export endpoint")
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
 	fs.Parse(args)
@@ -68,7 +67,6 @@ func serve(args []string) {
 	fatal(http.ListenAndServe(*addr, api.NewWithConfig(api.Config{
 		Store:      st,
 		AdminToken: *adminToken,
-		RustgisCLI: *rustgisCLI,
 		OGR2OGR:    *ogr2ogr,
 	})))
 }

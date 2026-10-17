@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,18 +20,17 @@ type exportFormat struct {
 	ext       string
 	mediaType string
 	driver    string
-	rustgis   bool
 	gdalArgs  []string
 }
 
 var exportFormats = map[string]exportFormat{
 	"fgb":     {ext: ".fgb", mediaType: "application/flatgeobuf"},
-	"geojson": {ext: ".geojson", mediaType: "application/geo+json", driver: "GeoJSON", rustgis: true},
-	"gpkg":    {ext: ".gpkg", mediaType: "application/geopackage+sqlite3", driver: "GPKG", rustgis: true},
-	"parquet": {ext: ".parquet", mediaType: "application/vnd.apache.parquet", driver: "Parquet", rustgis: true},
-	"shp":     {ext: ".zip", mediaType: "application/zip", driver: "ESRI Shapefile", rustgis: true},
-	"kml":     {ext: ".kml", mediaType: "application/vnd.google-earth.kml+xml", driver: "KML", rustgis: true},
-	"gpx":     {ext: ".gpx", mediaType: "application/gpx+xml", driver: "GPX", rustgis: true},
+	"geojson": {ext: ".geojson", mediaType: "application/geo+json", driver: "GeoJSON"},
+	"gpkg":    {ext: ".gpkg", mediaType: "application/geopackage+sqlite3", driver: "GPKG"},
+	"parquet": {ext: ".parquet", mediaType: "application/vnd.apache.parquet", driver: "Parquet"},
+	"shp":     {ext: ".zip", mediaType: "application/zip", driver: "ESRI Shapefile"},
+	"kml":     {ext: ".kml", mediaType: "application/vnd.google-earth.kml+xml", driver: "KML"},
+	"gpx":     {ext: ".gpx", mediaType: "application/gpx+xml", driver: "GPX"},
 }
 
 func formatList() string {
@@ -65,7 +63,7 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "format must be one of "+formatList(), http.StatusBadRequest)
 		return
 	}
-	if format != "fgb" && s.RustgisCLI == "" && s.OGR2OGR == "" {
+	if format != "fgb" && s.OGR2OGR == "" {
 		http.Error(w, "no converter configured", http.StatusNotImplemented)
 		return
 	}
@@ -131,24 +129,13 @@ func (s *Server) convertExport(ctx context.Context, fgb []byte, format string) (
 	if err := os.WriteFile(in, fgb, 0o600); err != nil {
 		return nil, "", err
 	}
-	switch {
-	case spec.rustgis && s.RustgisCLI != "":
-		path, err := json.Marshal(out)
-		if err != nil {
-			return nil, "", err
-		}
-		command := fmt.Sprintf(`share.exportLayer={"path":%s}`, path)
-		if err := runTool(ctx, s.RustgisCLI, "run", "--data", in, "--cmd", command); err != nil {
-			return nil, "", err
-		}
-	case s.OGR2OGR != "":
-		args := append([]string{"-f", spec.driver}, spec.gdalArgs...)
-		args = append(args, out, in)
-		if err := runTool(ctx, s.OGR2OGR, args...); err != nil {
-			return nil, "", err
-		}
-	default:
+	if s.OGR2OGR == "" {
 		return nil, "", errors.New("no converter configured for " + format)
+	}
+	args := append([]string{"-f", spec.driver}, spec.gdalArgs...)
+	args = append(args, out, in)
+	if err := runTool(ctx, s.OGR2OGR, args...); err != nil {
+		return nil, "", err
 	}
 	body, err := os.ReadFile(out)
 	if err != nil {
