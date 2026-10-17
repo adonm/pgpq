@@ -13,11 +13,6 @@ import (
 )
 
 func (s *Server) putCollection(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOK(r.Header.Get("Authorization")) {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	if !store.ValidName(r.PathValue("id")) {
 		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
 		return
@@ -169,11 +164,6 @@ func (s *Server) putViewDoc(w http.ResponseWriter, r *http.Request, id string, m
 }
 
 func (s *Server) deleteCollection(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOK(r.Header.Get("Authorization")) {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	err := s.Store.DropCollection(r.Context(), r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "collection not found", http.StatusNotFound)

@@ -3,7 +3,6 @@ package api
 import (
 	"bufio"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,14 +32,14 @@ type Server struct {
 	Store        *store.Store
 	MaxChunks    int
 	DefaultLimit int
-	AdminToken   string
+	ReadOnly     bool
 	sweepMu      sync.Mutex
 	lastSweep    time.Time
 }
 
 type Config struct {
-	Store      *store.Store
-	AdminToken string
+	Store    *store.Store
+	ReadOnly bool
 }
 
 type link struct {
@@ -60,15 +59,17 @@ func NewWithConfig(cfg Config) http.Handler {
 	api := humago.New(mux, huma.DefaultConfig("postfgb", "0.1.0"))
 	s := &Server{
 		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 50000,
-		AdminToken: cfg.AdminToken,
+		ReadOnly: cfg.ReadOnly,
 	}
 	s.register(api)
 	mux.HandleFunc("GET /{$}", s.landingPage)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/items/{featureID}", s.feature)
-	mux.HandleFunc("PUT /collections/{id}", s.putCollection)
-	mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
-	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
+	if !s.ReadOnly {
+		mux.HandleFunc("PUT /collections/{id}", s.putCollection)
+		mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
+		mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
+	}
 	mux.HandleFunc("GET /stac", s.stacCatalog)
 	mux.HandleFunc("GET /stac/collections", s.stacCollections)
 	mux.HandleFunc("GET /stac/collections/{id}", s.stacCollection)
@@ -94,7 +95,9 @@ func (s *Server) register(api huma.API) {
 	huma.Register(api, huma.Operation{OperationID: "collection", Method: "GET", Path: "/collections/{id}", Summary: "Collection"}, s.collection)
 	huma.Register(api, huma.Operation{OperationID: "queryables", Method: "GET", Path: "/collections/{id}/queryables", Summary: "Queryables"}, s.queryables)
 	huma.Register(api, huma.Operation{OperationID: "collectionTilesets", Method: "GET", Path: "/collections/{id}/tiles", Summary: "Collection tilesets"}, s.tilesets)
-	huma.Register(api, huma.Operation{OperationID: "manifest", Method: "GET", Path: "/collections/{id}/manifest", Summary: "Chunk manifest"}, s.manifest)
+	if !s.ReadOnly {
+		huma.Register(api, huma.Operation{OperationID: "manifest", Method: "GET", Path: "/collections/{id}/manifest", Summary: "Chunk manifest"}, s.manifest)
+	}
 	huma.Register(api, huma.Operation{OperationID: "tileMatrixSets", Method: "GET", Path: "/tileMatrixSets", Summary: "Tile matrix sets"}, s.tileMatrixSets)
 	huma.Register(api, huma.Operation{OperationID: "tileMatrixSet", Method: "GET", Path: "/tileMatrixSets/{tileMatrixSetId}", Summary: "Tile matrix set"}, s.tileMatrixSet)
 }
@@ -893,20 +896,7 @@ func sameColumns(a, b *flattypes.Header) bool {
 	return true
 }
 
-func (s *Server) adminOK(auth string) bool {
-	if s.AdminToken == "" {
-		return true
-	}
-	token := strings.TrimPrefix(auth, "Bearer ")
-	return token != auth && subtle.ConstantTimeCompare([]byte(token), []byte(s.AdminToken)) == 1
-}
-
 func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOK(r.Header.Get("Authorization")) {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	chunkID, err := strconv.ParseInt(r.PathValue("chunkID"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid chunk id", http.StatusBadRequest)

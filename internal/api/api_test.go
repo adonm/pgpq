@@ -47,20 +47,28 @@ func TestPageLink(t *testing.T) {
 	}
 }
 
-func TestAdminOK(t *testing.T) {
-	s := &Server{AdminToken: "secret"}
-	if s.adminOK("") {
-		t.Fatal("expected unauthorized without token")
+func TestReadOnlyWorker(t *testing.T) {
+	h := NewWithConfig(Config{ReadOnly: true})
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{"PUT", "/collections/demo"},
+		{"DELETE", "/collections/demo"},
+		{"GET", "/collections/demo/chunks/1"},
+		{"GET", "/collections/demo/manifest"},
 	}
-	if s.adminOK("Bearer wrong") {
-		t.Fatal("expected unauthorized with wrong token")
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+		if w.Code != 404 && w.Code != 405 {
+			t.Fatalf("%s %s = %d, want 404 or 405", tc.method, tc.path, w.Code)
+		}
 	}
-	if !s.adminOK("Bearer secret") {
-		t.Fatal("expected authorized")
-	}
-	open := &Server{}
-	if !open.adminOK("") {
-		t.Fatal("expected open server to allow")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 200 {
+		t.Fatalf("GET / = %d, want 200", w.Code)
 	}
 }
 

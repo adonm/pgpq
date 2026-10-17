@@ -29,7 +29,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## Write path — HTTP only
 
-- `PUT /collections/{id}` (admin bearer token) is content-negotiated. A FlatGeobuf body — the default for any non-JSON content type — creates or replaces the collection from a whole file, not pre-chunked uploads. A JSON body writes catalog metadata: the STAC collection document is stored and echoed by the STAC facade, and its `title`, `description`, `license` and `keywords` feed the OGC collection; `members` instead defines or replaces a union view. `DELETE /collections/{id}` drops the collection.
+- `PUT /collections/{id}` (writable mode) is content-negotiated. A FlatGeobuf body — the default for any non-JSON content type — creates or replaces the collection from a whole file, not pre-chunked uploads. A JSON body writes catalog metadata: the STAC collection document is stored and echoed by the STAC facade, and its `title`, `description`, `license` and `keywords` feed the OGC collection; `members` instead defines or replaces a union view. `DELETE /collections/{id}` drops the collection.
 - Loads are transactional: rows go into uncommitted staging tables, indexes and overview tiers are built there, and the commit swaps partitions — drop the old ones, attach the staged ones — so parent-level locks last milliseconds. Readers keep serving the previous version for the whole load and see either the old collection or the new one.
 - Failure or disconnect rolls back; staging tables disappear with the transaction and loads are retried from scratch (accepted cost).
 - Input CRS: any CRS supported by the pure-Go projection layer ([wroge/wgs84](https://github.com/wroge/wgs84)) is reprojected to WGS84 during ingest; anything else is rejected at upload time. Stored geometries are 2D (Z dropped), and chunks declare EPSG:4326.
@@ -61,7 +61,7 @@ There is no server-side format conversion: `items?f=flatgeobuf` is the bulk down
 - Images build with [ko](https://ko.build): no Dockerfile, static base (`cgr.dev/chainguard/static`), CGO_ENABLED=0, git-SHA tags, SBOM support.
 - mise provides Go, just, hk and ko. hk runs gofmt/vet/tidy/tests on every commit; GitHub Actions runs unit tests, PostgreSQL-backed integration tests (ingest -> query -> tiles) and a ko image build.
 - `/healthz` and `/readyz`; a minimal hand-rolled Prometheus `/metrics`; graceful shutdown; pool-size flags; structured request logging. Deployment stays raw binary / generated image; no release pipeline yet.
-- The admin bearer token gates manifest, chunks, ingest, delete and view management. OGC endpoints stay open and always filter server-side.
+- Workers run in two modes: writable (ingest, delete, raw chunk and manifest endpoints) and readonly (only the OGC and STAC read surface; writes and raw chunks are not registered, migrations are skipped by default). The server does no authentication — production deploys terminate auth in an adjacent layer (Kubernetes Gateway API, reverse proxy or service mesh) and expose only readonly workers publicly. Filtered endpoints always filter server-side.
 
 ## Performance
 
@@ -74,6 +74,7 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 - Dynamic per-collection tables and schema-per-collection storage.
 - Async ingest jobs and upload sessions (push stays a synchronous, transactional replace); versioned blue/green replace. STAC pull ingests and an adjacent ogr2ogr loader: loading is a client-side pipeline that streams FlatGeobuf into the same PUT, so the server keeps no background jobs and stays a single dependency-free binary.
 - cgo PROJ; the rustgis-cli export engine; server-side format conversion (clients convert FlatGeobuf locally); runtime extension accelerators (probing stays as a future hook).
+- Server-side auth (bearer tokens, API keys, OAuth): the app ships no auth; production terminates auth in an adjacent layer and picks the worker mode (writable/readonly) that matches the route it is deployed on.
 
 ## Build order
 

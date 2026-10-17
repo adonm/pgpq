@@ -19,6 +19,6 @@ Read DESIGN.md before changing behavior — it is the contract. README describes
 - No comments in Go; names and small functions carry meaning.
 - Smallest reasonable implementation; stdlib first; a dependency must justify itself.
 - No cgo; the core path requires no PostgreSQL extensions.
-- Filters are enforced server-side, always; raw chunk and manifest endpoints stay behind the admin token.
+- Filters are enforced server-side, always; raw chunk and manifest endpoints are served in writable mode only. No auth in the app: it runs behind an adjacent auth layer, with readonly workers for public traffic.
 - Migrations are append-only; never edit an applied migration.
 - Behavior changes and DESIGN.md changes ship in the same commit.

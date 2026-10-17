@@ -47,6 +47,9 @@ demo: pg-up fixtures
 serve:
     go run ./cmd/postfgb serve --dsn "{{dsn}}"
 
+serve-readonly:
+    go run ./cmd/postfgb serve --dsn "{{dsn}}" --readonly
+
 
 export coll format out:
     docker run --rm --network host -v "{{justfile_directory()}}:/work" -w /work {{gdal}} ogr2ogr -f "{{format}}" "/work/{{out}}" "OAPIF:{{url}}" "{{coll}}"

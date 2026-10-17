@@ -173,18 +173,32 @@ func parseStacLimit(r *http.Request, fallback int) (int, error) {
 
 func (s *Server) stacCatalog(w http.ResponseWriter, r *http.Request) {
 	base := baseURL(r)
+	links := []map[string]any{
+		{"rel": "self", "href": base + "/stac", "type": "application/json"},
+		{"rel": "root", "href": base + "/stac", "type": "application/json"},
+		{"rel": "data", "href": base + "/stac/collections", "type": "application/json"},
+		{"rel": "conformance", "href": base + "/conformance", "type": "application/json"},
+	}
+	if infos, err := s.Store.Collections(r.Context()); err == nil {
+		for _, info := range infos {
+			child := map[string]any{
+				"rel":  "child",
+				"href": base + "/stac/collections/" + info.Name,
+				"type": "application/json",
+			}
+			if info.Title != nil && *info.Title != "" {
+				child["title"] = *info.Title
+			}
+			links = append(links, child)
+		}
+	}
 	writeJSON(w, map[string]any{
 		"type":         "Catalog",
 		"stac_version": stacVersion,
 		"id":           "postfgb",
 		"title":        "postfgb",
 		"description":  "OGC API Features and OGC Tiles over FlatGeobuf chunks stored in PostgreSQL",
-		"links": []map[string]any{
-			{"rel": "self", "href": base + "/stac", "type": "application/json"},
-			{"rel": "root", "href": base + "/stac", "type": "application/json"},
-			{"rel": "data", "href": base + "/stac/collections", "type": "application/json"},
-			{"rel": "conformance", "href": base + "/conformance", "type": "application/json"},
-		},
+		"links":        links,
 	})
 }
 
@@ -239,10 +253,10 @@ func (s *Server) stacCollectionBody(ctx context.Context, info store.CollectionIn
 		title = *info.Title
 	}
 	out["title"] = title
-	if info.Description != nil {
+	if info.Description != nil && *info.Description != "" {
 		out["description"] = *info.Description
 	} else if _, ok := out["description"]; !ok {
-		out["description"] = info.Name
+		out["description"] = title
 	}
 	if info.License != nil && *info.License != "" {
 		out["license"] = *info.License

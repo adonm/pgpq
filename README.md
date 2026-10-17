@@ -20,7 +20,7 @@ Design decisions are recorded in [DESIGN.md](DESIGN.md).
 - Tiles are served through a shared Postgres cache keyed by collection version, tile coordinates and filter; ETags derive from the same version, so CDNs and clients revalidate with cheap 304s.
 - A view is catalog metadata: an ordered member list with per-member CQL2 filters and column mappings (union-by-name, projection and rename); items, tiles and manifests union members live, and views are read-only and one level deep.
 - Read clients can fetch `/collections/{id}/manifest` and prune chunks locally, downloading only the FlatGeobuf chunks they need; chunk responses are immutable, with `Cache-Control` and ETags.
-- The raw chunk and manifest endpoints can be locked with `--admin-token` (bearer auth); OGC endpoints stay open and always apply server-side filtering. Filtered FlatGeobuf is served as an alternate encoding of items, never as raw chunks, so clients cannot bypass filters.
+- The raw chunk and manifest endpoints are part of the writable surface only; readonly workers serve just the OGC and STAC read paths, so public deployments never expose raw chunks that bypass filtering. The server does no authentication — run it behind your own auth layer (Kubernetes Gateway API, reverse proxy, service mesh). Filtered FlatGeobuf is served as an alternate encoding of items, never as raw chunks, so clients cannot bypass filters.
 - CQL2-text `filter=` supports comparisons, `IN`, `BETWEEN`, `LIKE`, `IS NULL` and `AND`/`OR`/`NOT`; clauses compile to type-guarded SQL over the jsonb sidecar, with equality served by GIN containment. Spatial `S_INTERSECTS(geometry, ...)` accepts polygonal WKT or GeoJSON: chunks are pruned by the shape's bounds and features are tested exactly in Go (top-level AND only).
 - The server is one small Go binary: huma for the OGC metadata endpoints, streaming handlers for items, tiles, and raw chunks.
 
@@ -37,6 +37,10 @@ just demo           # PostgreSQL 18 via Docker plus OSM fixture layers (Layercak
 just serve          # http://localhost:8080
 ```
 
+Workers run in two modes. `postfgb serve` is writable: ingest, delete and raw chunk/manifest access. `postfgb serve --readonly` (or `POSTFGB_READONLY=true`) is the serving mode: only the OGC and STAC read surface is registered — writes and raw chunks answer 404 — and migrations are skipped unless `--migrate` is passed explicitly. Workers are stateless (`--addr` sets the listen address) and all speak to the same PostgreSQL, so scale out with as many readonly replicas as you like.
+
+The server never authenticates requests. Put it behind your own auth layer — Kubernetes Gateway API, an ingress with path rules, a reverse proxy or a service mesh — and expose only the readonly workers publicly; keep the writable ones (which can ingest and stream raw chunks) on an internal route. Readonly workers still render tiles through the shared PostgreSQL tile cache; with a strictly read-only database role the renders simply go uncached, which is logged, not fatal.
+
 ```sh
 curl localhost:8080/collections
 curl "localhost:8080/collections/bench/items?bbox=-10,45,10,55&limit=100"
@@ -44,6 +48,7 @@ curl 'localhost:8080/collections/bench/items?q="feature-42"'
 curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
 curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i between 5 and 7 and name like 'feature-6%'"
 curl -X PUT -H "Content-Type: application/flatgeobuf" --data-binary @features.fgb "localhost:8080/collections/demo"
+curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "localhost:8080/collections/demo"
 ```
 
 ## Endpoints
@@ -57,14 +62,14 @@ curl -X PUT -H "Content-Type: application/flatgeobuf" --data-binary @features.fg
 | `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters including spatial `S_INTERSECTS`, paged (50,000 default); `overview=auto|0|1|2` picks or bypasses the overview tier (views serve full detail unless set); `numberMatched=true` adds the match count; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/items/{featureId}` | single feature; ids come from an id-like property (`id`, `fid`, ...) or the synthetic `chunkID-ord` |
 | `/collections/{id}/queryables` | JSON Schema of the filterable properties |
-| `PUT /collections/{id}?sortable=&id_column=&time_column=` | create-or-replace the collection from a whole FlatGeobuf body (any non-JSON content type); transactional, reprojected to WGS84, readers keep the old version until the swap; `sortable` declares up to 4 indexed columns (admin token) |
-| `PUT /collections/{id}` (JSON body) | write the STAC collection document: `title`, `description`, `license`, `keywords` and free-form STAC fields are stored and echoed by the STAC facade; `members` defines or replaces a union view (admin token) |
-| `DELETE /collections/{id}` | drop a collection and its partitions (admin token) |
+| `PUT /collections/{id}?sortable=&id_column=&time_column=` (writable) | create-or-replace the collection from a whole FlatGeobuf body (any non-JSON content type); transactional, reprojected to WGS84, readers keep the old version until the swap; `sortable` declares up to 4 indexed columns |
+| `PUT /collections/{id}` (JSON body, writable) | write the STAC collection document: `title`, `description`, `license`, `keywords` and free-form STAC fields are stored and echoed by the STAC facade; `members` defines or replaces a union view |
+| `DELETE /collections/{id}` (writable) | drop a collection and its partitions |
 | `/stac`, `/stac/collections`, `/stac/collections/{id}` | STAC catalog and collections |
 | `/stac/collections/{id}/items?bbox=&datetime=&limit=` | STAC items (full detail, GeoJSON) |
 | `/stac/search` | STAC item search, `GET` and `POST` |
-| `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
-| `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
+| `/collections/{id}/chunks/{chunkID}` (writable) | raw FlatGeobuf chunk |
+| `/collections/{id}/manifest` (writable) | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
 | `/collections/{id}/tiles` | tileset list |
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile; accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms and honor `overview=` |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
