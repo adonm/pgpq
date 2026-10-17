@@ -44,11 +44,20 @@ func (s *Server) lookupFeature(ctx context.Context, info store.CollectionInfo, f
 		if _, isString := values[0].(string); !isString {
 			values = append(values, fid)
 		}
+		var lastErr error
 		for _, value := range values {
 			feature, ok, err := s.featureByProperty(ctx, info, *info.IDColumn, value)
-			if err != nil || ok {
-				return feature, ok, err
+			if ok {
+				return feature, true, nil
 			}
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			lastErr = nil
+		}
+		if lastErr != nil {
+			return nil, false, lastErr
 		}
 	}
 	chunkID, ord, ok := parseSyntheticID(fid)

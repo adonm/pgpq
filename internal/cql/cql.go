@@ -124,7 +124,7 @@ func equalityExpr(col string, args *[]any, prop string, value any) string {
 		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::text"))
 	case int, int64, float64:
 		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::numeric"))
-		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::text"))
+		clauses = append(clauses, equalityClause(col, key, placeholder(args, fmt.Sprint(value))+"::text"))
 	default:
 		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::text"))
 	}
