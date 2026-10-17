@@ -3,11 +3,9 @@ package store
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -82,7 +80,6 @@ type ChunkMeta struct {
 type CollectionInfo struct {
 	Name         string
 	Kind         string
-	Members      []byte
 	Version      int64
 	ChunkCount   int64
 	FeatureCount int64
@@ -453,9 +450,6 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	if _, err := tx.Exec(ctx, `delete from collections where name = $1`, name); err != nil {
 		return err
 	}
-	if err := dropViewMember(ctx, tx, name); err != nil {
-		return err
-	}
 	return tx.Commit(ctx)
 }
 
@@ -463,100 +457,6 @@ type memberJSON struct {
 	Collection string            `json:"collection"`
 	Filter     string            `json:"filter,omitempty"`
 	Columns    map[string]string `json:"columns,omitempty"`
-}
-
-func dropViewMember(ctx context.Context, tx pgx.Tx, name string) error {
-	rows, err := tx.Query(ctx, `select name, members from collections where kind = 'view' and members is not null`)
-	if err != nil {
-		return err
-	}
-	type view struct {
-		name    string
-		members []byte
-	}
-	var views []view
-	for rows.Next() {
-		var v view
-		if err := rows.Scan(&v.name, &v.members); err != nil {
-			rows.Close()
-			return err
-		}
-		views = append(views, v)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, v := range views {
-		var members []memberJSON
-		if json.Unmarshal(v.members, &members) != nil {
-			continue
-		}
-		kept := make([]memberJSON, 0, len(members))
-		for _, member := range members {
-			if member.Collection != name {
-				kept = append(kept, member)
-			}
-		}
-		if len(kept) == len(members) {
-			continue
-		}
-		if len(kept) == 0 {
-			if _, err := tx.Exec(ctx, `delete from collections where name = $1`, v.name); err != nil {
-				return err
-			}
-			slog.Info("view dropped with its last member", "view", v.name, "member", name)
-			continue
-		}
-		body, err := json.Marshal(kept)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `update collections set members = $2::jsonb, version = version + 1, updated_at = now() where name = $1`, v.name, body); err != nil {
-			return err
-		}
-		slog.Info("view member removed", "view", v.name, "member", name, "remaining", len(kept))
-	}
-	return nil
-}
-
-func (s *Store) PutView(ctx context.Context, name string, members []byte, meta CollectionMeta) error {
-	if !collectionName.MatchString(name) {
-		return fmt.Errorf("invalid collection name %q", name)
-	}
-	tag, err := s.Pool.Exec(ctx, `
-		insert into collections (name, kind, members) values ($1, 'view', $2::jsonb)
-		on conflict (name) do update set kind = 'view', members = excluded.members, version = collections.version + 1, updated_at = now()
-		where collections.kind = 'view'`, name, members)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrConflict
-	}
-	var set []string
-	args := []any{name}
-	if meta.Title != nil {
-		args = append(args, nullable(*meta.Title))
-		set = append(set, fmt.Sprintf("title = $%d", len(args)))
-	}
-	if meta.Description != nil {
-		args = append(args, nullable(*meta.Description))
-		set = append(set, fmt.Sprintf("description = $%d", len(args)))
-	}
-	if meta.License != nil {
-		args = append(args, nullable(*meta.License))
-		set = append(set, fmt.Sprintf("license = $%d", len(args)))
-	}
-	if meta.Keywords != nil {
-		args = append(args, *meta.Keywords)
-		set = append(set, fmt.Sprintf("keywords = coalesce($%d::text[], '{}')", len(args)))
-	}
-	if len(set) == 0 {
-		return nil
-	}
-	_, err = s.Pool.Exec(ctx, `update collections set `+strings.Join(set, ", ")+` where name = $1`, args...)
-	return err
 }
 
 func (s *Store) PutMeta(ctx context.Context, name string, doc []byte, meta CollectionMeta) error {
@@ -963,7 +863,7 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, kind, members, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable, title, description, license, keywords, stac from collections`
+const collectionColumns = `select name, kind, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable, title, description, license, keywords, stac from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
@@ -974,7 +874,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	var out []CollectionInfo
 	for rows.Next() {
 		var info CollectionInfo
-		if err := rows.Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
+		if err := rows.Scan(&info.Name, &info.Kind, &info.Version, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable,
 			&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac); err != nil {
 			return nil, err
@@ -987,7 +887,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, error) {
 	var info CollectionInfo
 	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
-		Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
+		Scan(&info.Name, &info.Kind, &info.Version, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable,
 			&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac)
 	if errors.Is(err, pgx.ErrNoRows) {

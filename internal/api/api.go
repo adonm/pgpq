@@ -33,7 +33,6 @@ type Server struct {
 	ReadOnly     bool
 	metrics      *metrics
 	virtuals     *virtualCache
-	viewFiles    *viewFileCache
 	sweepMu      sync.Mutex
 	lastSweep    time.Time
 }
@@ -64,7 +63,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	}
 	s := &Server{
 		Store: cfg.Store, MaxChunks: 64, MaxBytes: cfg.MaxBytes, DefaultLimit: 50000,
-		ReadOnly: cfg.ReadOnly, metrics: newMetrics(), virtuals: newVirtualCache(), viewFiles: newViewFileCache(),
+		ReadOnly: cfg.ReadOnly, metrics: newMetrics(), virtuals: newVirtualCache(),
 	}
 	s.register(api)
 	mux.HandleFunc("GET /{$}", s.landingPage)
@@ -247,60 +246,15 @@ func (s *Server) collectionBody(ctx context.Context, info store.CollectionInfo) 
 	return body
 }
 
-func (s *Server) collectionExtent(ctx context.Context, info store.CollectionInfo) *extent {
-	if info.Kind != "view" {
-		if info.MinX == nil || info.MinY == nil || info.MaxX == nil || info.MaxY == nil {
-			return nil
-		}
-		out := &extent{Spatial: spatialExtent{
-			BBox: [][]float64{{*info.MinX, *info.MinY, *info.MaxX, *info.MaxY}},
-		}}
-		if info.TimeMin != nil && info.TimeMax != nil {
-			out.Temporal = timeInterval(*info.TimeMin, *info.TimeMax)
-		}
-		return out
-	}
-	members, err := parseMembers(info)
-	if err != nil {
+func (s *Server) collectionExtent(_ context.Context, info store.CollectionInfo) *extent {
+	if info.MinX == nil || info.MinY == nil || info.MaxX == nil || info.MaxY == nil {
 		return nil
 	}
-	var minX, minY, maxX, maxY float64
-	var timeMin, timeMax *time.Time
-	spatial := false
-	for _, member := range members {
-		mi, err := s.Store.Collection(ctx, member.Collection)
-		if err != nil {
-			continue
-		}
-		if mi.MinX != nil && mi.MinY != nil && mi.MaxX != nil && mi.MaxY != nil {
-			if !spatial {
-				minX, minY, maxX, maxY = *mi.MinX, *mi.MinY, *mi.MaxX, *mi.MaxY
-				spatial = true
-			} else {
-				minX = min(minX, *mi.MinX)
-				minY = min(minY, *mi.MinY)
-				maxX = max(maxX, *mi.MaxX)
-				maxY = max(maxY, *mi.MaxY)
-			}
-		}
-		if mi.TimeMin != nil && mi.TimeMax != nil {
-			if timeMin == nil || mi.TimeMin.Before(*timeMin) {
-				timeMin = mi.TimeMin
-			}
-			if timeMax == nil || mi.TimeMax.After(*timeMax) {
-				timeMax = mi.TimeMax
-			}
-		}
-	}
-	if !spatial && timeMin == nil {
-		return nil
-	}
-	out := &extent{}
-	if spatial {
-		out.Spatial = spatialExtent{BBox: [][]float64{{minX, minY, maxX, maxY}}}
-	}
-	if timeMin != nil && timeMax != nil {
-		out.Temporal = timeInterval(*timeMin, *timeMax)
+	out := &extent{Spatial: spatialExtent{
+		BBox: [][]float64{{*info.MinX, *info.MinY, *info.MaxX, *info.MaxY}},
+	}}
+	if info.TimeMin != nil && info.TimeMax != nil {
+		out.Temporal = timeInterval(*info.TimeMin, *info.TimeMax)
 	}
 	return out
 }
@@ -378,10 +332,6 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			matched = &count
 		}
 	}
-	if info.Kind == "view" && flatgeobuf {
-		s.writeViewFGB(ctx, w, r, info, q)
-		return
-	}
 	if flatgeobuf {
 		s.writeFGB(ctx, w, r, id, q.bbox, q.query, q.filter, q.order, q.shapes, q.offset, q.limit, 0)
 		return
@@ -398,10 +348,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	if len(q.shapes) > 0 {
 		sink = &spatialWriter{base: sink, shapes: q.shapes}
 	}
-	sinkFor := func(_ store.CollectionInfo, member viewMember) featureSink {
-		return &memberWriter{base: sink, member: member}
-	}
-	s.streamCollection(ctx, sinkFor, info, q)
+	s.streamCollection(ctx, sink, info, q)
 	fw.close(pageLink(r, limit, offset, fw.count))
 }
 
@@ -661,26 +608,11 @@ func typedLiteral(value string) any {
 }
 
 func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, tw timeWindow) (int64, bool, error) {
-	if info.Kind == "view" {
-		if bbox != nil || query != "" || filter != nil || tw.set {
+	if tw.set {
+		if info.TimeColumn == nil || *info.TimeColumn == "" {
 			return 0, false, nil
 		}
-		members, err := parseMembers(info)
-		if err != nil {
-			return 0, false, err
-		}
-		var total int64
-		for _, member := range members {
-			if member.Filter != "" {
-				return 0, false, nil
-			}
-			mi, err := s.Store.Collection(ctx, member.Collection)
-			if err != nil {
-				return 0, false, err
-			}
-			total += mi.FeatureCount
-		}
-		return total, true, nil
+		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, tw))
 	}
 	if query != "" || filter != nil {
 		count, err := s.Store.CountMatches(ctx, info.Name, bbox, query, filter)

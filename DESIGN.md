@@ -20,16 +20,9 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 - The `collections` catalog row carries per-collection stats (feature count, spatial and temporal extent, kind, members, declared sortable columns), operator metadata (title, description, license, keywords) and a `version` that bumps on every replace; the collection endpoints never scan chunk tables.
 - The core path requires zero PostgreSQL extensions; the legacy `pg_trgm` create is removed.
 
-## Views — managed union views
-
-- A view is catalog metadata: an ordered list of members, each a collection plus an optional CQL2 filter and column mapping. No extra storage.
-- Schema rule: union by name — member columns merge, missing columns are absent. The view can project and rename columns.
-- Members walk in order for paging; the manifest unions member chunk metadata (chunk URLs remain member-scoped). Items on views read full detail unless `overview=` asks otherwise. A view has no chunks of its own, so its range-readable FlatGeobuf is the union schema re-encoded, cached per member-version set.
-- Spatial and temporal extents are live unions of member extents. Views are read-only and exactly one level deep.
-
 ## Write path — HTTP only
 
-- `PUT /collections/{id}` (writable mode) is content-negotiated. A FlatGeobuf body — the default for any non-JSON content type — creates or replaces the collection from a whole file, not pre-chunked uploads. A JSON body writes catalog metadata: the STAC collection document is stored and echoed by the STAC facade, and its `title`, `description`, `license` and `keywords` feed the OGC collection; `members` instead defines or replaces a union view. `DELETE /collections/{id}` drops the collection.
+- `PUT /collections/{id}` (writable mode) is content-negotiated. A FlatGeobuf body — the default for any non-JSON content type — creates or replaces the collection from a whole file, not pre-chunked uploads. A JSON body writes catalog metadata: the STAC collection document is stored and echoed by the STAC facade, and its `title`, `description`, `license` and `keywords` feed the OGC collection. `DELETE /collections/{id}` drops the collection.
 - Loads are transactional: rows go into uncommitted staging tables, indexes and overview tiers are built there, and the commit swaps partitions — drop the old ones, attach the staged ones — so parent-level locks last milliseconds. Readers keep serving the previous version for the whole load and see either the old collection or the new one.
 - Failure or disconnect rolls back; staging tables disappear with the transaction and loads are retried from scratch (accepted cost).
 - Input CRS: any CRS supported by the pure-Go projection layer ([wroge/wgs84](https://github.com/wroge/wgs84)) is reprojected to WGS84 during ingest; anything else is rejected at upload time. Stored geometries are 2D (Z dropped), and chunks declare EPSG:4326.
@@ -41,7 +34,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## Read path
 
-- The RustGIS project at `/viewer.rgis` carries one range-readable `.fgb` layer per collection (native collections are complete at any size; views are the re-encoded union, capped at the export limit) plus a `service_groups` record pointing at the collection list so the OGC API service can be browsed and added from the app itself. RustGIS has no live OGC API Features layer kind: its service flow pages the collection and materializes it, which is why a project cannot express one.
+- The RustGIS project at `/viewer.rgis` carries, per collection, one range-readable `.fgb` layer per overview tier plus full detail, ordered coarsest first and named `<title> · 1%` / `· 10%` / `<title>`, each constrained to its zoom band with the app's `min_scale`/`max_scale` (a layer draws when `max_scale <= 1:scale <= min_scale`; tiers are probed per collection and `overview=` falls back to full detail when a tier is missing). All layers are `visible: false`; RustGIS has no layer-group node (its folders are filesystem paths) and no live OGC API Features layer kind — its service flow pages the collection and materializes it — so a zoom-switching set of file layers plus a `service_groups` record pointing at the collection list is how a project expresses both.
 - The read surface is CORS-open (`Access-Control-Allow-Origin: *`, ETag and Content-Crs exposed) so browser clients — the RustGIS web app embedded by the minimal `/viewer` host (an iframe on `web.rustgis.app/?embed&project=…`, fed by the project generated at `/viewer.rgis`: range-readable FlatGeobuf layers, all hidden by default), or any RustGIS build elsewhere — can query any deployment directly; the browser tooling is RustGIS itself, not a second API.
 
 - Unfiltered scans stream chunk windows in id order with no fixed chunk cap; offset paging stays exact at any collection size.

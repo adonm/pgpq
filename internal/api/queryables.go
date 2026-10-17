@@ -37,39 +37,6 @@ func (s *Server) queryables(ctx context.Context, in *collectionInput) (*queryabl
 	out.Body.Type = "object"
 	out.Body.Title = info.Name
 	out.Body.Properties = map[string]queryableType{}
-	if info.Kind == "view" {
-		members, err := parseMembers(info)
-		if err != nil {
-			return nil, err
-		}
-		for _, member := range members {
-			metas, err := s.Store.ChunkMetas(ctx, member.Collection, nil, 1, 0, 0)
-			if err != nil || len(metas) == 0 {
-				continue
-			}
-			var cols []struct {
-				Name string `json:"name"`
-				Type string `json:"type"`
-			}
-			if err := json.Unmarshal(metas[0].Columns, &cols); err != nil {
-				continue
-			}
-			for _, col := range cols {
-				name := col.Name
-				if len(member.Columns) > 0 {
-					dst, ok := member.Columns[col.Name]
-					if !ok {
-						continue
-					}
-					name = dst
-				}
-				if _, exists := out.Body.Properties[name]; !exists {
-					out.Body.Properties[name] = queryableTypeFor(col.Type)
-				}
-			}
-		}
-		return out, nil
-	}
 	metas, err := s.Store.ChunkMetas(ctx, in.ID, nil, 1, 0, 0)
 	if err != nil {
 		return nil, err

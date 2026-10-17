@@ -57,7 +57,7 @@ func (s *Server) observe(next http.Handler) http.Handler {
 		s.metrics.observe("postfgb_http_request_duration_seconds", labels, elapsed.Seconds())
 		s.metrics.add("postfgb_http_response_bytes_total", labels, int64(sw.bytes))
 		slog.Info("request",
-			"method", r.Method, "path", r.URL.Path, "route", route,
+			"method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery, "route", route,
 			"status", sw.status, "duration_ms", elapsed.Milliseconds(), "bytes", sw.bytes)
 	})
 }

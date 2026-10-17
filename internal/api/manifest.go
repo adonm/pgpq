@@ -47,22 +47,13 @@ func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutp
 	if err != nil {
 		return nil, err
 	}
-	version, err := s.cacheVersion(ctx, info)
-	if err != nil {
-		return nil, err
-	}
+	version := s.cacheVersion(info)
 	etag := `"` + version + `"`
 	if in.IfNoneMatch == etag {
 		return nil, huma.ErrorWithHeaders(huma.Status304NotModified(), http.Header{"ETag": {etag}})
 	}
 	out := &manifestOutput{ETag: etag}
 	out.Body.Collection = info.Name
-	if info.Kind == "view" {
-		if err := s.viewManifest(ctx, info, out); err != nil {
-			return nil, err
-		}
-		return out, nil
-	}
 	metas, err := s.Store.ChunkMetas(ctx, in.ID, nil, 1000000, 0, 0)
 	if err != nil {
 		return nil, err
@@ -76,47 +67,6 @@ func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutp
 		out.Body.Chunks = append(out.Body.Chunks, manifestChunkOf(in.ID, meta))
 	}
 	return out, nil
-}
-
-func (s *Server) viewManifest(ctx context.Context, info store.CollectionInfo, out *manifestOutput) error {
-	members, err := parseMembers(info)
-	if err != nil {
-		return err
-	}
-	var minX, minY, maxX, maxY float64
-	spatial := false
-	var featureCount int64
-	for _, member := range members {
-		mi, err := s.Store.Collection(ctx, member.Collection)
-		if err != nil {
-			return err
-		}
-		featureCount += mi.FeatureCount
-		if mi.MinX != nil && mi.MinY != nil && mi.MaxX != nil && mi.MaxY != nil {
-			if !spatial {
-				minX, minY, maxX, maxY = *mi.MinX, *mi.MinY, *mi.MaxX, *mi.MaxY
-				spatial = true
-			} else {
-				minX = min(minX, *mi.MinX)
-				minY = min(minY, *mi.MinY)
-				maxX = max(maxX, *mi.MaxX)
-				maxY = max(maxY, *mi.MaxY)
-			}
-		}
-		metas, err := s.Store.ChunkMetas(ctx, member.Collection, nil, 1000000, 0, 0)
-		if err != nil {
-			return err
-		}
-		for _, meta := range metas {
-			out.Body.Chunks = append(out.Body.Chunks, manifestChunkOf(member.Collection, meta))
-		}
-	}
-	out.Body.ChunkCount = len(out.Body.Chunks)
-	out.Body.FeatureCount = featureCount
-	if spatial {
-		out.Body.Extent = []float64{minX, minY, maxX, maxY}
-	}
-	return nil
 }
 
 func manifestChunkOf(collection string, meta store.ChunkMeta) manifestChunk {

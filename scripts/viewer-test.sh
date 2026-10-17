@@ -27,12 +27,22 @@ python3 - "$TMP/project.rgis" > "$TMP/inventory" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1]))["maps"][0]
 assert not p.get("tiles"), "project still carries vector tile layers"
-for l in p.get("layers", []):
+layers = p.get("layers", [])
+detail = [l for l in layers if "overview=" not in l["source"]["path"]]
+coarse = [l for l in layers if "overview=" in l["source"]["path"]]
+assert detail, "project has no full-detail layers"
+assert coarse, "project has no overview layers"
+for l in detail:
+    assert l.get("min_scale"), "detail layer %s has no min_scale" % l["name"]
+for l in coarse:
+    assert l.get("max_scale") or l.get("min_scale"), "overview layer %s has no scale range" % l["name"]
+for l in detail:
     src = l["source"]["path"].rsplit("/collections/", 1)[-1].split("/", 1)[0]
     print("layer", src, l["name"], sep="\t")
+print("coarse", coarse[0]["source"]["path"].rsplit("/collections/", 1)[-1].split("/", 1)[0], coarse[0]["name"], sep="\t")
 PY
 [ -s "$TMP/inventory" ] || { say "project has no feature layers"; exit 1; }
-say "project: $(grep -c '^layer' "$TMP/inventory") feature layer(s)"
+say "project: $(grep -c '^layer' "$TMP/inventory") detail layer(s); zoom-constrained overview layers present"
 
 if "$CLI" run --data "$TMP/project.rgis" --cmd 'info.project={}' 2>"$TMP/open.err" | grep -q '"layers"'; then
   say "ok   project opens"

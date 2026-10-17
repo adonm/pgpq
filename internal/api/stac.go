@@ -57,11 +57,11 @@ func newStacWriter(w http.ResponseWriter, matched *int64, base string, limit int
 	return sw
 }
 
-func (sw *stacWriter) add(g *chunk.Feature, info store.CollectionInfo, member viewMember) bool {
+func (sw *stacWriter) add(g *chunk.Feature, info store.CollectionInfo) bool {
 	if sw.count >= sw.limit {
 		return false
 	}
-	props := member.transformProps(g.Properties)
+	props := g.Properties
 	if props == nil {
 		props = map[string]any{}
 	}
@@ -131,13 +131,12 @@ func featureBounds(g *chunk.Feature) []float64 {
 }
 
 type stacMember struct {
-	w      *stacWriter
-	info   store.CollectionInfo
-	member viewMember
+	w    *stacWriter
+	info store.CollectionInfo
 }
 
 func (m *stacMember) add(g *chunk.Feature) bool {
-	return m.w.add(g, m.info, m.member)
+	return m.w.add(g, m.info)
 }
 
 func (m *stacMember) full() bool {
@@ -148,9 +147,9 @@ func (m *stacMember) remaining() int {
 	return m.w.limit - m.w.count
 }
 
-func (s *Server) stacSinkFor(sw *stacWriter, shapes []geo.Shape) func(store.CollectionInfo, viewMember) featureSink {
-	return func(info store.CollectionInfo, member viewMember) featureSink {
-		var sink featureSink = &stacMember{w: sw, info: info, member: member}
+func (s *Server) stacSinkFor(sw *stacWriter, shapes []geo.Shape, info store.CollectionInfo) func() featureSink {
+	return func() featureSink {
+		var sink featureSink = &stacMember{w: sw, info: info}
 		if len(shapes) > 0 {
 			sink = &spatialWriter{base: sink, shapes: shapes}
 		}
@@ -326,7 +325,7 @@ func (s *Server) stacItems(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
 	sw := newStacWriter(w, matched, baseURL(r), limit)
-	s.streamCollection(ctx, s.stacSinkFor(sw, q.shapes), info, q)
+	s.streamCollection(ctx, s.stacSinkFor(sw, q.shapes, info)(), info, q)
 	sw.close(pageLink(r, limit, offset, sw.count))
 }
 
@@ -480,24 +479,12 @@ func (s *Server) stacSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		matched = &total
 	}
-	var members []unionMember
-	for _, info := range infos {
-		if info.Kind == "view" {
-			vm, err := s.viewMembers(ctx, info)
-			if err != nil {
-				continue
-			}
-			members = append(members, vm...)
-		} else {
-			members = append(members, unionMember{info: info})
-		}
-	}
 	q := featureQuery{bbox: bbox, tw: tw, filter: filter, shapes: shapes, offset: offset, limit: limit}
 	zero := 0
 	q.overview = &zero
 	w.Header().Set("Content-Type", "application/geo+json")
 	sw := newStacWriter(w, matched, baseURL(r), limit)
-	s.streamUnion(ctx, members, s.stacSinkFor(sw, shapes), q.bbox, q.query, q.filter, q.offset, q.overview, q.tw)
+	s.streamCollections(ctx, infos, s.stacSinkFor(sw, shapes, store.CollectionInfo{}), q)
 	sw.close(stacNextLink(r, post, body, limit, offset, sw.count))
 }
 

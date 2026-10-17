@@ -3,9 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -102,8 +100,14 @@ func (s *Server) virtualFile(ctx context.Context, info store.CollectionInfo, tie
 	if err != nil {
 		return nil, err
 	}
+	if len(metas) == 0 && tier > 0 {
+		tier = 0
+		if metas, err = s.Store.ChunkMetas(ctx, info.Name, nil, 1_000_000, tier, 0); err != nil {
+			return nil, err
+		}
+	}
 	if len(metas) == 0 {
-		return nil, errors.New("collection has no chunks at that overview")
+		return nil, errors.New("collection has no chunks")
 	}
 	vf := &virtualFile{name: info.Name, version: info.Version}
 	items := make([]virtualItem, 0, len(metas))
@@ -454,10 +458,6 @@ func (s *Server) serveVirtualCollection(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if info.Kind != "native" {
-		s.serveViewFile(w, r)
-		return
-	}
 	tier := 0
 	if value := r.URL.Query().Get("overview"); value != "" && value != "auto" {
 		parsed, err := strconv.Atoi(value)
@@ -476,23 +476,6 @@ func (s *Server) serveVirtualCollection(w http.ResponseWriter, r *http.Request) 
 	s.serveVirtual(w, r, vf)
 }
 
-func (s *Server) cacheVersion(ctx context.Context, info store.CollectionInfo) (string, error) {
-	if info.Kind != "view" {
-		return strconv.FormatInt(info.Version, 10), nil
-	}
-	members, err := parseMembers(info)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.New()
-	h.Write(info.Members)
-	fmt.Fprintf(h, "|%d", info.Version)
-	for _, member := range members {
-		mi, err := s.Store.Collection(ctx, member.Collection)
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(h, "|%s:%d", mi.Name, mi.Version)
-	}
-	return hex.EncodeToString(h.Sum(nil))[:16], nil
+func (s *Server) cacheVersion(info store.CollectionInfo) string {
+	return strconv.FormatInt(info.Version, 10)
 }

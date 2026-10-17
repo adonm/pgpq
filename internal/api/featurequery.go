@@ -45,11 +45,12 @@ func (s *Server) parseFeatureQuery(ctx context.Context, r *http.Request, info st
 	if err != nil {
 		return q, err
 	}
-	if tw.set && info.Kind != "view" {
+	if tw.set {
 		if info.TimeColumn == nil || *info.TimeColumn == "" {
 			return q, errors.New("collection has no time column")
 		}
 		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, tw))
+		tw = timeWindow{}
 	}
 	extracted, spatials, err := cql.ExtractSpatial(filter)
 	if err != nil {
@@ -74,38 +75,52 @@ func (s *Server) parseFeatureQuery(ctx context.Context, r *http.Request, info st
 	return q, nil
 }
 
-func (s *Server) streamFeatureQuery(ctx context.Context, sink featureSink, info store.CollectionInfo, q featureQuery) {
+func (s *Server) streamCollection(ctx context.Context, sink featureSink, info store.CollectionInfo, q featureQuery) {
 	if q.empty {
 		return
 	}
-	switch {
-	case q.order != nil:
-		s.streamSorted(ctx, sink, info, q.bbox, q.query, q.filter, q.order, q.offset)
-	case q.query != "" || q.filter != nil:
-		s.streamMatches(ctx, sink, info, q.bbox, q.query, q.filter, q.offset)
-	default:
-		tier := tierForBounds(q.bbox)
-		if q.overview != nil {
-			tier = *q.overview
-		}
-		if len(q.shapes) > 0 {
-			tier = 0
-		}
-		s.streamBBox(ctx, sink, info, q.bbox, q.offset, tier)
-	}
+	s.streamCollections(ctx, []store.CollectionInfo{info}, func() featureSink { return sink }, q)
 }
 
-func (s *Server) streamCollection(ctx context.Context, sinkFor func(store.CollectionInfo, viewMember) featureSink, info store.CollectionInfo, q featureQuery) {
-	if q.empty {
-		return
-	}
-	if info.Kind == "view" {
-		members, err := s.viewMembers(ctx, info)
-		if err != nil {
+func (s *Server) streamCollections(ctx context.Context, infos []store.CollectionInfo, sinkFor func() featureSink, q featureQuery) {
+	remaining := q.offset
+	for _, info := range infos {
+		sink := sinkFor()
+		if sink.full() {
 			return
 		}
-		s.streamUnion(ctx, members, sinkFor, q.bbox, q.query, q.filter, q.offset, q.overview, q.tw)
-		return
+		filter := q.filter
+		if q.tw.set {
+			if info.TimeColumn == nil || *info.TimeColumn == "" {
+				continue
+			}
+			filter = cql.And(filter, datetimeExpr(*info.TimeColumn, q.tw))
+		}
+		if filter == nil && q.query == "" && q.order == nil {
+			tier := tierForBounds(q.bbox)
+			if q.overview != nil {
+				tier = *q.overview
+			}
+			if len(q.shapes) > 0 {
+				tier = 0
+			}
+			remaining -= s.streamBBox(ctx, sink, info, q.bbox, remaining, tier)
+			continue
+		}
+		if q.order != nil {
+			s.streamSorted(ctx, sink, info, q.bbox, q.query, filter, q.order, remaining)
+			remaining = 0
+			continue
+		}
+		skip := 0
+		if remaining > 0 {
+			count, err := s.Store.CountMatches(ctx, info.Name, q.bbox, q.query, filter)
+			if err != nil {
+				continue
+			}
+			skip = min(remaining, int(count))
+		}
+		remaining -= skip
+		s.streamMatches(ctx, sink, info, q.bbox, q.query, filter, skip)
 	}
-	s.streamFeatureQuery(ctx, sinkFor(info, viewMember{}), info, q)
 }

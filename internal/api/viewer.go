@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"html/template"
 	"math"
@@ -15,8 +16,10 @@ import (
 )
 
 const (
-	rustgisWeb         = "https://web.rustgis.app/"
-	projectCameraWorld = 40075016.685578488 / 512
+	rustgisWeb           = "https://web.rustgis.app/"
+	projectCameraWorld   = 40075016.685578488 / 512
+	projectOverviewScale = 1000000.0
+	projectDetailScale   = 140000.0
 )
 
 var viewerPage = template.Must(template.New("viewer").Parse(`<!doctype html>
@@ -113,7 +116,6 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 		if info.Title != nil && *info.Title != "" {
 			title = *info.Title
 		}
-		escaped := url.PathEscape(info.Name)
 		geometry := s.collectionGeometryType(r, info)
 		if geometry == "" {
 			continue
@@ -121,36 +123,11 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 		children = append(children, map[string]any{
 			"layer":      next,
 			"collection": info.Name,
-			"source_url": base + "/collections/" + escaped + "/items",
+			"source_url": base + "/collections/" + url.PathEscape(info.Name) + "/items",
 		})
-		layers = append(layers, map[string]any{
-			"id":      next,
-			"name":    title,
-			"visible": false,
-			"dataset": map[string]any{
-				"name":          title,
-				"geometry_type": geometry,
-				"fields":        []any{},
-				"features":      []any{},
-			},
-			"renderer": map[string]any{"Single": map[string]any{
-				"fill": []int{80, 160, 240, 120}, "stroke": []int{60, 120, 180, 255},
-				"stroke_width": 0.7, "size": 3.0, "marker": "Circle",
-			}},
-			"labels": map[string]any{
-				"enabled": false, "field": "name", "size": 10.0,
-				"color": []int{43, 43, 43, 255}, "halo": true, "bold": false,
-				"min_scale": nil, "max_scale": nil, "closest": nil, "farthest": nil,
-				"placement": "Auto",
-			},
-			"transparency": 0.0,
-			"expanded":     true,
-			"selectable":   true,
-			"source": map[string]any{
-				"path": base + "/collections/" + escaped + "/items.fgb",
-			},
-		})
-		next++
+		for _, layer := range s.projectLayers(r.Context(), base, info, title, geometry, &next) {
+			layers = append(layers, layer)
+		}
 	}
 	centerX, centerY, res := projectCameraWorld, 0.0, projectCameraWorld
 	if minX, minY, maxX, maxY, ok := catalogExtent(infos); ok {
@@ -216,19 +193,11 @@ func catalogExtent(infos []store.CollectionInfo) (float64, float64, float64, flo
 }
 
 func (s *Server) collectionGeometryType(r *http.Request, info store.CollectionInfo) string {
-	collection := info.Name
-	if info.Kind == "view" {
-		members, err := parseMembers(info)
-		if err != nil || len(members) == 0 {
-			return ""
-		}
-		collection = members[0].Collection
-	}
-	metas, err := s.Store.ChunkMetas(r.Context(), collection, nil, 1, 0, 0)
+	metas, err := s.Store.ChunkMetas(r.Context(), info.Name, nil, 1, 0, 0)
 	if err != nil || len(metas) == 0 {
 		return ""
 	}
-	row, err := s.Store.ChunkByID(r.Context(), collection, metas[0].ID)
+	row, err := s.Store.ChunkByID(r.Context(), info.Name, metas[0].ID)
 	if err != nil {
 		return ""
 	}
@@ -263,21 +232,59 @@ func (s *Server) collectionGeometryType(r *http.Request, info store.CollectionIn
 	return ""
 }
 
-func (s *Server) projectFeatureCount(r *http.Request, info store.CollectionInfo) int64 {
-	if info.Kind != "view" {
-		return info.FeatureCount
+type projectLayerSpec struct {
+	label string
+	query string
+	min   any
+	max   any
+}
+
+func (s *Server) projectLayers(ctx context.Context, base string, info store.CollectionInfo, title, geometry string, next *int) []map[string]any {
+	specs := []projectLayerSpec{{min: projectDetailScale}}
+	if s.hasTier(ctx, info.Name, 1) {
+		specs = append([]projectLayerSpec{{label: " · 10%", query: "?overview=1", min: projectOverviewScale, max: projectDetailScale}}, specs...)
 	}
-	members, err := parseMembers(info)
-	if err != nil {
-		return flatgeobufLimit + 1
+	if s.hasTier(ctx, info.Name, 2) {
+		specs = append([]projectLayerSpec{{label: " · 1%", query: "?overview=2", max: projectOverviewScale}}, specs...)
 	}
-	var total int64
-	for _, member := range members {
-		mi, err := s.Store.Collection(r.Context(), member.Collection)
-		if err != nil {
-			return flatgeobufLimit + 1
+	layers := make([]map[string]any, 0, len(specs))
+	for _, spec := range specs {
+		layer := map[string]any{
+			"id":      *next,
+			"name":    title + spec.label,
+			"visible": false,
+			"dataset": map[string]any{
+				"name":          title + spec.label,
+				"geometry_type": geometry,
+				"fields":        []any{},
+				"features":      []any{},
+			},
+			"renderer": map[string]any{"Single": map[string]any{
+				"fill": []int{80, 160, 240, 120}, "stroke": []int{60, 120, 180, 255},
+				"stroke_width": 0.7, "size": 3.0, "marker": "Circle",
+			}},
+			"labels": map[string]any{
+				"enabled": false, "field": "name", "size": 10.0,
+				"color": []int{43, 43, 43, 255}, "halo": true, "bold": false,
+				"min_scale": nil, "max_scale": nil, "closest": nil, "farthest": nil,
+				"placement": "Auto",
+			},
+			"transparency": 0.0,
+			"expanded":     true,
+			"selectable":   true,
+			"min_scale":    spec.min,
+			"max_scale":    spec.max,
+			"source": map[string]any{
+				"path": base + "/collections/" + url.PathEscape(info.Name) + "/items.fgb" + spec.query,
+			},
 		}
-		total += mi.FeatureCount
+		layers = append(layers, layer)
+		*next++
 	}
-	return total
+	return layers
+}
+
+func (s *Server) hasTier(ctx context.Context, collection string, tier int) bool {
+	metas, err := s.Store.ChunkMetas(ctx, collection, nil, 1, tier, 0)
+	return err == nil && len(metas) > 0
 }
