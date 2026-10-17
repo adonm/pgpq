@@ -86,6 +86,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /stac/search", s.stacSearch)
 	mux.HandleFunc("POST /stac/search", s.stacSearch)
 	mux.HandleFunc("GET /viewer", s.viewer)
+	mux.HandleFunc("GET /viewer.rgis", s.viewerProject)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
@@ -378,7 +379,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if info.Kind == "view" && flatgeobuf {
-		http.Error(w, "flatgeobuf export of views is not supported", http.StatusNotImplemented)
+		s.writeViewFGB(ctx, w, info, q)
 		return
 	}
 	if flatgeobuf {

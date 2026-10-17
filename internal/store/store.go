@@ -548,6 +548,9 @@ func (s *Store) PurgeTileCache(ctx context.Context) error {
 }
 
 func (i *Ingest) Commit(ctx context.Context) error {
+	if _, err := i.tx.Exec(ctx, `set local lock_timeout = '30s'`); err != nil {
+		return err
+	}
 	if err := i.createIndexes(ctx); err != nil {
 		return err
 	}
