@@ -5,6 +5,6 @@ just = "latest"
 "aqua:ko-build/ko" = "latest"
 
 [env]
-POSTFGB_DSN = "postgres://postgres:postgres@localhost:5432/postfgb?sslmode=disable"
+_.file = ".env"
 GOFLAGS = "-p=2"
 GOMEMLIMIT = "2GiB"

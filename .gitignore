@@ -7,3 +7,5 @@ bench/*.fgb
 *.parquet
 export.fgb
 postfgb-image.tar
+.env
+tmpgen/

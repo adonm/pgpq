@@ -41,7 +41,7 @@ func fatal(err error) {
 
 func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", ":8080", "listen address")
+	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
 	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
 	maxConns := fs.Int("max-conns", 0, "maximum PostgreSQL pool connections (0 keeps the driver default)")
 	minConns := fs.Int("min-conns", 0, "minimum idle PostgreSQL pool connections (0 keeps the driver default)")
