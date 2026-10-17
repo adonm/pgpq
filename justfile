@@ -8,6 +8,12 @@ default:
 build:
     go build ./...
 
+image repo:
+    KO_DOCKER_REPO="{{repo}}" ko build ./cmd/postfgb
+
+image-tar:
+    ko build --push=false --tarball=postfgb-image.tar ./cmd/postfgb
+
 fmt:
     gofmt -w .
 

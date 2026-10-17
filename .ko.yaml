@@ -1,0 +1,7 @@
+defaultBaseImage: cgr.dev/chainguard/static
+builds:
+  - id: postfgb
+    dir: ./cmd/postfgb
+    ldflags:
+      - -s
+      - -w

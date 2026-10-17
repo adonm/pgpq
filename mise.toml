@@ -2,6 +2,7 @@
 go = "1.27.2"
 just = "latest"
 "aqua:jdx/hk" = "2.6.0"
+"aqua:ko-build/ko" = "latest"
 
 [env]
 POSTFGB_DSN = "postgres://postgres:postgres@localhost:5432/postfgb?sslmode=disable"

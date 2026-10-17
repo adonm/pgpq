@@ -8,7 +8,7 @@ Design decisions live in [DESIGN.md](DESIGN.md); the agent guide is [AGENTS.md](
 
 ## Development setup
 
-Requirements: [mise](https://mise.jdx.dev) (installs Go, just and hk per `mise.toml`) and Docker. Benchmarks use GDAL: a local install, or the bench script pulls `ghcr.io/osgeo/gdal:alpine-small-latest`.
+Requirements: [mise](https://mise.jdx.dev) (installs Go, just, hk and ko per `mise.toml`) and Docker. Benchmarks use GDAL: a local install, or the bench script pulls `ghcr.io/osgeo/gdal:alpine-small-latest`.
 
 ```sh
 mise install
@@ -30,6 +30,7 @@ Run `just` for the full list. The common ones:
 | `just gen` | generate 1M synthetic features into `bench/features.geojson` |
 | `just ingest` | chunk and load the generated file |
 | `just serve` | run the OGC API server on `:8080` |
+| `just image-tar` | build the container image with ko |
 | `just demo` | pg-up + gen + ingest |
 | `just bench` | GDAL client benchmark against a running server |
 
