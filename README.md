@@ -74,7 +74,7 @@ curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile; accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms and honor `overview=` |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
 | `/api` | OpenAPI 3.0 definition (OGC content type) |
-| `/viewer` | embedded [RustGIS](https://web.rustgis.app) web app: pick a collection and it loads as a FlatGeobuf layer (`?embed&data=…`), with a STAC search shortcut and a max-features cap for huge collections |
+| `/viewer` | embedded [RustGIS](https://web.rustgis.app) web app: pick a collection and it loads as a FlatGeobuf layer (`?embed&data=…`), with a STAC search shortcut and a max-features cap for huge collections; on screens under 860 px the collection list becomes a bottom sheet behind a tab bar |
 | `/healthz` | liveness probe, always 200 |
 | `/readyz` | readiness probe: PostgreSQL ping plus migration check |
 | `/metrics` | Prometheus text metrics: requests, durations, bytes, tiles, chunks, ingest counters and pool gauges |
