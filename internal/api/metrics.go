@@ -23,8 +23,6 @@ var metricHelp = map[string]string{
 	"postfgb_http_requests_total":           "HTTP requests by route, method and status.",
 	"postfgb_http_request_duration_seconds": "HTTP request duration by route and method.",
 	"postfgb_http_response_bytes_total":     "HTTP response body bytes by route and method.",
-	"postfgb_tile_cache_lookups_total":      "Tile cache lookups by result.",
-	"postfgb_tiles_rendered_total":          "MVT tiles rendered from chunks.",
 	"postfgb_chunk_fetches_total":           "Raw chunk downloads.",
 	"postfgb_ingest_total":                  "Collection ingests by result.",
 	"postfgb_ingest_features_total":         "Features ingested.",

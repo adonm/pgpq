@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/adonm/postfgb/internal/store"
-	"github.com/adonm/postfgb/internal/tiles"
 )
 
 func TestSplitBatches(t *testing.T) {
@@ -38,17 +37,6 @@ func TestBudgetMetas(t *testing.T) {
 	trimmed, cut = budgetMetas(metas, 4)
 	if !cut || len(trimmed) != 1 {
 		t.Fatalf("single: %v %v", trimmed, cut)
-	}
-}
-
-func TestTilesForBounds(t *testing.T) {
-	x0, x1, y0, y1 := tiles.BoundsFor([4]float64{-180, -85, 180, 85}, 0)
-	if x0 != 0 || x1 != 0 || y0 != 0 || y1 != 0 {
-		t.Fatalf("z0 = %d %d %d %d", x0, x1, y0, y1)
-	}
-	x0, x1, y0, y1 = tiles.BoundsFor([4]float64{-180, -85, 180, 85}, 2)
-	if x0 != 0 || x1 != 3 || y0 != 0 || y1 != 3 {
-		t.Fatalf("z2 = %d %d %d %d", x0, x1, y0, y1)
 	}
 }
 

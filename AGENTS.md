@@ -12,7 +12,7 @@ Read DESIGN.md before changing behavior — it is the contract. README describes
 ## Environment
 
 - mise provides Go, just, hk and ko. Docker provides PostgreSQL and GDAL for verification.
-- Verify with GDAL as an OGC client before calling any read-path work done: `ogrinfo`/`ogr2ogr` against `OAPIF:http://localhost:8080`, tiles through `/vsicurl_streaming/...mvt`. `ghcr.io/osgeo/gdal:ubuntu-full-latest` has the MVT driver.
+- Verify with GDAL as an OGC client before calling any read-path work done: `ogrinfo`/`ogr2ogr` against `OAPIF:http://localhost:8080` and against `/vsicurl/http://localhost:8080/collections/{id}/items.fgb` for in-place FlatGeobuf reads.
 
 ## Rules
 

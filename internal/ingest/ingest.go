@@ -23,8 +23,8 @@ import (
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cover"
 	"github.com/adonm/postfgb/internal/fgb"
+	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
-	"github.com/adonm/postfgb/internal/tiles"
 )
 
 var ErrInvalid = errors.New("invalid upload")
@@ -418,7 +418,7 @@ type tierSpec struct {
 
 func tierFeature(c *chunk.Chunk, f *flattypes.Feature, spec *tierSpec) (chunk.InputFeature, bool) {
 	g := c.GeoJSON(f)
-	geom := tiles.ToOrb(g.Geometry)
+	geom := geo.ToOrb(g.Geometry)
 	if geom == nil {
 		return chunk.InputFeature{}, false
 	}

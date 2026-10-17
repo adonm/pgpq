@@ -15,7 +15,6 @@ import (
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
-	"github.com/adonm/postfgb/internal/tiles"
 )
 
 const (
@@ -123,7 +122,7 @@ func (sw *stacWriter) close(next string) {
 }
 
 func featureBounds(g *chunk.Feature) []float64 {
-	geom := tiles.ToOrb(g.Geometry)
+	geom := geo.ToOrb(g.Geometry)
 	if geom == nil {
 		return nil
 	}
@@ -197,7 +196,7 @@ func (s *Server) stacCatalog(w http.ResponseWriter, r *http.Request) {
 		"stac_version": stacVersion,
 		"id":           "postfgb",
 		"title":        "postfgb",
-		"description":  "OGC API Features and OGC Tiles over FlatGeobuf chunks stored in PostgreSQL",
+		"description":  "OGC API Features over FlatGeobuf chunks stored in PostgreSQL",
 		"links":        links,
 	})
 }

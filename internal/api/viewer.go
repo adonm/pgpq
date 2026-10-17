@@ -16,7 +16,6 @@ import (
 
 const (
 	rustgisWeb         = "https://web.rustgis.app/"
-	projectTileMaxZoom = 16
 	projectCameraWorld = 40075016.685578488 / 512
 )
 
@@ -107,7 +106,6 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 	}
 	base := baseURL(r)
 	layers := []map[string]any{}
-	tiles := []map[string]any{}
 	children := []map[string]any{}
 	next := 1
 	for _, info := range infos {
@@ -116,22 +114,6 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 			title = *info.Title
 		}
 		escaped := url.PathEscape(info.Name)
-		tiles = append(tiles, map[string]any{
-			"name":        title + " (vector tiles)",
-			"kind":        "vector",
-			"url":         base + "/collections/" + escaped + "/tiles/WebMercatorQuad/{z}/{y}/{x}",
-			"minZoom":     0,
-			"maxZoom":     projectTileMaxZoom,
-			"tileSize":    256,
-			"attribution": "© OpenStreetMap contributors",
-			"visible":     false,
-			"opacity":     1.0,
-			"overlay":     true,
-			"layers":      []string{info.Name},
-		})
-		if s.projectFeatureCount(r, info) > flatgeobufLimit {
-			continue
-		}
 		geometry := s.collectionGeometryType(r, info)
 		if geometry == "" {
 			continue
@@ -200,7 +182,6 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 			"name":           "postfgb",
 			"layers":         layers,
 			"service_groups": groups,
-			"tiles":          tiles,
 			"basemap":        "Paper",
 			"projection":     "WebMercator",
 			"next_layer_id":  next,

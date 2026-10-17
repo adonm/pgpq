@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	orbgeojson "github.com/paulmach/orb/geojson"
-
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/store"
@@ -150,58 +148,4 @@ func (s *Server) streamUnion(ctx context.Context, members []unionMember, sinkFor
 			remaining = 0
 		}
 	}
-}
-
-func (s *Server) viewTile(ctx context.Context, info store.CollectionInfo, bbox [4]float64, query string, filter cql.Expr, tier int, tw timeWindow) (*orbgeojson.FeatureCollection, error) {
-	members, err := parseMembers(info)
-	if err != nil {
-		return nil, err
-	}
-	fc := orbgeojson.NewFeatureCollection()
-	for _, member := range members {
-		mi, err := s.Store.Collection(ctx, member.Collection)
-		if err != nil {
-			continue
-		}
-		memberFilter, err := s.memberFilter(member)
-		if err != nil {
-			continue
-		}
-		effective := cql.And(memberFilter, cql.Rename(filter, member.renameFn()))
-		if tw.set {
-			if mi.TimeColumn == nil || *mi.TimeColumn == "" {
-				continue
-			}
-			effective = cql.And(effective, datetimeExpr(*mi.TimeColumn, tw))
-		}
-		var source *orbgeojson.FeatureCollection
-		if effective == nil && query == "" {
-			rows, err := s.tileChunks(ctx, mi.Name, &bbox, tier)
-			if err != nil {
-				continue
-			}
-			source = orbgeojson.NewFeatureCollection()
-			for _, row := range rows {
-				c, err := chunk.Open(row.Data)
-				if err != nil {
-					continue
-				}
-				raw, err := c.Search(bbox[0], bbox[1], bbox[2], bbox[3])
-				if err != nil {
-					continue
-				}
-				appendFeatures(source, c, raw, mi, row.ID)
-			}
-		} else {
-			source, err = s.tileMatches(ctx, mi, bbox, query, effective)
-			if err != nil {
-				continue
-			}
-		}
-		for _, feature := range source.Features {
-			feature.Properties = member.transformProps(feature.Properties)
-			fc.Append(feature)
-		}
-	}
-	return fc, nil
 }

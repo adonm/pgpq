@@ -2,12 +2,10 @@ package api
 
 import (
 	"github.com/paulmach/orb"
-	orbgeojson "github.com/paulmach/orb/geojson"
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/geo"
-	"github.com/adonm/postfgb/internal/tiles"
 )
 
 type spatialWriter struct {
@@ -16,7 +14,7 @@ type spatialWriter struct {
 }
 
 func (w *spatialWriter) add(g *chunk.Feature) bool {
-	if !intersectsShapes(w.shapes, tiles.ToOrb(g.Geometry)) {
+	if !intersectsShapes(w.shapes, geo.ToOrb(g.Geometry)) {
 		return true
 	}
 	return w.base.add(g)
@@ -89,21 +87,4 @@ func mergeBBox(bbox *[4]float64, shapes []geo.Shape) (*[4]float64, bool) {
 		return nil, false
 	}
 	return &out, true
-}
-
-func filterShapes(fc *orbgeojson.FeatureCollection, shapes []geo.Shape) {
-	if len(shapes) == 0 {
-		return
-	}
-	kept := fc.Features[:0]
-	for _, feature := range fc.Features {
-		var geom orb.Geometry
-		if feature.Geometry != nil {
-			geom = feature.Geometry
-		}
-		if intersectsShapes(shapes, geom) {
-			kept = append(kept, feature)
-		}
-	}
-	fc.Features = kept
 }

@@ -48,7 +48,7 @@ Run `just` for the full list. The common ones:
 - Integration: `just pg-up && just demo && just serve`, then query the OGC endpoints.
 - Benchmarks: `just bench` drives GDAL as an OGC client:
   - OAPIF via `ogrinfo "OAPIF:$URL"` — collection listing, full scan (`-so -al`), and server-side bbox filtering (`-spat`).
-  - Tiles via `gdalinfo "/vsicurl/$URL/collections/.../tiles/WebMercatorQuad/{z}/{x}/{y}.mvt"`.
+  - In-place FlatGeobuf reads via `ogrinfo -so -al "/vsicurl/$URL/collections/.../items.fgb"`.
 - Record benchmark numbers (feature count, chunk count, wall times) for any change that touches chunking, storage, query, or encoding.
 
 ## Benchmark methodology
@@ -57,7 +57,7 @@ Run `just` for the full list. The common ones:
 - features and chunks ingested,
 - OAPIF full-scan wall time from GDAL,
 - OAPIF `-spat` wall time,
-- MVT tile wall time.
+- Range-read wall time (`items.fgb`).
 
 ## Pull requests
 

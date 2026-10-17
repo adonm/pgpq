@@ -456,9 +456,6 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	if err := dropViewMember(ctx, tx, name); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `delete from tile_cache where collection = $1`, name); err != nil {
-		return err
-	}
 	return tx.Commit(ctx)
 }
 
@@ -581,36 +578,6 @@ func (s *Store) PutMeta(ctx context.Context, name string, doc []byte, meta Colle
 			license = coalesce(excluded.license, collections.license),
 			keywords = case when $6::text[] is null then collections.keywords else excluded.keywords end`,
 		name, doc, meta.Title, meta.Description, meta.License, keywords)
-	return err
-}
-
-func (s *Store) TileCacheGet(ctx context.Context, collection, version string, tier, z, x, y int, filterKey string) ([]byte, string, bool, error) {
-	var data []byte
-	var etag string
-	err := s.Pool.QueryRow(ctx, `
-		select data, etag from tile_cache
-		where collection = $1 and version = $2 and tier = $3 and z = $4 and x = $5 and y = $6 and filter_key = $7`,
-		collection, version, tier, z, x, y, filterKey).Scan(&data, &etag)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, "", false, nil
-	}
-	if err != nil {
-		return nil, "", false, err
-	}
-	return data, etag, true, nil
-}
-
-func (s *Store) TileCachePut(ctx context.Context, collection, version string, tier, z, x, y int, filterKey, etag string, data []byte) error {
-	_, err := s.Pool.Exec(ctx, `
-		insert into tile_cache (collection, version, tier, z, x, y, filter_key, etag, data)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		on conflict do nothing`,
-		collection, version, tier, z, x, y, filterKey, etag, data)
-	return err
-}
-
-func (s *Store) PurgeTileCache(ctx context.Context) error {
-	_, err := s.Pool.Exec(ctx, `delete from tile_cache where created_at < now() - interval '6 hours'`)
 	return err
 }
 

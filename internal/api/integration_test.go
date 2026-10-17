@@ -75,7 +75,7 @@ func featureCount(t *testing.T, st *store.Store, name string) int64 {
 	return info.FeatureCount
 }
 
-func TestPostgresIngestQueryTiles(t *testing.T) {
+func TestPostgresIngestQuery(t *testing.T) {
 	st := integrationStore(t)
 	ctx := context.Background()
 	name := "itest_ops"
@@ -128,11 +128,6 @@ func TestPostgresIngestQueryTiles(t *testing.T) {
 		t.Fatalf("feature = %d: %s", w.Code, w.Body.String())
 	}
 
-	w = call(h, "GET", "/collections/"+name+"/tiles/WebMercatorQuad/14/5975/8529", "", nil)
-	if w.Code != 200 || w.Body.Len() == 0 {
-		t.Fatalf("tile = %d with %d bytes", w.Code, w.Body.Len())
-	}
-
 	w = call(h, "GET", "/collections/"+name+"/manifest", "", nil)
 	if w.Code != 200 {
 		t.Fatalf("manifest = %d: %s", w.Code, w.Body.String())
@@ -156,24 +151,6 @@ func TestPostgresIngestQueryTiles(t *testing.T) {
 	h.ServeHTTP(w, revalidate)
 	if w.Code != 304 {
 		t.Fatalf("manifest revalidate = %d, want 304", w.Code)
-	}
-
-	w = call(h, "GET", "/collections/"+name+"/tiles", "", nil)
-	var sets struct {
-		Tilesets []struct {
-			BoundingBox *struct {
-				LowerLeft []float64 `json:"lowerLeft"`
-			} `json:"boundingBox"`
-			Limits []struct {
-				TileMatrix string `json:"tileMatrix"`
-			} `json:"tileMatrixSetLimits"`
-		} `json:"tilesets"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &sets); err != nil {
-		t.Fatal(err)
-	}
-	if len(sets.Tilesets) != 1 || len(sets.Tilesets[0].Limits) != 25 || sets.Tilesets[0].BoundingBox == nil {
-		t.Fatalf("tileset = %+v", sets.Tilesets)
 	}
 
 	w = call(h, "GET", "/stac/collections/"+name, "", nil)

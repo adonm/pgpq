@@ -11,7 +11,6 @@ import (
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
-	"github.com/adonm/postfgb/internal/tiles"
 )
 
 const sortedCacheBudget = 32 << 20
@@ -117,7 +116,7 @@ func (s *Server) collectSorted(ctx context.Context, id string, bbox *[4]float64,
 		if !inBounds(g, bbox) {
 			continue
 		}
-		if len(shapes) > 0 && !intersectsShapes(shapes, tiles.ToOrb(g.Geometry)) {
+		if len(shapes) > 0 && !intersectsShapes(shapes, geo.ToOrb(g.Geometry)) {
 			continue
 		}
 		features = append(features, entry.feats[m.Ord])

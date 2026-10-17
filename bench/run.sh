@@ -31,6 +31,4 @@ time_it "scan" ogrinfo -so -al "OAPIF:$URL" "$COLL"
 echo "oapif bbox filter $SPAT"
 time_it "bbox" ogrinfo -so -al -spat $SPAT "OAPIF:$URL" "$COLL"
 
-TILE="/vsicurl_streaming/$URL/collections/$COLL/tiles/WebMercatorQuad/$Z/$Y/$X.mvt"
-echo "mvt tile $Z/$X/$Y"
-time_it "tile" gdalinfo -json "$TILE"
+time_it "fgb" ogrinfo -so -al "/vsicurl/$URL/collections/$COLL/items.fgb"

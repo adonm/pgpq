@@ -2,9 +2,8 @@
 # Drives the generated /viewer.rgis project through rustgis-cli and checks that
 # its layers really load. Each check renders a copy of the project with one
 # layer switched on, zoomed to a small window over that layer's centre, then
-# asserts what the server saw: a tile fetch that contains the centre (OGC
-# tileMatrix/tileRow/tileCol order) for tile layers, the FlatGeobuf read for
-# feature layers. Exits non-zero on failure.
+# asserts that the server saw a FlatGeobuf read for that collection. Exits
+# non-zero on failure.
 #
 #   scripts/viewer-test.sh [server-url]
 #
@@ -27,13 +26,13 @@ curl -sfS "$URL/viewer.rgis" -o "$TMP/project.rgis" || { say "cannot fetch $URL/
 python3 - "$TMP/project.rgis" > "$TMP/inventory" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1]))["maps"][0]
-for t in p.get("tiles", []):
-    print("tile", t["layers"][0], t["name"], sep="\t")
+assert not p.get("tiles"), "project still carries vector tile layers"
 for l in p.get("layers", []):
     src = l["source"]["path"].rsplit("/collections/", 1)[-1].split("/", 1)[0]
     print("layer", src, l["name"], sep="\t")
 PY
-say "project: $(grep -c '^tile' "$TMP/inventory") tile layer(s), $(grep -c '^layer' "$TMP/inventory") feature layer(s)"
+[ -s "$TMP/inventory" ] || { say "project has no feature layers"; exit 1; }
+say "project: $(grep -c '^layer' "$TMP/inventory") feature layer(s)"
 
 if "$CLI" run --data "$TMP/project.rgis" --cmd 'info.project={}' 2>"$TMP/open.err" | grep -q '"layers"'; then
   say "ok   project opens"
@@ -51,35 +50,16 @@ print(f"{lon - d},{lat - d},{lon + d},{lat + d}", lon, lat, sep="\t")
 PY
 }
 
-tile_covers() {
-  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
-import math, sys
-z, row, col, lon, lat = (int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]),
-                         float(sys.argv[4]), float(sys.argv[5]))
-n = 2 ** z
-x = int((lon + 180) / 360 * n)
-y = int((1 - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat))) / math.pi) / 2 * n)
-print("yes" if (x == col and y == row) else "no")
-PY
-}
-
 probe_project() {
-  python3 - "$TMP/project.rgis" "$TMP/probe.rgis" "$1" "$2" <<'PY'
+  python3 - "$TMP/project.rgis" "$TMP/probe.rgis" "$1" <<'PY'
 import json, sys
-project, out, kind, target = sys.argv[1:5]
+project, out, target = sys.argv[1:4]
 d = json.load(open(project))
 m = d["maps"][0]
-for t in m.get("tiles", []):
-    t["visible"] = kind == "tile" and t["name"] == target
 for l in m.get("layers", []):
-    l["visible"] = kind == "layer" and l["name"] == target
+    l["visible"] = l["name"] == target
 json.dump(d, open(out, "w"))
 PY
-}
-
-requested_tiles() {
-  tail -n +"$1" "$LOG" | grep -oE "tiles/WebMercatorQuad/[0-9]+/[0-9]+/[0-9]+" |
-    sed 's|.*WebMercatorQuad/||' | tr '/' ' ' | sort -u
 }
 
 shoot() {
@@ -91,27 +71,8 @@ shoot() {
 }
 
 while IFS=$'\t' read -r kind id name; do
-  [ "$kind" = tile ] || continue
-  IFS=$'\t' read -r window lon lat < <(probe_window "$id")
-  probe_project tile "$name"
-  mark=$(wc -l < "$LOG")
-  shoot "$window" "$TMP/$id-tiles.png"
-  hit=no
-  while read -r z row col; do
-    [ "$(tile_covers "$z" "$row" "$col" "$lon" "$lat")" = yes ] && hit=yes
-  done < <(requested_tiles "$((mark + 1))")
-  if [ "$hit" = yes ]; then
-    say "ok   tiles $id (a fetched tile covers its centre)"
-  else
-    got=$(requested_tiles "$((mark + 1))" | head -3 | tr '\n' ' ')
-    bad "tiles $id: no fetched tile covers its centre (asked: ${got:-nothing}) $(tail -1 "$TMP/cli.err")"
-  fi
-done < "$TMP/inventory"
-
-while IFS=$'\t' read -r kind id name; do
-  [ "$kind" = layer ] || continue
   IFS=$'\t' read -r window _ _ < <(probe_window "$id")
-  probe_project layer "$name"
+  probe_project "$name"
   mark=$(wc -l < "$LOG")
   shoot "$window" "$TMP/$id.png"
   if tail -n +"$((mark + 1))" "$LOG" | grep -q "collections/$id/items.fgb"; then

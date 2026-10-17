@@ -16,9 +16,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
-	"github.com/paulmach/orb/encoding/mvt"
-	orbgeojson "github.com/paulmach/orb/geojson"
-	"github.com/paulmach/orb/maptile"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
@@ -26,7 +23,6 @@ import (
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
-	"github.com/adonm/postfgb/internal/tiles"
 )
 
 type Server struct {
@@ -36,6 +32,8 @@ type Server struct {
 	DefaultLimit int
 	ReadOnly     bool
 	metrics      *metrics
+	virtuals     *virtualCache
+	viewFiles    *viewFileCache
 	sweepMu      sync.Mutex
 	lastSweep    time.Time
 }
@@ -66,7 +64,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	}
 	s := &Server{
 		Store: cfg.Store, MaxChunks: 64, MaxBytes: cfg.MaxBytes, DefaultLimit: 50000,
-		ReadOnly: cfg.ReadOnly, metrics: newMetrics(),
+		ReadOnly: cfg.ReadOnly, metrics: newMetrics(), virtuals: newVirtualCache(), viewFiles: newViewFileCache(),
 	}
 	s.register(api)
 	mux.HandleFunc("GET /{$}", s.landingPage)
@@ -76,6 +74,10 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/items/{featureID}", s.feature)
 	mux.HandleFunc("GET /collections/{id}/items.fgb", func(w http.ResponseWriter, r *http.Request) {
+		if virtualRequest(r) {
+			s.serveVirtualCollection(w, r)
+			return
+		}
 		query := r.URL.Query()
 		query.Set("f", "flatgeobuf")
 		r.URL.RawQuery = query.Encode()
@@ -95,7 +97,6 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /viewer", s.viewer)
 	mux.HandleFunc("GET /viewer.rgis", s.viewerProject)
 	mux.HandleFunc("GET /stats", s.stats)
-	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{y}/{x}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
 		if err != nil {
@@ -113,12 +114,9 @@ func (s *Server) register(api huma.API) {
 	huma.Register(api, huma.Operation{OperationID: "collections", Method: "GET", Path: "/collections", Summary: "Collections"}, s.collections)
 	huma.Register(api, huma.Operation{OperationID: "collection", Method: "GET", Path: "/collections/{id}", Summary: "Collection"}, s.collection)
 	huma.Register(api, huma.Operation{OperationID: "queryables", Method: "GET", Path: "/collections/{id}/queryables", Summary: "Queryables"}, s.queryables)
-	huma.Register(api, huma.Operation{OperationID: "collectionTilesets", Method: "GET", Path: "/collections/{id}/tiles", Summary: "Collection tilesets"}, s.tilesets)
 	if !s.ReadOnly {
 		huma.Register(api, huma.Operation{OperationID: "manifest", Method: "GET", Path: "/collections/{id}/manifest", Summary: "Chunk manifest"}, s.manifest)
 	}
-	huma.Register(api, huma.Operation{OperationID: "tileMatrixSets", Method: "GET", Path: "/tileMatrixSets", Summary: "Tile matrix sets"}, s.tileMatrixSets)
-	huma.Register(api, huma.Operation{OperationID: "tileMatrixSet", Method: "GET", Path: "/tileMatrixSets/{tileMatrixSetId}", Summary: "Tile matrix set"}, s.tileMatrixSet)
 }
 
 type landing struct {
@@ -160,12 +158,6 @@ func (s *Server) conformance(context.Context, *struct{}) (*conformanceOutput, er
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
-		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/core",
-		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/oas30",
-		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/tileset",
-		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/tilesets-list",
-		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/geodata-tilesets",
-		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/mvt",
 		"https://api.stacspec.org/v1.0.0/core",
 		"https://api.stacspec.org/v1.0.0/item-search",
 	}
@@ -246,7 +238,6 @@ func (s *Server) collectionBody(ctx context.Context, info store.CollectionInfo) 
 			{Href: "/collections/" + info.Name, Rel: "self", Type: "application/json"},
 			{Href: "/collections/" + info.Name + "/items", Rel: "items", Type: "application/geo+json"},
 			{Href: "/collections/" + info.Name + "/items?f=flatgeobuf", Rel: "alternate", Type: "application/flatgeobuf", Title: "Items (FlatGeobuf)"},
-			{Href: "/collections/" + info.Name + "/tiles", Rel: "http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector", Type: "application/json"},
 		},
 	}
 	if info.Description != nil {
@@ -323,7 +314,7 @@ var reservedParams = map[string]bool{
 	"filter": true, "filter-lang": true, "format": true,
 	"overview": true, "numberMatched": true,
 	"datetime": true, "sortby": true, "crs": true, "bbox-crs": true,
-	"z": true, "x": true, "y": true, "tileMatrix": true, "tileMatrixSet": true,
+	"z": true, "x": true, "y": true,
 }
 
 func parseOverview(r *http.Request) (*int, error) {
@@ -717,7 +708,7 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 	if bbox == nil {
 		return true
 	}
-	geom := tiles.ToOrb(f.Geometry)
+	geom := geo.ToOrb(f.Geometry)
 	if geom == nil {
 		return false
 	}
@@ -816,7 +807,7 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 				if !inBounds(g, bbox) {
 					continue
 				}
-				if len(shapes) > 0 && !intersectsShapes(shapes, tiles.ToOrb(g.Geometry)) {
+				if len(shapes) > 0 && !intersectsShapes(shapes, geo.ToOrb(g.Geometry)) {
 					continue
 				}
 				if skipped < offset {
@@ -888,7 +879,7 @@ func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float
 				if !inBounds(g, bbox) {
 					continue
 				}
-				if len(shapes) > 0 && !intersectsShapes(shapes, tiles.ToOrb(g.Geometry)) {
+				if len(shapes) > 0 && !intersectsShapes(shapes, geo.ToOrb(g.Geometry)) {
 					continue
 				}
 				features = append(features, f)
@@ -948,303 +939,12 @@ func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw)
 }
 
-func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	id := r.PathValue("id")
-	info, err := s.Store.Collection(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
-		http.Error(w, "collection not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	z, errZ := strconv.ParseUint(r.PathValue("z"), 10, 32)
-	y, errY := strconv.ParseUint(r.PathValue("y"), 10, 32)
-	x, errX := strconv.ParseUint(strings.TrimSuffix(r.PathValue("x"), ".mvt"), 10, 32)
-	if errZ != nil || errX != nil || errY != nil {
-		http.Error(w, "invalid tile coordinates", http.StatusBadRequest)
-		return
-	}
-	filter, err := requestFilter(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	overview, err := parseOverview(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	dt, err := parseTimeWindow(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if dt.set && info.Kind != "view" {
-		if info.TimeColumn == nil || *info.TimeColumn == "" {
-			http.Error(w, "collection has no time column", http.StatusBadRequest)
-			return
-		}
-		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, dt))
-	}
-	extracted, spatials, err := cql.ExtractSpatial(filter)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	filter = extracted
-	shapes := spatialShapes(spatials)
-	query := r.URL.Query().Get("q")
-	tile := maptile.New(uint32(x), uint32(y), maptile.Zoom(z))
-	bound := tile.Bound()
-	bbox := [4]float64{bound.Min[0], bound.Min[1], bound.Max[0], bound.Max[1]}
-	filtered := query != "" || filter != nil
-	tier := 0
-	if !filtered {
-		tier = tierForZoom(int(z))
-		if overview != nil {
-			tier = *overview
-		}
-	}
-	if len(shapes) > 0 {
-		tier = 0
-	}
-	version, err := s.cacheVersion(ctx, info)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	filterKey := filterKeyOf(r)
-	etag := tileETag(version, tier, int(z), int(x), int(y), filterKey)
-	w.Header().Set("ETag", etag)
-	if r.Header.Get("If-None-Match") == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-	s.maybeSweep()
-	if cached, cachedEtag, ok, err := s.Store.TileCacheGet(ctx, info.Name, version, tier, int(z), int(x), int(y), filterKey); err != nil {
-		slog.Error("tile cache get failed", "collection", info.Name, "error", err)
-	} else if ok {
-		s.metrics.add("postfgb_tile_cache_lookups_total", metricLabels("result", "hit"), 1)
-		w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
-		w.Header().Set("Content-Encoding", "gzip")
-		w.Header().Add("Vary", "Accept-Encoding")
-		w.Header().Set("ETag", cachedEtag)
-		w.Header().Set("Cache-Control", "public, max-age=600")
-		w.Header().Set("Content-Length", strconv.Itoa(len(cached)))
-		w.Write(cached)
-		return
-	} else {
-		s.metrics.add("postfgb_tile_cache_lookups_total", metricLabels("result", "miss"), 1)
-	}
-	var collection *orbgeojson.FeatureCollection
-	switch {
-	case info.Kind == "view":
-		collection, err = s.viewTile(ctx, info, bbox, query, filter, tier, dt)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	case query == "" && filter == nil:
-		rows, err := s.tileChunks(ctx, id, &bbox, tier)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		collection = orbgeojson.NewFeatureCollection()
-		for _, row := range rows {
-			c, err := chunk.Open(row.Data)
-			if err != nil {
-				continue
-			}
-			raw, err := c.Search(bbox[0], bbox[1], bbox[2], bbox[3])
-			if err != nil {
-				continue
-			}
-			appendFeatures(collection, c, raw, info, row.ID)
-		}
-	default:
-		collection, err = s.tileMatches(ctx, info, bbox, query, filter)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-	filterShapes(collection, shapes)
-	if len(collection.Features) > maxTileFeatures {
-		collection.Features = hashSample(collection.Features, maxTileFeatures)
-	}
-	data, empty, err := tiles.Bytes(id, collection, tile)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if empty {
-		data, err = mvt.MarshalGzipped(mvt.Layers{mvt.NewLayer(id, orbgeojson.NewFeatureCollection())})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-	s.metrics.add("postfgb_tiles_rendered_total", "", 1)
-	w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
-	w.Header().Set("Content-Encoding", "gzip")
-	w.Header().Add("Vary", "Accept-Encoding")
-	w.Header().Set("Cache-Control", "public, max-age=600")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
-	if len(data) <= maxTileCacheBytes {
-		if err := s.Store.TileCachePut(ctx, info.Name, version, tier, int(z), int(x), int(y), filterKey, etag, data); err != nil {
-			slog.Error("tile cache put failed", "collection", info.Name, "error", err)
-		}
-	}
-}
-
-func appendFeatures(fc *orbgeojson.FeatureCollection, c *chunk.Chunk, feats []*flattypes.Feature, info store.CollectionInfo, chunkID int64) {
-	for i, f := range feats {
-		g := c.GeoJSON(f)
-		geom := tiles.ToOrb(g.Geometry)
-		if geom == nil {
-			continue
-		}
-		feature := orbgeojson.NewFeature(geom)
-		feature.Properties = g.Properties
-		feature.ID = featureID(info, chunkID, i, g.Properties)
-		fc.Append(feature)
-	}
-}
-
-func (s *Server) tileMatches(ctx context.Context, info store.CollectionInfo, bbox [4]float64, query string, filter cql.Expr) (*orbgeojson.FeatureCollection, error) {
-	matches, err := s.Store.Matches(ctx, info.Name, &bbox, query, filter, s.DefaultLimit, 0)
-	if err != nil {
-		return nil, err
-	}
-	ords := map[int64]map[int]bool{}
-	var ids []int64
-	for _, m := range matches {
-		set := ords[m.ChunkID]
-		if set == nil {
-			set = map[int]bool{}
-			ords[m.ChunkID] = set
-			ids = append(ids, m.ChunkID)
-		}
-		set[m.Ord] = true
-	}
-	fc := orbgeojson.NewFeatureCollection()
-	for _, batch := range s.chunkBatches(ctx, info.Name, ids) {
-		rows, err := s.Store.ChunksByIDs(ctx, info.Name, batch)
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			c, err := chunk.Open(row.Data)
-			if err != nil {
-				continue
-			}
-			feats, err := c.SearchAll()
-			if err != nil {
-				continue
-			}
-			set := ords[row.ID]
-			for i, f := range feats {
-				if !set[i] {
-					continue
-				}
-				g := c.GeoJSON(f)
-				if !inBounds(g, &bbox) {
-					continue
-				}
-				geom := tiles.ToOrb(g.Geometry)
-				if geom == nil {
-					continue
-				}
-				feature := orbgeojson.NewFeature(geom)
-				feature.Properties = g.Properties
-				feature.ID = featureID(info, row.ID, i, g.Properties)
-				fc.Append(feature)
-			}
-		}
-	}
-	return fc, nil
-}
-
-const (
-	maxTileFeatures = 250000
-	tileChunkMax    = 8
-	flatgeobufLimit = 100000
-)
+const flatgeobufLimit = 100000
 
 func itemHash(value any) uint64 {
 	h := fnv.New64a()
 	fmt.Fprintf(h, "%v\x00", value)
 	return h.Sum64()
-}
-
-func (s *Server) tileChunks(ctx context.Context, collection string, bbox *[4]float64, tier int) ([]store.ChunkRow, error) {
-	metas, err := s.Store.ChunkMetas(ctx, collection, bbox, s.MaxChunks, tier, 0)
-	if err != nil {
-		return nil, err
-	}
-	if len(metas) == 0 && tier > 0 {
-		if metas, err = s.Store.ChunkMetas(ctx, collection, bbox, s.MaxChunks, 0, 0); err != nil {
-			return nil, err
-		}
-	}
-	if len(metas) > tileChunkMax {
-		k := uint64((len(metas) + tileChunkMax - 1) / tileChunkMax)
-		kept := metas[:0]
-		for _, meta := range metas {
-			if itemHash(meta.ID)%k == 0 {
-				kept = append(kept, meta)
-			}
-		}
-		if len(kept) == 0 {
-			kept = append(kept, metas[0])
-		}
-		metas = kept
-	}
-	ids := make([]int64, len(metas))
-	for i, meta := range metas {
-		ids[i] = meta.ID
-	}
-	rows := s.fetchRows(ctx, collection, ids)
-	kept := rows[:0]
-	for _, row := range rows {
-		if row.Data != nil {
-			kept = append(kept, row)
-		}
-	}
-	return kept, nil
-}
-
-func hashSample(features []*orbgeojson.Feature, max int) []*orbgeojson.Feature {
-	if len(features) <= max {
-		return features
-	}
-	k := uint64((len(features) + max - 1) / max)
-	kept := features[:0]
-	for _, f := range features {
-		if itemHash(fmt.Sprint(f.ID))%k == 0 {
-			kept = append(kept, f)
-		}
-	}
-	if len(kept) == 0 {
-		kept = append(kept, features[0])
-	}
-	return kept
-}
-
-func tierForZoom(z int) int {
-	switch {
-	case z <= 4:
-		return 2
-	case z <= 7:
-		return 1
-	default:
-		return 0
-	}
 }
 
 func tierForBounds(bbox *[4]float64) int {

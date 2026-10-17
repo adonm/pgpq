@@ -57,34 +57,43 @@ func (f *fgbSink) remaining() int {
 	return f.limit - len(f.features)
 }
 
-func (s *Server) writeViewFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, info store.CollectionInfo, q featureQuery) {
+func (s *Server) viewFGB(ctx context.Context, info store.CollectionInfo, q featureQuery) ([]byte, int, error) {
 	members, err := s.viewMembers(ctx, info)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, 0, err
 	}
 	cols, err := s.unionColumns(ctx, members)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, 0, err
 	}
 	out := &fgbSink{limit: q.limit}
 	s.streamUnion(ctx, members, func(store.CollectionInfo, viewMember) featureSink {
 		return out
 	}, q.bbox, q.query, q.filter, q.offset, q.overview, q.tw)
 	if len(out.features) == 0 {
+		return nil, 0, nil
+	}
+	data, err := chunk.EncodeCols(info.Name, cols, out.features)
+	if err != nil {
+		return nil, 0, err
+	}
+	return data, len(out.features), nil
+}
+
+func (s *Server) writeViewFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, info store.CollectionInfo, q featureQuery) {
+	data, count, err := s.viewFGB(ctx, info, q)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if data == nil {
 		w.Header().Set("Content-Type", "application/geo+json")
 		fw := newFeatureWriter(w, q.limit, nil)
 		fw.close("")
 		return
 	}
-	data, err := chunk.EncodeCols(info.Name, cols, out.features)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	w.Header().Set("Content-Type", "application/flatgeobuf")
-	if link := pageLink(r, q.limit, q.offset, len(out.features)); link != "" {
+	if link := pageLink(r, q.limit, q.offset, count); link != "" {
 		w.Header().Set("Link", "<"+link+">; rel=\"next\"")
 	}
 	w.Write(data)

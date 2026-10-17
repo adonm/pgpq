@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 
+	flatbuffers "github.com/google/flatbuffers/go"
+
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 )
 
@@ -86,4 +88,18 @@ func treeSize(numItems uint64, nodeSize uint16) uint64 {
 		numNodes += n
 	}
 	return numNodes * 40
+}
+
+func Regions(data []byte, header *flattypes.Header) (featuresAt int, featuresLen int, err error) {
+	headerLen := 4 + int(flatbuffers.GetUOffsetT(data[8:]))
+	if headerLen <= 4 || headerLen > len(data) {
+		return 0, 0, errors.New("fgb: invalid header length")
+	}
+	indexLen := int(treeSize(header.FeaturesCount(), header.IndexNodeSize()))
+	featuresAt = 8 + headerLen + indexLen
+	featuresLen = len(data) - featuresAt
+	if featuresLen < 0 {
+		return 0, 0, errors.New("fgb: truncated chunk")
+	}
+	return featuresAt, featuresLen, nil
 }
