@@ -26,6 +26,9 @@ vet:
 test:
     go test -timeout 120s ./...
 
+test-integration:
+    POSTFGB_TEST_DSN="{{dsn}}" go test -count=1 -timeout 300s ./...
+
 ci: fmt-check vet test
 
 pg-up:

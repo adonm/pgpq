@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/adonm/postfgb/internal/api"
 	"github.com/adonm/postfgb/internal/store"
@@ -40,12 +43,14 @@ func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
+	maxConns := fs.Int("max-conns", 0, "maximum PostgreSQL pool connections (0 keeps the driver default)")
+	minConns := fs.Int("min-conns", 0, "minimum idle PostgreSQL pool connections (0 keeps the driver default)")
 	readonlyHelp := "serve the read-only surface: no ingest, no delete, no raw chunk or manifest access"
 	readonly := fs.Bool("readonly", envBool("POSTFGB_READONLY"), readonlyHelp)
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup (skipped by default in --readonly)")
 	fs.Parse(args)
 	ctx := context.Background()
-	st, err := store.Open(ctx, *dsn)
+	st, err := store.OpenWithPool(ctx, *dsn, store.PoolOptions{MaxConns: int32(*maxConns), MinConns: int32(*minConns)})
 	if err != nil {
 		fatal(err)
 	}
@@ -77,11 +82,27 @@ func serve(args []string) {
 	if *readonly {
 		slog.Info("read-only worker")
 	}
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly}),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	slog.Info("listening", "addr", *addr)
-	fatal(http.ListenAndServe(*addr, api.NewWithConfig(api.Config{
-		Store:    st,
-		ReadOnly: *readonly,
-	})))
+	select {
+	case err := <-errCh:
+		fatal(err)
+	case sig := <-stop:
+		slog.Info("shutting down", "signal", sig.String())
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("shutdown", "error", err)
+	}
 }
 
 func envBool(name string) bool {

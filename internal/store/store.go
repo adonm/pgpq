@@ -121,8 +121,27 @@ type db interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+type PoolOptions struct {
+	MaxConns int32
+	MinConns int32
+}
+
 func Open(ctx context.Context, dsn string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	return OpenWithPool(ctx, dsn, PoolOptions{})
+}
+
+func OpenWithPool(ctx context.Context, dsn string, opts PoolOptions) (*Store, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	if opts.MaxConns > 0 {
+		cfg.MaxConns = opts.MaxConns
+	}
+	if opts.MinConns > 0 {
+		cfg.MinConns = opts.MinConns
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -137,17 +156,40 @@ func (s *Store) Close() {
 	s.Pool.Close()
 }
 
-func (s *Store) Migrate(ctx context.Context) error {
-	const migrationsTable = `create table if not exists schema_migrations (
-		version text primary key,
-		applied_at timestamptz not null default now()
-	)`
-	if _, err := s.Pool.Exec(ctx, migrationsTable); err != nil {
+func (s *Store) Ping(ctx context.Context) error {
+	return s.Pool.Ping(ctx)
+}
+
+func (s *Store) Ready(ctx context.Context) error {
+	if err := s.Pool.Ping(ctx); err != nil {
 		return err
 	}
-	entries, err := fs.ReadDir(migrations, "migrations")
+	names, err := migrationFiles()
 	if err != nil {
 		return err
+	}
+	if len(names) == 0 {
+		return errors.New("no migrations embedded")
+	}
+	var latest string
+	if err := s.Pool.QueryRow(ctx,
+		`select coalesce(max(version), 'none') from schema_migrations`).Scan(&latest); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			return fmt.Errorf("database is not migrated: want %s", names[len(names)-1])
+		}
+		return err
+	}
+	if latest != names[len(names)-1] {
+		return fmt.Errorf("database is not migrated: want %s, have %s", names[len(names)-1], latest)
+	}
+	return nil
+}
+
+func migrationFiles() ([]string, error) {
+	entries, err := fs.ReadDir(migrations, "migrations")
+	if err != nil {
+		return nil, err
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -156,6 +198,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	sort.Strings(names)
+	return names, nil
+}
+
+func (s *Store) Migrate(ctx context.Context) error {
+	const migrationsTable = `create table if not exists schema_migrations (
+		version text primary key,
+		applied_at timestamptz not null default now()
+	)`
+	if _, err := s.Pool.Exec(ctx, migrationsTable); err != nil {
+		return err
+	}
+	names, err := migrationFiles()
+	if err != nil {
+		return err
+	}
 	for _, name := range names {
 		var applied bool
 		if err := s.Pool.QueryRow(ctx,

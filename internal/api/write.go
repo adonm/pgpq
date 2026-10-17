@@ -38,13 +38,18 @@ func (s *Server) putCollectionData(w http.ResponseWriter, r *http.Request) {
 		TimeColumn: r.URL.Query().Get("time_column"),
 	})
 	if errors.Is(err, ingest.ErrInvalid) {
+		s.metrics.add("postfgb_ingest_total", metricLabels("result", "invalid"), 1)
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
 	if err != nil {
+		s.metrics.add("postfgb_ingest_total", metricLabels("result", "error"), 1)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.metrics.add("postfgb_ingest_total", metricLabels("result", "ok"), 1)
+	s.metrics.add("postfgb_ingest_features_total", "", int64(result.Features))
+	s.metrics.add("postfgb_ingest_chunks_total", "", int64(result.Chunks))
 	status := http.StatusOK
 	if result.Created {
 		status = http.StatusCreated

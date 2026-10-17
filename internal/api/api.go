@@ -33,6 +33,7 @@ type Server struct {
 	MaxChunks    int
 	DefaultLimit int
 	ReadOnly     bool
+	metrics      *metrics
 	sweepMu      sync.Mutex
 	lastSweep    time.Time
 }
@@ -59,10 +60,13 @@ func NewWithConfig(cfg Config) http.Handler {
 	api := humago.New(mux, huma.DefaultConfig("postfgb", "0.1.0"))
 	s := &Server{
 		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 50000,
-		ReadOnly: cfg.ReadOnly,
+		ReadOnly: cfg.ReadOnly, metrics: newMetrics(),
 	}
 	s.register(api)
 	mux.HandleFunc("GET /{$}", s.landingPage)
+	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /readyz", s.readyz)
+	mux.HandleFunc("GET /metrics", s.metricsHandler)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/items/{featureID}", s.feature)
 	if !s.ReadOnly {
@@ -86,7 +90,7 @@ func NewWithConfig(cfg Config) http.Handler {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.0")
 		w.Write(body)
 	})
-	return gzipMiddleware(mux)
+	return gzipMiddleware(s.observe(mux))
 }
 
 func (s *Server) register(api huma.API) {
@@ -924,6 +928,7 @@ func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.metrics.add("postfgb_chunk_fetches_total", "", 1)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "application/flatgeobuf")
 	w.Write(raw)
@@ -1008,12 +1013,15 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	if cached, cachedEtag, ok, err := s.Store.TileCacheGet(ctx, info.Name, version, tier, int(z), int(x), int(y), filterKey); err != nil {
 		slog.Error("tile cache get failed", "collection", info.Name, "error", err)
 	} else if ok {
+		s.metrics.add("postfgb_tile_cache_lookups_total", metricLabels("result", "hit"), 1)
 		w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
 		w.Header().Set("ETag", cachedEtag)
 		w.Header().Set("Cache-Control", "public, max-age=600")
 		w.Header().Set("Content-Length", strconv.Itoa(len(cached)))
 		w.Write(cached)
 		return
+	} else {
+		s.metrics.add("postfgb_tile_cache_lookups_total", metricLabels("result", "miss"), 1)
 	}
 	var collection *orbgeojson.FeatureCollection
 	switch {
@@ -1064,6 +1072,7 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.metrics.add("postfgb_tiles_rendered_total", "", 1)
 	w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
 	w.Header().Set("Cache-Control", "public, max-age=600")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))

@@ -59,8 +59,8 @@ There is no server-side format conversion: `items?f=flatgeobuf` is the bulk down
 ## Ops and build
 
 - Images build with [ko](https://ko.build): no Dockerfile, static base (`cgr.dev/chainguard/static`), CGO_ENABLED=0, git-SHA tags, SBOM support.
-- mise provides Go, just, hk and ko. hk runs gofmt/vet/tidy/tests on every commit; GitHub Actions runs unit tests, PostgreSQL-backed integration tests (ingest -> query -> tiles) and a ko image build.
-- `/healthz` and `/readyz`; a minimal hand-rolled Prometheus `/metrics`; graceful shutdown; pool-size flags; structured request logging. Deployment stays raw binary / generated image; no release pipeline yet.
+- mise provides Go, just, hk and ko. hk runs gofmt/vet/tidy/tests on every commit; GitHub Actions runs unit tests, PostgreSQL-backed integration tests (ingest → query → tiles → staged replace → delete) against a service container, and a ko image build. `just test-integration` runs the same tests locally against the compose database.
+- `/healthz` liveness and `/readyz` readiness (database ping plus migration check); a minimal hand-rolled Prometheus `/metrics` covering requests, durations, response bytes, tile cache lookups, rendered tiles, chunk fetches, ingest outcomes and pool gauges; SIGTERM/SIGINT graceful shutdown; `--max-conns`/`--min-conns` pool flags; structured request logs (method, path, route, status, duration, bytes). Deployment stays raw binary / generated image; no release pipeline yet.
 - Workers run in two modes: writable (ingest, delete, raw chunk and manifest endpoints) and readonly (only the OGC and STAC read surface; writes and raw chunks are not registered, migrations are skipped by default). The server does no authentication — production deploys terminate auth in an adjacent layer (Kubernetes Gateway API, reverse proxy or service mesh) and expose only readonly workers publicly. Filtered endpoints always filter server-side.
 
 ## Performance

@@ -37,7 +37,7 @@ just demo           # PostgreSQL 18 via Docker plus OSM fixture layers (Layercak
 just serve          # http://localhost:8080
 ```
 
-Workers run in two modes. `postfgb serve` is writable: ingest, delete and raw chunk/manifest access. `postfgb serve --readonly` (or `POSTFGB_READONLY=true`) is the serving mode: only the OGC and STAC read surface is registered — writes and raw chunks answer 404 — and migrations are skipped unless `--migrate` is passed explicitly. Workers are stateless (`--addr` sets the listen address) and all speak to the same PostgreSQL, so scale out with as many readonly replicas as you like.
+Workers run in two modes. `postfgb serve` is writable: ingest, delete and raw chunk/manifest access. `postfgb serve --readonly` (or `POSTFGB_READONLY=true`) is the serving mode: only the OGC and STAC read surface is registered — writes and raw chunks answer 404 — and migrations are skipped unless `--migrate` is passed explicitly. Workers are stateless (`--addr` sets the listen address, `--max-conns`/`--min-conns` tune the PostgreSQL pool) and all speak to the same PostgreSQL, so scale out with as many readonly replicas as you like. SIGTERM drains in-flight requests and shuts down cleanly; `/healthz`, `/readyz` and `/metrics` cover probes and monitoring, and one structured log line per request carries route, status, duration and bytes.
 
 The server never authenticates requests. Put it behind your own auth layer — Kubernetes Gateway API, an ingress with path rules, a reverse proxy or a service mesh — and expose only the readonly workers publicly; keep the writable ones (which can ingest and stream raw chunks) on an internal route. Readonly workers still render tiles through the shared PostgreSQL tile cache; with a strictly read-only database role the renders simply go uncached, which is logged, not fatal.
 
@@ -74,6 +74,9 @@ curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile; accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms and honor `overview=` |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
 | `/api` | OpenAPI 3.0 definition (OGC content type) |
+| `/healthz` | liveness probe, always 200 |
+| `/readyz` | readiness probe: PostgreSQL ping plus migration check |
+| `/metrics` | Prometheus text metrics: requests, durations, bytes, tiles, chunks, ingest counters and pool gauges |
 
 ## Real data (OSM Layer Cake)
 
@@ -122,7 +125,7 @@ ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/benc
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (content-negotiated create-or-replace PUT, staged loads swapped in at commit, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, union views with per-member filters and column mapping, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters including spatial `S_INTERSECTS`, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, FlatGeobuf downloads for local conversion, STAC catalog/collections/items/search facade, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (ops, performance).
+Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (content-negotiated create-or-replace PUT, staged loads swapped in at commit, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, union views with per-member filters and column mapping, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters including spatial `S_INTERSECTS`, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, FlatGeobuf downloads for local conversion, STAC catalog/collections/items/search facade, writable/readonly worker modes, `/healthz`/`/readyz`/`/metrics`, graceful shutdown, structured request logs, PostgreSQL-backed integration tests in CI, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (performance details).
 
 ## License
 
