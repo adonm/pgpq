@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+
+	"github.com/adonm/postfgb/internal/store"
 )
 
 const (
@@ -47,7 +49,7 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 			"overlay":     true,
 			"layers":      []string{info.Name},
 		})
-		if info.FeatureCount > projectLayerMax {
+		if s.projectFeatureCount(r, info) > projectLayerMax {
 			continue
 		}
 		layers = append(layers, map[string]any{
@@ -100,4 +102,23 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", `inline; filename="postfgb.rgis"`)
 	json.NewEncoder(w).Encode(project)
+}
+
+func (s *Server) projectFeatureCount(r *http.Request, info store.CollectionInfo) int64 {
+	if info.Kind != "view" {
+		return info.FeatureCount
+	}
+	members, err := parseMembers(info)
+	if err != nil {
+		return projectLayerMax + 1
+	}
+	var total int64
+	for _, member := range members {
+		mi, err := s.Store.Collection(r.Context(), member.Collection)
+		if err != nil {
+			return projectLayerMax + 1
+		}
+		total += mi.FeatureCount
+	}
+	return total
 }
