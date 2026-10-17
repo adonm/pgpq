@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"html/template"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -83,6 +84,7 @@ fetch("/stats").then((r) => r.json()).then((s) => {
 func (s *Server) viewer(w http.ResponseWriter, r *http.Request) {
 	base := baseURL(r)
 	project := base + "/viewer.rgis"
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	viewerPage.Execute(w, struct {
 		Host    string
@@ -168,6 +170,17 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 		})
 		next++
 	}
+	centerX, centerY, res := projectCameraWorld, 0.0, projectCameraWorld
+	if minX, minY, maxX, maxY, ok := catalogExtent(infos); ok {
+		centerX = (minX + maxX) / 2 * 20037508.342789244 / 180
+		centerY = math.Log(math.Tan((90+math.Min(math.Max((minY+maxY)/2, -85.05), 85.05))*math.Pi/360)) / (math.Pi / 180) * 20037508.342789244 / 180
+		spanX := (maxX - minX) * 20037508.342789244 / 180
+		spanY := (maxY - minY) * 20037508.342789244 / 180 * 1.4
+		res = math.Max(spanX, spanY) / 512
+		if res <= 0 || math.IsInf(res, 0) || math.IsNaN(res) {
+			res = projectCameraWorld
+		}
+	}
 	groups := []map[string]any{}
 	if len(children) > 0 {
 		groups = append(groups, map[string]any{
@@ -192,14 +205,33 @@ func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {
 			"projection":     "WebMercator",
 			"next_layer_id":  next,
 			"camera": map[string]any{
-				"center": map[string]float64{"x": 0, "y": 0},
-				"res":    projectCameraWorld,
+				"center": map[string]float64{"x": centerX, "y": centerY},
+				"res":    res,
 			},
 		}},
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", `inline; filename="postfgb.rgis"`)
 	json.NewEncoder(w).Encode(project)
+}
+
+func catalogExtent(infos []store.CollectionInfo) (float64, float64, float64, float64, bool) {
+	minX, minY, maxX, maxY := 0.0, 0.0, 0.0, 0.0
+	seen := false
+	for _, info := range infos {
+		if info.MinX == nil || info.MinY == nil || info.MaxX == nil || info.MaxY == nil {
+			continue
+		}
+		if !seen {
+			minX, minY, maxX, maxY = *info.MinX, *info.MinY, *info.MaxX, *info.MaxY
+			seen = true
+			continue
+		}
+		minX, minY = math.Min(minX, *info.MinX), math.Min(minY, *info.MinY)
+		maxX, maxY = math.Max(maxX, *info.MaxX), math.Max(maxY, *info.MaxY)
+	}
+	return minX, minY, maxX, maxY, seen
 }
 
 func (s *Server) collectionGeometryType(r *http.Request, info store.CollectionInfo) string {
