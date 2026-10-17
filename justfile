@@ -29,6 +29,12 @@ test:
 test-integration:
     POSTFGB_TEST_DSN="{{dsn}}" go test -count=1 -timeout 300s ./...
 
+pg-stats:
+    @docker exec postfgb-postgres-1 sh -c 'psql -U postgres -d postfgb -X \
+      -c "select pg_size_pretty(pg_database_size(current_database())) db, temp_files, pg_size_pretty(temp_bytes) temp_bytes from pg_stat_database where datname = current_database()" \
+      -c "select state, count(*), max(now() - xact_start) oldest from pg_stat_activity where datname = current_database() group by 1 order by 2 desc" \
+      -c "select collection, count(*) chunks, sum(feature_count) features, pg_size_pretty(sum(length(data))) stored from chunks where tier = 0 group by 1 order by sum(length(data)) desc limit 8"; du -sh /var/lib/postgresql/18/docker/pg_wal'
+
 ci: fmt-check vet test
 
 pg-up:

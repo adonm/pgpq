@@ -99,6 +99,8 @@ The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` a
 - `ogrinfo -so -al -spat -10 45 10 55 "OAPIF:http://localhost:8080" bench` — server-side bbox filter
 - `gdalinfo "/vsicurl_streaming/http://localhost:8080/collections/bench/tiles/WebMercatorQuad/4/8/6.mvt"` — vector tile
 
+`just pg-stats` watches a bulk load from the database side: database size, `temp_files`/`temp_bytes`, session states and oldest transaction, per-collection chunk storage and the WAL directory size. `temp_bytes` is the one that matters during big loads — index builds spill into Postgres temp files that are unlinked immediately, so `df` shows the space consumed while `du`, `pg_database_size` and `docker system df` cannot; a jump there means index-build spill, answered by raising `maintenance_work_mem` (or loading in tiles).
+
 ## Exports
 
 Bulk data leaves the server as FlatGeobuf and nothing else — clients convert locally with GDAL, like any other file:
