@@ -193,10 +193,10 @@ func (s *Server) viewTile(ctx context.Context, info store.CollectionInfo, bbox [
 				if err != nil {
 					continue
 				}
-				appendFeatures(source, c, raw)
+				appendFeatures(source, c, raw, mi, row.ID)
 			}
 		} else {
-			source, err = s.tileMatches(ctx, mi.Name, bbox, query, effective)
+			source, err = s.tileMatches(ctx, mi, bbox, query, effective)
 			if err != nil {
 				continue
 			}

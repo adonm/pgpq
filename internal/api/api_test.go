@@ -4,8 +4,42 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/adonm/postfgb/internal/store"
 	"github.com/adonm/postfgb/internal/tiles"
 )
+
+func TestSplitBatches(t *testing.T) {
+	ids := []int64{1, 2, 3, 4, 5}
+	sizes := map[int64]int{1: 4, 2: 4, 3: 4, 4: 4, 5: 4}
+	if got := splitBatches(ids, sizes, 2, 100); len(got) != 3 || len(got[0]) != 2 || len(got[2]) != 1 {
+		t.Fatalf("count cap: %v", got)
+	}
+	if got := splitBatches(ids, sizes, 10, 8); len(got) != 3 || len(got[0]) != 2 || len(got[1]) != 2 || len(got[2]) != 1 {
+		t.Fatalf("byte cap: %v", got)
+	}
+	if got := splitBatches(ids, sizes, 10, 4); len(got) != 5 {
+		t.Fatalf("single oversize chunk: %v", got)
+	}
+	if got := splitBatches(nil, nil, 10, 10); len(got) != 0 {
+		t.Fatalf("empty: %v", got)
+	}
+}
+
+func TestBudgetMetas(t *testing.T) {
+	metas := []store.ChunkMeta{{ID: 1, SizeBytes: 4}, {ID: 2, SizeBytes: 4}, {ID: 3, SizeBytes: 4}}
+	trimmed, cut := budgetMetas(metas, 100)
+	if cut || len(trimmed) != 3 {
+		t.Fatalf("no cut: %v %v", trimmed, cut)
+	}
+	trimmed, cut = budgetMetas(metas, 8)
+	if !cut || len(trimmed) != 2 {
+		t.Fatalf("cut: %v %v", trimmed, cut)
+	}
+	trimmed, cut = budgetMetas(metas, 4)
+	if !cut || len(trimmed) != 1 {
+		t.Fatalf("single: %v %v", trimmed, cut)
+	}
+}
 
 func TestTilesForBounds(t *testing.T) {
 	x0, x1, y0, y1 := tiles.BoundsFor([4]float64{-180, -85, 180, 85}, 0)

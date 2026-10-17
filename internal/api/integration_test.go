@@ -137,6 +137,10 @@ func TestPostgresIngestQueryTiles(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("manifest = %d: %s", w.Code, w.Body.String())
 	}
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("manifest has no ETag")
+	}
 	var manifest struct {
 		ChunkCount int `json:"chunkCount"`
 	}
@@ -145,6 +149,31 @@ func TestPostgresIngestQueryTiles(t *testing.T) {
 	}
 	if manifest.ChunkCount < 1 {
 		t.Fatalf("manifest chunks = %d", manifest.ChunkCount)
+	}
+	revalidate := httptest.NewRequest("GET", "/collections/"+name+"/manifest", nil)
+	revalidate.Header.Set("If-None-Match", etag)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, revalidate)
+	if w.Code != 304 {
+		t.Fatalf("manifest revalidate = %d, want 304", w.Code)
+	}
+
+	w = call(h, "GET", "/collections/"+name+"/tiles", "", nil)
+	var sets struct {
+		Tilesets []struct {
+			BoundingBox *struct {
+				LowerLeft []float64 `json:"lowerLeft"`
+			} `json:"boundingBox"`
+			Limits []struct {
+				TileMatrix string `json:"tileMatrix"`
+			} `json:"tileMatrixSetLimits"`
+		} `json:"tilesets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &sets); err != nil {
+		t.Fatal(err)
+	}
+	if len(sets.Tilesets) != 1 || len(sets.Tilesets[0].Limits) != 25 || sets.Tilesets[0].BoundingBox == nil {
+		t.Fatalf("tileset = %+v", sets.Tilesets)
 	}
 
 	w = call(h, "GET", "/stac/collections/"+name, "", nil)

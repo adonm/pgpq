@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"errors"
+	"math"
 	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/adonm/postfgb/internal/store"
+	"github.com/adonm/postfgb/internal/tiles"
 )
 
 const (
@@ -16,12 +18,28 @@ const (
 	tmsEPSG3857        = "http://www.opengis.net/def/crs/EPSG/0/3857"
 )
 
+type tilesetBoundingBox struct {
+	LowerLeft  []float64 `json:"lowerLeft"`
+	UpperRight []float64 `json:"upperRight"`
+	CRS        string    `json:"crs,omitempty"`
+}
+
+type tileMatrixSetLimit struct {
+	TileMatrix string `json:"tileMatrix"`
+	MinTileRow int    `json:"minTileRow"`
+	MaxTileRow int    `json:"maxTileRow"`
+	MinTileCol int    `json:"minTileCol"`
+	MaxTileCol int    `json:"maxTileCol"`
+}
+
 type tileset struct {
-	Title            string `json:"title,omitempty"`
-	DataType         string `json:"dataType"`
-	CRS              string `json:"crs"`
-	TileMatrixSetURI string `json:"tileMatrixSetURI,omitempty"`
-	Links            []link `json:"links"`
+	Title               string               `json:"title,omitempty"`
+	DataType            string               `json:"dataType"`
+	CRS                 string               `json:"crs"`
+	TileMatrixSetURI    string               `json:"tileMatrixSetURI,omitempty"`
+	BoundingBox         *tilesetBoundingBox  `json:"boundingBox,omitempty"`
+	TileMatrixSetLimits []tileMatrixSetLimit `json:"tileMatrixSetLimits,omitempty"`
+	Links               []link               `json:"links"`
 }
 
 type tilesetsOutput struct {
@@ -40,7 +58,7 @@ func (s *Server) tilesets(ctx context.Context, in *collectionInput) (*tilesetsOu
 		return nil, err
 	}
 	out := &tilesetsOutput{}
-	out.Body.Tilesets = []tileset{{
+	set := tileset{
 		Title:            info.Name,
 		DataType:         "vector",
 		CRS:              tmsEPSG3857,
@@ -60,9 +78,51 @@ func (s *Server) tilesets(ctx context.Context, in *collectionInput) (*tilesetsOu
 				Title: "WebMercatorQuad tile matrix set",
 			},
 		},
-	}}
+	}
+	if extent := s.collectionExtent(ctx, info); extent != nil && len(extent.Spatial.BBox) > 0 && len(extent.Spatial.BBox[0]) == 4 {
+		bbox := extent.Spatial.BBox[0]
+		set.BoundingBox = webMercatorBox([4]float64{bbox[0], bbox[1], bbox[2], bbox[3]})
+		set.TileMatrixSetLimits = webMercatorLimits([4]float64{bbox[0], bbox[1], bbox[2], bbox[3]})
+	}
+	out.Body.Tilesets = []tileset{set}
 	out.Body.Links = []link{{Href: "/collections/" + in.ID + "/tiles", Rel: "self", Type: "application/json"}}
 	return out, nil
+}
+
+const (
+	webMercatorMaxLat = 85.05112877980659
+	webMercatorRadius = 20037508.342789244
+)
+
+func webMercatorMeters(lon, lat float64) (float64, float64) {
+	switch {
+	case lat > webMercatorMaxLat:
+		lat = webMercatorMaxLat
+	case lat < -webMercatorMaxLat:
+		lat = -webMercatorMaxLat
+	}
+	x := lon * webMercatorRadius / 180
+	y := math.Log(math.Tan((90+lat)*math.Pi/360)) / (math.Pi / 180) * webMercatorRadius / 180
+	return x, y
+}
+
+func webMercatorBox(b [4]float64) *tilesetBoundingBox {
+	minX, minY := webMercatorMeters(b[0], b[1])
+	maxX, maxY := webMercatorMeters(b[2], b[3])
+	return &tilesetBoundingBox{LowerLeft: []float64{minX, minY}, UpperRight: []float64{maxX, maxY}, CRS: tmsEPSG3857}
+}
+
+func webMercatorLimits(b [4]float64) []tileMatrixSetLimit {
+	limits := make([]tileMatrixSetLimit, 0, 25)
+	for z := 0; z <= 24; z++ {
+		x0, x1, y0, y1 := tiles.BoundsFor(b, uint8(z))
+		limits = append(limits, tileMatrixSetLimit{
+			TileMatrix: strconv.Itoa(z),
+			MinTileRow: int(y0), MaxTileRow: int(y1),
+			MinTileCol: int(x0), MaxTileCol: int(x1),
+		})
+	}
+	return limits
 }
 
 type tileMatrixSetSummary struct {

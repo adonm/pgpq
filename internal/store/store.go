@@ -747,6 +747,25 @@ func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]floa
 	return out, rows.Err()
 }
 
+func (s *Store) ChunkSizes(ctx context.Context, collection string, ids []int64) (map[int64]int, error) {
+	sizes := make(map[int64]int, len(ids))
+	rows, err := s.Pool.Query(ctx,
+		`select id, size_bytes from chunks where collection = $1 and id = any($2)`, collection, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var size int
+		if err := rows.Scan(&id, &size); err != nil {
+			return nil, err
+		}
+		sizes[id] = size
+	}
+	return sizes, rows.Err()
+}
+
 func (s *Store) ChunksByIDs(ctx context.Context, collection string, ids []int64) ([]ChunkRow, error) {
 	if len(ids) == 0 {
 		return nil, nil

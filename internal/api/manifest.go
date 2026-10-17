@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -23,6 +24,7 @@ type manifestChunk struct {
 }
 
 type manifestOutput struct {
+	ETag string `header:"ETag"`
 	Body struct {
 		Collection   string          `json:"collection"`
 		ChunkCount   int             `json:"chunkCount"`
@@ -33,7 +35,8 @@ type manifestOutput struct {
 }
 
 type manifestInput struct {
-	ID string `path:"id"`
+	ID          string `path:"id"`
+	IfNoneMatch string `header:"If-None-Match"`
 }
 
 func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutput, error) {
@@ -44,7 +47,15 @@ func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutp
 	if err != nil {
 		return nil, err
 	}
-	out := &manifestOutput{}
+	version, err := s.cacheVersion(ctx, info)
+	if err != nil {
+		return nil, err
+	}
+	etag := `"` + version + `"`
+	if in.IfNoneMatch == etag {
+		return nil, huma.ErrorWithHeaders(huma.Status304NotModified(), http.Header{"ETag": {etag}})
+	}
+	out := &manifestOutput{ETag: etag}
 	out.Body.Collection = info.Name
 	if info.Kind == "view" {
 		if err := s.viewManifest(ctx, info, out); err != nil {

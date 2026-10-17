@@ -45,6 +45,7 @@ func serve(args []string) {
 	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
 	maxConns := fs.Int("max-conns", 0, "maximum PostgreSQL pool connections (0 keeps the driver default)")
 	minConns := fs.Int("min-conns", 0, "minimum idle PostgreSQL pool connections (0 keeps the driver default)")
+	maxChunkBytes := fs.Int("max-chunk-bytes", 32<<20, "per-request chunk fetch budget in bytes")
 	readonlyHelp := "serve the read-only surface: no ingest, no delete, no raw chunk or manifest access"
 	readonly := fs.Bool("readonly", envBool("POSTFGB_READONLY"), readonlyHelp)
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup (skipped by default in --readonly)")
@@ -84,7 +85,7 @@ func serve(args []string) {
 	}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly}),
+		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly, MaxBytes: *maxChunkBytes}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errCh := make(chan error, 1)

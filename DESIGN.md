@@ -41,7 +41,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 ## Read path
 
 - Unfiltered scans stream chunk windows in id order with no fixed chunk cap; offset paging stays exact at any collection size.
-- Filtered requests fan out over matched chunks under a per-request byte budget; short pages always carry honest next links.
+- Filtered requests fan out over matched chunks under a per-request byte budget (`--max-chunk-bytes`, 32 MiB by default) so fetch windows stay bounded no matter how large individual chunks are; short pages always carry honest next links.
 - Items: GeoJSON default; `f=flatgeobuf` streams full detail as a single FGB. Default page 50,000 (1,000,000 for FlatGeobuf), max 1,000,000. `overview=auto|0|1|2` overrides tier selection for unfiltered requests; filters and exports always read full detail. `numberMatched` is opt-in. `/collections/{id}/items/{featureId}` serves one feature.
 - Tiles: MVT rendered per request in Go — clip, simplify, remove-empty — gzipped. Unfiltered `z <= 2` reads the 1% tier, `z <= 4` the 10% tier, deeper zoom reads full detail; filtered tiles always read full detail. Empty tiles are valid empty layers (200). Tileset metadata advertises per-collection zoom limits and bbox; MVT features carry the same ids as items.
 - Overview tiers: ordinal stride 10 / 100 with Douglas-Peucker simplification and small non-point geometries dropped; ~10-15% extra storage; a collection without tiers falls back to full detail.

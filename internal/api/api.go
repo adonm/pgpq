@@ -31,6 +31,7 @@ import (
 type Server struct {
 	Store        *store.Store
 	MaxChunks    int
+	MaxBytes     int
 	DefaultLimit int
 	ReadOnly     bool
 	metrics      *metrics
@@ -41,6 +42,7 @@ type Server struct {
 type Config struct {
 	Store    *store.Store
 	ReadOnly bool
+	MaxBytes int
 }
 
 type link struct {
@@ -58,8 +60,11 @@ func New(st *store.Store) http.Handler {
 func NewWithConfig(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("postfgb", "0.1.0"))
+	if cfg.MaxBytes <= 0 {
+		cfg.MaxBytes = 32 << 20
+	}
 	s := &Server{
-		Store: cfg.Store, MaxChunks: 64, DefaultLimit: 50000,
+		Store: cfg.Store, MaxChunks: 64, MaxBytes: cfg.MaxBytes, DefaultLimit: 50000,
 		ReadOnly: cfg.ReadOnly, metrics: newMetrics(),
 	}
 	s.register(api)
@@ -416,6 +421,7 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 			return skipped
 		}
 		fallback = false
+		metas, trimmed := budgetMetas(metas, s.MaxBytes)
 		fetch := make([]store.ChunkMeta, 0, len(metas))
 		fetchIDs := make([]int64, 0, len(metas))
 		for _, meta := range metas {
@@ -462,7 +468,7 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 				}
 			}
 		}
-		if len(metas) < s.MaxChunks {
+		if len(metas) < s.MaxChunks && !trimmed {
 			return skipped
 		}
 		after = metas[len(metas)-1].ID
@@ -490,12 +496,8 @@ func (s *Server) emitMatches(ctx context.Context, sink featureSink, info store.C
 		}
 		set[m.Ord] = true
 	}
-	for start := 0; start < len(ids); start += s.MaxChunks {
-		end := start + s.MaxChunks
-		if end > len(ids) {
-			end = len(ids)
-		}
-		rows := s.fetchRows(ctx, info.Name, ids[start:end])
+	for _, batch := range s.chunkBatches(ctx, info.Name, ids) {
+		rows := s.fetchRows(ctx, info.Name, batch)
 		for j := range rows {
 			if rows[j].Data == nil {
 				continue
@@ -759,6 +761,7 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 			break
 		}
 		fallback = false
+		metas, trimmed := budgetMetas(metas, s.MaxBytes)
 		fetch := make([]store.ChunkMeta, 0, len(metas))
 		fetchIDs := make([]int64, 0, len(metas))
 		for _, meta := range metas {
@@ -811,7 +814,7 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 				features = append(features, f)
 			}
 		}
-		if len(metas) < s.MaxChunks {
+		if len(metas) < s.MaxChunks && !trimmed {
 			break
 		}
 		after = metas[len(metas)-1].ID
@@ -841,12 +844,8 @@ func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float
 	}
 	var features []*flattypes.Feature
 	var header *flattypes.Header
-	for start := 0; start < len(ids); start += s.MaxChunks {
-		end := start + s.MaxChunks
-		if end > len(ids) {
-			end = len(ids)
-		}
-		rows := s.fetchRows(ctx, id, ids[start:end])
+	for _, batch := range s.chunkBatches(ctx, id, ids) {
+		rows := s.fetchRows(ctx, id, batch)
 		for j := range rows {
 			if rows[j].Data == nil {
 				continue
@@ -1050,10 +1049,10 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			appendFeatures(collection, c, raw)
+			appendFeatures(collection, c, raw, info, row.ID)
 		}
 	default:
-		collection, err = s.tileMatches(ctx, id, bbox, query, filter)
+		collection, err = s.tileMatches(ctx, info, bbox, query, filter)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1084,8 +1083,8 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func appendFeatures(fc *orbgeojson.FeatureCollection, c *chunk.Chunk, feats []*flattypes.Feature) {
-	for _, f := range feats {
+func appendFeatures(fc *orbgeojson.FeatureCollection, c *chunk.Chunk, feats []*flattypes.Feature, info store.CollectionInfo, chunkID int64) {
+	for i, f := range feats {
 		g := c.GeoJSON(f)
 		geom := tiles.ToOrb(g.Geometry)
 		if geom == nil {
@@ -1093,12 +1092,13 @@ func appendFeatures(fc *orbgeojson.FeatureCollection, c *chunk.Chunk, feats []*f
 		}
 		feature := orbgeojson.NewFeature(geom)
 		feature.Properties = g.Properties
+		feature.ID = featureID(info, chunkID, i, g.Properties)
 		fc.Append(feature)
 	}
 }
 
-func (s *Server) tileMatches(ctx context.Context, id string, bbox [4]float64, query string, filter cql.Expr) (*orbgeojson.FeatureCollection, error) {
-	matches, err := s.Store.Matches(ctx, id, &bbox, query, filter, s.DefaultLimit, 0)
+func (s *Server) tileMatches(ctx context.Context, info store.CollectionInfo, bbox [4]float64, query string, filter cql.Expr) (*orbgeojson.FeatureCollection, error) {
+	matches, err := s.Store.Matches(ctx, info.Name, &bbox, query, filter, s.DefaultLimit, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1114,12 +1114,8 @@ func (s *Server) tileMatches(ctx context.Context, id string, bbox [4]float64, qu
 		set[m.Ord] = true
 	}
 	fc := orbgeojson.NewFeatureCollection()
-	for start := 0; start < len(ids); start += s.MaxChunks {
-		end := start + s.MaxChunks
-		if end > len(ids) {
-			end = len(ids)
-		}
-		rows, err := s.Store.ChunksByIDs(ctx, id, ids[start:end])
+	for _, batch := range s.chunkBatches(ctx, info.Name, ids) {
+		rows, err := s.Store.ChunksByIDs(ctx, info.Name, batch)
 		if err != nil {
 			return nil, err
 		}
@@ -1147,6 +1143,7 @@ func (s *Server) tileMatches(ctx context.Context, id string, bbox [4]float64, qu
 				}
 				feature := orbgeojson.NewFeature(geom)
 				feature.Properties = g.Properties
+				feature.ID = featureID(info, row.ID, i, g.Properties)
 				fc.Append(feature)
 			}
 		}
