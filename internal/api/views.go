@@ -85,17 +85,19 @@ func (s *Server) memberFilter(member viewMember) (cql.Expr, error) {
 	return cql.Parse(member.Filter)
 }
 
-func (s *Server) streamView(ctx context.Context, fw featureSink, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int, overview *int, tw timeWindow) {
+type unionMember struct {
+	info   store.CollectionInfo
+	filter cql.Expr
+	member viewMember
+}
+
+func (s *Server) viewMembers(ctx context.Context, info store.CollectionInfo) ([]unionMember, error) {
 	members, err := parseMembers(info)
 	if err != nil {
-		slog.Error("view members parse failed", "collection", info.Name, "error", err)
-		return
+		return nil, err
 	}
-	remaining := offset
+	out := make([]unionMember, 0, len(members))
 	for _, member := range members {
-		if fw.full() {
-			return
-		}
 		mi, err := s.Store.Collection(ctx, member.Collection)
 		if err != nil {
 			slog.Error("view member missing", "collection", info.Name, "member", member.Collection, "error", err)
@@ -106,32 +108,43 @@ func (s *Server) streamView(ctx context.Context, fw featureSink, info store.Coll
 			slog.Error("view member filter invalid", "collection", info.Name, "member", member.Collection, "error", err)
 			continue
 		}
-		effective := cql.And(memberFilter, cql.Rename(filter, member.renameFn()))
+		out = append(out, unionMember{info: mi, filter: memberFilter, member: member})
+	}
+	return out, nil
+}
+
+func (s *Server) streamUnion(ctx context.Context, members []unionMember, sinkFor func(store.CollectionInfo, viewMember) featureSink, bbox *[4]float64, query string, filter cql.Expr, offset int, overview *int, tw timeWindow) {
+	remaining := offset
+	for _, m := range members {
+		sink := sinkFor(m.info, m.member)
+		if sink.full() {
+			return
+		}
+		effective := cql.And(m.filter, cql.Rename(filter, m.member.renameFn()))
 		if tw.set {
-			if mi.TimeColumn == nil || *mi.TimeColumn == "" {
+			if m.info.TimeColumn == nil || *m.info.TimeColumn == "" {
 				continue
 			}
-			effective = cql.And(effective, datetimeExpr(*mi.TimeColumn, tw))
+			effective = cql.And(effective, datetimeExpr(*m.info.TimeColumn, tw))
 		}
-		sink := &memberWriter{base: fw, member: member}
 		if effective == nil && query == "" {
 			tier := 0
 			if overview != nil {
 				tier = *overview
 			}
-			remaining -= s.streamBBox(ctx, sink, mi, bbox, remaining, tier)
+			remaining -= s.streamBBox(ctx, sink, m.info, bbox, remaining, tier)
 		} else {
 			skip := 0
 			if remaining > 0 {
-				count, err := s.Store.CountMatches(ctx, mi.Name, bbox, query, effective)
+				count, err := s.Store.CountMatches(ctx, m.info.Name, bbox, query, effective)
 				if err != nil {
-					slog.Error("view member count failed", "collection", info.Name, "member", member.Collection, "error", err)
+					slog.Error("union member count failed", "collection", m.info.Name, "error", err)
 					continue
 				}
 				skip = min(remaining, int(count))
 			}
 			remaining -= skip
-			s.streamMatches(ctx, sink, mi, bbox, query, effective, skip)
+			s.streamMatches(ctx, sink, m.info, bbox, query, effective, skip)
 		}
 		if remaining < 0 {
 			remaining = 0

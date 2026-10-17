@@ -29,14 +29,14 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## Write path — HTTP only
 
-- `PUT /collections/{id}/data` (admin bearer token) takes a whole-file FlatGeobuf body — not pre-chunked. Create-or-replace.
-- Synchronous within one transaction: readers always see the old collection or the new one. Failure or disconnect rolls back; loads are retried from scratch (accepted cost).
+- `PUT /collections/{id}` (admin bearer token) is content-negotiated. A FlatGeobuf body — the default for any non-JSON content type — creates or replaces the collection from a whole file, not pre-chunked uploads. A JSON body writes catalog metadata: the STAC collection document is stored and echoed by the STAC facade, and its `title`, `description`, `license` and `keywords` feed the OGC collection; `members` instead defines or replaces a union view. `DELETE /collections/{id}` drops the collection.
+- Loads are transactional: rows go into uncommitted staging tables, indexes and overview tiers are built there, and the commit swaps partitions — drop the old ones, attach the staged ones — so parent-level locks last milliseconds. Readers keep serving the previous version for the whole load and see either the old collection or the new one.
+- Failure or disconnect rolls back; staging tables disappear with the transaction and loads are retried from scratch (accepted cost).
 - Input CRS: any CRS supported by the pure-Go projection layer ([wroge/wgs84](https://github.com/wroge/wgs84)) is reprojected to WGS84 during ingest; anything else is rejected at upload time. Stored geometries are 2D (Z dropped), and chunks declare EPSG:4326.
 - The FGB header supplies the uniform schema, and ingest sorts features in bounded windows on the Hilbert curve, so chunking yields spatially coherent chunks and small queries touch few chunks regardless of upload order. Server-side chunking targets roughly 2 MiB per chunk with a self-calibrating byte estimator; overview tiers accumulate to the same target.
-- Time column: first DateTime-typed column (overridable). Feature id preference: an id-like property (`id`, `fid`, `gid`, `ogc_fid`), then the synthetic `chunkID-ord`.
+- Time column: first DateTime-typed column (overridable with `time_column`). Feature id preference: an id-like property (`id`, `fid`, `gid`, `ogc_fid`, overridable with `id_column`), then the synthetic `chunkID-ord`.
 - Sortable columns are declared on the PUT request and indexed during the load (btree expression indexes per partition).
-- Overview tiers (10%, 1%) are rebuilt inside the load transaction. `DELETE /collections/{id}` removes the collection.
-- The ingest CLI is removed; fixtures come from Layercake GeoParquet piped through ogr2ogr (`just layercake`, `just fixtures`) or any FlatGeobuf via curl.
+- Loading is a client pipeline, not a server job: ogr2ogr reads any source (GeoParquet via Layercake, databases, files), materializes FlatGeobuf locally and streams it into the same PUT. The server keeps no loader, no background jobs and no format conversion.
 
 ## Read path
 
@@ -46,7 +46,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 - Tiles: MVT rendered per request in Go — clip, simplify, remove-empty — gzipped. Unfiltered `z <= 2` reads the 1% tier, `z <= 4` the 10% tier, deeper zoom reads full detail; filtered tiles always read full detail. Empty tiles are valid empty layers (200). Tileset metadata advertises per-collection zoom limits and bbox; MVT features carry the same ids as items.
 - Overview tiers: ordinal stride 10 / 100 with Douglas-Peucker simplification and small non-point geometries dropped; ~10-15% extra storage; a collection without tiers falls back to full detail.
 - Queryables come from catalog columns; `datetime` filters the recorded time column (per member on views); `sortby` works only on declared, indexed columns; `crs` and `bbox-crs` are limited to a curated EPSG list; CQL2 text and JSON cover comparisons, `IN`/`BETWEEN`/`LIKE`/`IS NULL`, and spatial `S_INTERSECTS` with polygonal WKT or GeoJSON (top-level AND only) implemented with polyclip-go over an in-house WKT parser.
-- Conformance classes are only claimed when implemented — no over-claiming. The Part 1 Core single-feature path is missing today and lands with the feature endpoint.
+- Conformance classes are only claimed when implemented — no over-claiming.
 
 ## HTTP caching
 
@@ -72,7 +72,7 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 - Virtual PMTiles archives and the go-pmtiles dependency (removed; OGC Tiles is the tile interface).
 - Materialized views and DB-native view discovery; views of views.
 - Dynamic per-collection tables and schema-per-collection storage.
-- Async ingest jobs and upload sessions for push uploads (push stays a synchronous, transactional replace); versioned blue/green replace. STAC pull ingests do run in the background: an internal load spec names the source and the ogr2ogr options, an adjacent loader materializes FlatGeobuf, and progress is tracked on the submitted STAC document itself.
+- Async ingest jobs and upload sessions (push stays a synchronous, transactional replace); versioned blue/green replace. STAC pull ingests and an adjacent ogr2ogr loader: loading is a client-side pipeline that streams FlatGeobuf into the same PUT, so the server keeps no background jobs and stays a single dependency-free binary.
 - cgo PROJ; the rustgis-cli export engine; server-side format conversion (clients convert FlatGeobuf locally); runtime extension accelerators (probing stays as a future hook).
 
 ## Build order
@@ -86,4 +86,4 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 7. Exports through ogr2ogr only.
 8. Ops: healthz/readyz, metrics, lifecycle and pool flags, integration tests in CI.
 9. Performance: parallel chunk fetch, byte budget, shared Postgres tile cache with version-keyed tiles and manifest (ETags from the same version), MVT ids, tileset limits.
-10. STAC: full API facade (catalog, collections, items, search) and pull ingestion via an internal load spec executed by an adjacent ogr2ogr-based loader; ingest progress is tracked on the STAC document itself.
+10. STAC: read-only API facade (catalog, collections, items, search) over the same collections; collection metadata arrives as the JSON body of `PUT /collections/{id}`.

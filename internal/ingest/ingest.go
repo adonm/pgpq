@@ -73,7 +73,6 @@ type Options struct {
 	Sortable   []string
 	IDColumn   string
 	TimeColumn string
-	Meta       store.CollectionMeta
 }
 
 type Result struct {
@@ -196,10 +195,7 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	if err := ing.CreateSortIndexes(ctx, sortColumns(cols, opts.Sortable)); err != nil {
 		return Result{}, err
 	}
-	if err := ing.SetCatalog(ctx, opts.Sortable, idColumn, timeColumn, timeMin, timeMax, opts.Meta); err != nil {
-		return Result{}, err
-	}
-	if err := ing.RefreshStats(ctx); err != nil {
+	if err := ing.SetCatalog(ctx, opts.Sortable, idColumn, timeColumn, timeMin, timeMax); err != nil {
 		return Result{}, err
 	}
 	if err := ing.Commit(ctx); err != nil {

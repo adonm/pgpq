@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -11,34 +12,28 @@ import (
 	"github.com/adonm/postfgb/internal/store"
 )
 
-func (s *Server) ingestData(w http.ResponseWriter, r *http.Request) {
+func (s *Server) putCollection(w http.ResponseWriter, r *http.Request) {
 	if !s.adminOK(r.Header.Get("Authorization")) {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if !store.ValidName(r.PathValue("id")) {
+		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
+		return
+	}
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		s.putCollectionDoc(w, r)
+		return
+	}
+	s.putCollectionData(w, r)
+}
+
+func (s *Server) putCollectionData(w http.ResponseWriter, r *http.Request) {
 	sortable := parseList(r.URL.Query().Get("sortable"))
 	if len(sortable) > 4 {
 		http.Error(w, "at most 4 sortable columns", http.StatusBadRequest)
 		return
-	}
-	query := r.URL.Query()
-	var meta store.CollectionMeta
-	if query.Has("title") {
-		value := query.Get("title")
-		meta.Title = &value
-	}
-	if query.Has("description") {
-		value := query.Get("description")
-		meta.Description = &value
-	}
-	if query.Has("license") {
-		value := query.Get("license")
-		meta.License = &value
-	}
-	if query.Has("keywords") {
-		value := parseList(query.Get("keywords"))
-		meta.Keywords = &value
 	}
 	id := r.PathValue("id")
 	result, err := ingest.Run(r.Context(), s.Store, r.Body, ingest.Options{
@@ -46,7 +41,6 @@ func (s *Server) ingestData(w http.ResponseWriter, r *http.Request) {
 		Sortable:   sortable,
 		IDColumn:   r.URL.Query().Get("id_column"),
 		TimeColumn: r.URL.Query().Get("time_column"),
-		Meta:       meta,
 	})
 	if errors.Is(err, ingest.ErrInvalid) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
@@ -69,31 +63,53 @@ func (s *Server) ingestData(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) putView(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOK(r.Header.Get("Authorization")) {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
+type collectionDoc struct {
+	ID          string       `json:"id"`
+	Title       *string      `json:"title"`
+	Description *string      `json:"description"`
+	License     *string      `json:"license"`
+	Keywords    *[]string    `json:"keywords"`
+	Members     []viewMember `json:"members"`
+}
+
+func (s *Server) putCollectionDoc(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
-	var req struct {
-		Title       *string      `json:"title"`
-		Description *string      `json:"description"`
-		License     *string      `json:"license"`
-		Keywords    *[]string    `json:"keywords"`
-		Members     []viewMember `json:"members"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, "invalid view definition", http.StatusBadRequest)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "invalid document", http.StatusBadRequest)
 		return
 	}
-	if len(req.Members) == 0 || len(req.Members) > maxViewMembers {
+	var doc collectionDoc
+	if err := json.Unmarshal(body, &doc); err != nil {
+		http.Error(w, "invalid document", http.StatusBadRequest)
+		return
+	}
+	if doc.ID != "" && doc.ID != id {
+		http.Error(w, "document id does not match the path", http.StatusUnprocessableEntity)
+		return
+	}
+	meta := store.CollectionMeta{Title: doc.Title, Description: doc.Description, License: doc.License, Keywords: doc.Keywords}
+	if doc.Members != nil {
+		s.putViewDoc(w, r, id, doc.Members, meta)
+		return
+	}
+	if err := s.Store.PutMeta(ctx, id, body, meta); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"collection": id})
+}
+
+func (s *Server) putViewDoc(w http.ResponseWriter, r *http.Request, id string, members []viewMember, meta store.CollectionMeta) {
+	ctx := r.Context()
+	if len(members) == 0 || len(members) > maxViewMembers {
 		http.Error(w, "view needs 1 to 16 members", http.StatusUnprocessableEntity)
 		return
 	}
 	seen := map[string]bool{}
-	for _, member := range req.Members {
+	for _, member := range members {
 		if member.Collection == "" || seen[member.Collection] {
 			http.Error(w, "duplicate or empty member", http.StatusUnprocessableEntity)
 			return
@@ -131,12 +147,11 @@ func (s *Server) putView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	payload, err := json.Marshal(req.Members)
+	payload, err := json.Marshal(members)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	meta := store.CollectionMeta{Title: req.Title, Description: req.Description, License: req.License, Keywords: req.Keywords}
 	if err := s.Store.PutView(ctx, id, payload, meta); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "collection exists and is not a view", http.StatusConflict)
 		return
@@ -150,7 +165,7 @@ func (s *Server) putView(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{"collection": id, "members": len(req.Members)})
+	json.NewEncoder(w).Encode(map[string]any{"collection": id, "members": len(members)})
 }
 
 func (s *Server) deleteCollection(w http.ResponseWriter, r *http.Request) {

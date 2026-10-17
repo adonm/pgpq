@@ -43,7 +43,7 @@ curl "localhost:8080/collections/bench/items?bbox=-10,45,10,55&limit=100"
 curl 'localhost:8080/collections/bench/items?q="feature-42"'
 curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
 curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i between 5 and 7 and name like 'feature-6%'"
-curl -X PUT --data-binary @features.fgb "localhost:8080/collections/demo/data"
+curl -X PUT -H "Content-Type: application/flatgeobuf" --data-binary @features.fgb "localhost:8080/collections/demo"
 ```
 
 ## Endpoints
@@ -57,9 +57,12 @@ curl -X PUT --data-binary @features.fgb "localhost:8080/collections/demo/data"
 | `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters including spatial `S_INTERSECTS`, paged (50,000 default); `overview=auto|0|1|2` picks or bypasses the overview tier (views serve full detail unless set); `numberMatched=true` adds the match count; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/items/{featureId}` | single feature; ids come from an id-like property (`id`, `fid`, ...) or the synthetic `chunkID-ord` |
 | `/collections/{id}/queryables` | JSON Schema of the filterable properties |
-| `PUT /collections/{id}/data?sortable=` | create-or-replace the collection from a whole FlatGeobuf upload; synchronous, transactional, reprojected to WGS84; `sortable` declares up to 4 indexed columns (admin token) |
-| `PUT /collections/{id}/view` | define or replace a union view: ordered members with optional CQL2 filter and column mapping (admin token) |
+| `PUT /collections/{id}?sortable=&id_column=&time_column=` | create-or-replace the collection from a whole FlatGeobuf body (any non-JSON content type); transactional, reprojected to WGS84, readers keep the old version until the swap; `sortable` declares up to 4 indexed columns (admin token) |
+| `PUT /collections/{id}` (JSON body) | write the STAC collection document: `title`, `description`, `license`, `keywords` and free-form STAC fields are stored and echoed by the STAC facade; `members` defines or replaces a union view (admin token) |
 | `DELETE /collections/{id}` | drop a collection and its partitions (admin token) |
+| `/stac`, `/stac/collections`, `/stac/collections/{id}` | STAC catalog and collections |
+| `/stac/collections/{id}/items?bbox=&datetime=&limit=` | STAC items (full detail, GeoJSON) |
+| `/stac/search` | STAC item search, `GET` and `POST` |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
 | `/collections/{id}/tiles` | tileset list |
@@ -114,7 +117,7 @@ ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/benc
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (create-or-replace PUT, transactional, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, union views with per-member filters and column mapping, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters including spatial `S_INTERSECTS`, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, FlatGeobuf downloads for local conversion, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (ops, performance).
+Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (content-negotiated create-or-replace PUT, staged loads swapped in at commit, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, union views with per-member filters and column mapping, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters including spatial `S_INTERSECTS`, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, FlatGeobuf downloads for local conversion, STAC catalog/collections/items/search facade, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (ops, performance).
 
 ## License
 

@@ -95,6 +95,7 @@ type CollectionInfo struct {
 	Description  *string
 	License      *string
 	Keywords     []string
+	Stac         []byte
 }
 
 type CollectionMeta struct {
@@ -201,11 +202,16 @@ func (s *Store) Capabilities(ctx context.Context) (map[string]bool, error) {
 
 var collectionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$`)
 
+func ValidName(name string) bool {
+	return collectionName.MatchString(name)
+}
+
 var chunkPartitions = []string{"chunks", "chunk_text", "chunk_props"}
 
 type Ingest struct {
 	tx         pgx.Tx
 	collection string
+	staging    map[string]string
 }
 
 func (s *Store) BeginIngest(ctx context.Context, name string) (*Ingest, error) {
@@ -221,38 +227,133 @@ func (s *Store) BeginIngest(ctx context.Context, name string) (*Ingest, error) {
 		tx.Rollback(ctx)
 		return nil, err
 	}
-	ing := &Ingest{tx: tx, collection: name}
-	if err := ing.resetPartitions(ctx); err != nil {
+	ing := &Ingest{tx: tx, collection: name, staging: map[string]string{}}
+	if err := ing.createStaging(ctx); err != nil {
 		tx.Rollback(ctx)
 		return nil, err
 	}
 	return ing, nil
 }
 
-func (i *Ingest) resetPartitions(ctx context.Context) error {
+func (i *Ingest) createStaging(ctx context.Context) error {
+	for _, parent := range chunkPartitions {
+		i.staging[parent] = parent + "_" + i.collection + "_next"
+	}
+	chunks := pgx.Identifier{i.staging["chunks"]}.Sanitize()
+	if _, err := i.tx.Exec(ctx, `create table `+chunks+` (
+		id bigint not null,
+		collection text not null,
+		tier smallint not null default 0,
+		feature_count int not null,
+		size_bytes int not null,
+		minx double precision not null,
+		miny double precision not null,
+		maxx double precision not null,
+		maxy double precision not null,
+		cover int8multirange not null,
+		checksum text,
+		columns jsonb not null default '[]',
+		data bytea not null,
+		primary key (collection, id)
+	)`); err != nil {
+		return err
+	}
+	text := pgx.Identifier{i.staging["chunk_text"]}.Sanitize()
+	if _, err := i.tx.Exec(ctx, `create table `+text+` (
+		collection text not null,
+		chunk_id bigint not null,
+		feature_ord int not null,
+		tsv tsvector not null,
+		primary key (collection, chunk_id, feature_ord)
+	)`); err != nil {
+		return err
+	}
+	props := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
+	if _, err := i.tx.Exec(ctx, `create table `+props+` (
+		collection text not null,
+		chunk_id bigint not null,
+		feature_ord int not null,
+		props jsonb not null,
+		primary key (collection, chunk_id, feature_ord)
+	)`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (i *Ingest) createIndexes(ctx context.Context) error {
+	chunks := pgx.Identifier{i.staging["chunks"]}.Sanitize()
+	if _, err := i.tx.Exec(ctx, `create index on `+chunks+` using gist (cover)`); err != nil {
+		return err
+	}
+	if _, err := i.tx.Exec(ctx, `create index on `+chunks+` (tier, id)`); err != nil {
+		return err
+	}
+	text := pgx.Identifier{i.staging["chunk_text"]}.Sanitize()
+	if _, err := i.tx.Exec(ctx, `create index on `+text+` using gin (tsv)`); err != nil {
+		return err
+	}
+	props := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
+	_, err := i.tx.Exec(ctx, `create index on `+props+` using gin (props jsonb_path_ops)`)
+	return err
+}
+
+func (i *Ingest) swap(ctx context.Context) error {
 	view := pgx.Identifier{"layers", i.collection}.Sanitize()
 	if _, err := i.tx.Exec(ctx, `drop view if exists `+view); err != nil {
 		return err
 	}
 	for j := len(chunkPartitions) - 1; j >= 0; j-- {
-		partition := pgx.Identifier{chunkPartitions[j] + "_" + i.collection}.Sanitize()
-		if _, err := i.tx.Exec(ctx, `drop table if exists `+partition); err != nil {
+		old := pgx.Identifier{chunkPartitions[j] + "_" + i.collection}.Sanitize()
+		if _, err := i.tx.Exec(ctx, `drop table if exists `+old); err != nil {
 			return err
 		}
 	}
 	for _, parent := range chunkPartitions {
-		partition := pgx.Identifier{parent + "_" + i.collection}.Sanitize()
-		if _, err := i.tx.Exec(ctx,
-			`create table `+partition+` partition of `+parent+` for values in ('`+i.collection+`')`); err != nil {
+		staging := pgx.Identifier{i.staging[parent]}.Sanitize()
+		final := pgx.Identifier{parent + "_" + i.collection}.Sanitize()
+		if _, err := i.tx.Exec(ctx, `alter table `+staging+` rename to `+final); err != nil {
+			return err
+		}
+		if _, err := i.tx.Exec(ctx, `alter table `+parent+` attach partition `+final+` for values in ('`+i.collection+`')`); err != nil {
+			return err
+		}
+		if err := i.renameIndexes(ctx, parent+"_"+i.collection); err != nil {
 			return err
 		}
 	}
-	if _, err := i.tx.Exec(ctx, `create schema if not exists layers`); err != nil {
+	return nil
+}
+
+func (i *Ingest) renameIndexes(ctx context.Context, table string) error {
+	rows, err := i.tx.Query(ctx, `select indexname from pg_indexes where tablename = $1`, table)
+	if err != nil {
 		return err
 	}
-	_, err := i.tx.Exec(ctx,
-		`create or replace view `+view+` as select * from chunks where collection = '`+i.collection+`' and tier = 0`)
-	return err
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		names = append(names, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, name := range names {
+		renamed := strings.Replace(name, "_next_", "_", 1)
+		if renamed == name {
+			continue
+		}
+		if _, err := i.tx.Exec(ctx,
+			`alter index `+pgx.Identifier{name}.Sanitize()+` rename to `+pgx.Identifier{renamed}.Sanitize()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) DropCollection(ctx context.Context, name string) error {
@@ -330,6 +431,27 @@ func (s *Store) PutView(ctx context.Context, name string, members []byte, meta C
 	return err
 }
 
+func (s *Store) PutMeta(ctx context.Context, name string, doc []byte, meta CollectionMeta) error {
+	if !collectionName.MatchString(name) {
+		return fmt.Errorf("invalid collection name %q", name)
+	}
+	keywords := any(nil)
+	if meta.Keywords != nil {
+		keywords = *meta.Keywords
+	}
+	_, err := s.Pool.Exec(ctx, `
+		insert into collections (name, stac, title, description, license, keywords)
+		values ($1, $2::jsonb, $3, $4, $5, coalesce($6::text[], '{}'))
+		on conflict (name) do update set
+			stac = excluded.stac,
+			title = coalesce(excluded.title, collections.title),
+			description = coalesce(excluded.description, collections.description),
+			license = coalesce(excluded.license, collections.license),
+			keywords = case when $6::text[] is null then collections.keywords else excluded.keywords end`,
+		name, doc, meta.Title, meta.Description, meta.License, keywords)
+	return err
+}
+
 func (s *Store) TileCacheGet(ctx context.Context, collection, version string, tier, z, x, y int, filterKey string) ([]byte, string, bool, error) {
 	var data []byte
 	var etag string
@@ -361,6 +483,23 @@ func (s *Store) PurgeTileCache(ctx context.Context) error {
 }
 
 func (i *Ingest) Commit(ctx context.Context) error {
+	if err := i.createIndexes(ctx); err != nil {
+		return err
+	}
+	if err := i.swap(ctx); err != nil {
+		return err
+	}
+	if err := refreshStats(ctx, i.tx, i.collection); err != nil {
+		return err
+	}
+	if _, err := i.tx.Exec(ctx, `create schema if not exists layers`); err != nil {
+		return err
+	}
+	view := pgx.Identifier{"layers", i.collection}.Sanitize()
+	if _, err := i.tx.Exec(ctx,
+		`create or replace view `+view+` as select * from chunks where collection = '`+i.collection+`' and tier = 0`); err != nil {
+		return err
+	}
 	return i.tx.Commit(ctx)
 }
 
@@ -369,51 +508,30 @@ func (i *Ingest) Rollback(ctx context.Context) {
 }
 
 func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
-	return putChunk(ctx, i.tx, i.collection, payload)
+	return putChunk(ctx, i.tx, i.staging["chunks"], i.collection, payload)
 }
 
 func (i *Ingest) PutChunkText(ctx context.Context, chunkID int64, docs []string) error {
-	return putChunkText(ctx, i.tx, i.collection, chunkID, docs)
+	return putChunkText(ctx, i.tx, i.staging["chunk_text"], i.collection, chunkID, docs)
 }
 
 func (i *Ingest) PutChunkProps(ctx context.Context, chunkID int64, docs []string) error {
-	return putChunkProps(ctx, i.tx, i.collection, chunkID, docs)
+	return putChunkProps(ctx, i.tx, i.staging["chunk_props"], i.collection, chunkID, docs)
 }
 
 func (i *Ingest) Chunks(ctx context.Context, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {
-	return chunks(ctx, i.tx, i.collection, bbox, limit, tier)
+	return chunks(ctx, i.tx, i.staging["chunks"], i.collection, bbox, limit, tier)
 }
 
 func (i *Ingest) DeleteChunksAboveTier(ctx context.Context, tier int) error {
-	return deleteChunksAboveTier(ctx, i.tx, i.collection, tier)
+	return deleteChunksAboveTier(ctx, i.tx, i.staging["chunks"], tier)
 }
 
-func (i *Ingest) RefreshStats(ctx context.Context) error {
-	return refreshStats(ctx, i.tx, i.collection)
-}
-
-func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string, timeMin, timeMax *time.Time, meta CollectionMeta) error {
-	sql := `update collections set kind = 'native', version = version + 1, sortable = coalesce($2::text[], '{}'),
-			id_column = $3, time_column = $4, time_min = $5, time_max = $6`
-	args := []any{i.collection, sortable, nullable(idColumn), nullable(timeColumn), timeMin, timeMax}
-	if meta.Title != nil {
-		sql += fmt.Sprintf(", title = $%d", len(args)+1)
-		args = append(args, nullable(*meta.Title))
-	}
-	if meta.Description != nil {
-		sql += fmt.Sprintf(", description = $%d", len(args)+1)
-		args = append(args, nullable(*meta.Description))
-	}
-	if meta.License != nil {
-		sql += fmt.Sprintf(", license = $%d", len(args)+1)
-		args = append(args, nullable(*meta.License))
-	}
-	if meta.Keywords != nil {
-		sql += fmt.Sprintf(", keywords = coalesce($%d::text[], '{}')", len(args)+1)
-		args = append(args, *meta.Keywords)
-	}
-	sql += ` where name = $1`
-	_, err := i.tx.Exec(ctx, sql, args...)
+func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string, timeMin, timeMax *time.Time) error {
+	_, err := i.tx.Exec(ctx, `
+		update collections set kind = 'native', version = version + 1, sortable = coalesce($2::text[], '{}'),
+			id_column = $3, time_column = $4, time_min = $5, time_max = $6
+		where name = $1`, i.collection, sortable, nullable(idColumn), nullable(timeColumn), timeMin, timeMax)
 	return err
 }
 
@@ -437,7 +555,7 @@ func (i *Ingest) CreateSortIndexes(ctx context.Context, cols []SortColumn) error
 			return fmt.Errorf("sortable: unsupported cast %q", col.Cast)
 		}
 		name := pgx.Identifier{fmt.Sprintf("chunk_props_%s_sort_%d_idx", i.collection, idx)}.Sanitize()
-		table := pgx.Identifier{"chunk_props_" + i.collection}.Sanitize()
+		table := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
 		if _, err := i.tx.Exec(ctx, `create index `+name+` on `+table+` ((`+expr+`))`); err != nil {
 			return err
 		}
@@ -452,11 +570,11 @@ func nullable(s string) any {
 	return s
 }
 
-func putChunk(ctx context.Context, conn db, collection string, payload Payload) (int64, error) {
+func putChunk(ctx context.Context, conn db, table, collection string, payload Payload) (int64, error) {
 	var id int64
 	err := conn.QueryRow(ctx, `
-		insert into chunks (collection, tier, feature_count, size_bytes, minx, miny, maxx, maxy, cover, checksum, columns, data)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9::int8multirange, $10, $11::jsonb, $12)
+		insert into `+table+` (id, collection, tier, feature_count, size_bytes, minx, miny, maxx, maxy, cover, checksum, columns, data)
+		values (nextval(pg_get_serial_sequence('chunks', 'id')), $1, $2, $3, $4, $5, $6, $7, $8, $9::int8multirange, $10, $11::jsonb, $12)
 		returning id`,
 		collection, payload.Tier, payload.Count, payload.Size,
 		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY, payload.Cover,
@@ -464,7 +582,7 @@ func putChunk(ctx context.Context, conn db, collection string, payload Payload) 
 	return id, err
 }
 
-func putChunkText(ctx context.Context, conn db, collection string, chunkID int64, docs []string) error {
+func putChunkText(ctx context.Context, conn db, table, collection string, chunkID int64, docs []string) error {
 	if len(docs) == 0 {
 		return nil
 	}
@@ -473,14 +591,14 @@ func putChunkText(ctx context.Context, conn db, collection string, chunkID int64
 		ords[i] = int32(i)
 	}
 	_, err := conn.Exec(ctx, `
-		insert into chunk_text (collection, chunk_id, feature_ord, tsv)
+		insert into `+table+` (collection, chunk_id, feature_ord, tsv)
 		select $1, $2, ord, to_tsvector('simple', doc)
 		from unnest($3::int[], $4::text[]) as input(ord, doc)
 		where doc <> ''`, collection, chunkID, ords, docs)
 	return err
 }
 
-func putChunkProps(ctx context.Context, conn db, collection string, chunkID int64, docs []string) error {
+func putChunkProps(ctx context.Context, conn db, table, collection string, chunkID int64, docs []string) error {
 	if len(docs) == 0 {
 		return nil
 	}
@@ -489,7 +607,7 @@ func putChunkProps(ctx context.Context, conn db, collection string, chunkID int6
 		ords[i] = int32(i)
 	}
 	_, err := conn.Exec(ctx, `
-		insert into chunk_props (collection, chunk_id, feature_ord, props)
+		insert into `+table+` (collection, chunk_id, feature_ord, props)
 		select $1, $2, ord, doc::jsonb
 		from unnest($3::int[], $4::text[]) as input(ord, doc)
 		where doc <> '' and doc <> '{}' and doc <> 'null'`, collection, chunkID, ords, docs)
@@ -507,8 +625,8 @@ func bboxPredicate(prefix string, bbox *[4]float64, next int) (string, []any) {
 	return fragment, []any{cover.Query(bbox[0], bbox[1], bbox[2], bbox[3]), bbox[0], bbox[1], bbox[2], bbox[3]}
 }
 
-func deleteChunksAboveTier(ctx context.Context, conn db, collection string, tier int) error {
-	_, err := conn.Exec(ctx, `delete from chunks where collection = $1 and tier > $2`, collection, tier)
+func deleteChunksAboveTier(ctx context.Context, conn db, table string, tier int) error {
+	_, err := conn.Exec(ctx, `delete from `+table+` where tier > $1`, tier)
 	return err
 }
 
@@ -527,8 +645,8 @@ func refreshStats(ctx context.Context, conn db, name string) error {
 	return err
 }
 
-func chunks(ctx context.Context, conn db, collection string, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {
-	query := `select id, feature_count, minx, miny, maxx, maxy, data from chunks where collection = $1 and tier = $2`
+func chunks(ctx context.Context, conn db, table, collection string, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {
+	query := `select id, feature_count, minx, miny, maxx, maxy, data from ` + table + ` where collection = $1 and tier = $2`
 	args := []any{collection, tier}
 	if fragment, extra := bboxPredicate("", bbox, len(args)+1); fragment != "" {
 		query += fragment
@@ -540,7 +658,7 @@ func chunks(ctx context.Context, conn db, collection string, bbox *[4]float64, l
 }
 
 func (s *Store) Chunks(ctx context.Context, collection string, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {
-	return chunks(ctx, s.Pool, collection, bbox, limit, tier)
+	return chunks(ctx, s.Pool, "chunks", collection, bbox, limit, tier)
 }
 
 func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit, tier int, after int64) ([]ChunkMeta, error) {
@@ -679,7 +797,7 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, kind, members, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable, title, description, license, keywords from collections`
+const collectionColumns = `select name, kind, members, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable, title, description, license, keywords, stac from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
@@ -692,7 +810,7 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 		var info CollectionInfo
 		if err := rows.Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable,
-			&info.Title, &info.Description, &info.License, &info.Keywords); err != nil {
+			&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac); err != nil {
 			return nil, err
 		}
 		out = append(out, info)
@@ -705,7 +823,7 @@ func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, er
 	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
 		Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
 			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable,
-			&info.Title, &info.Description, &info.License, &info.Keywords)
+			&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return info, ErrNotFound
 	}

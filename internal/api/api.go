@@ -66,10 +66,15 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /{$}", s.landingPage)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/items/{featureID}", s.feature)
-	mux.HandleFunc("PUT /collections/{id}/data", s.ingestData)
-	mux.HandleFunc("PUT /collections/{id}/view", s.putView)
+	mux.HandleFunc("PUT /collections/{id}", s.putCollection)
 	mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
+	mux.HandleFunc("GET /stac", s.stacCatalog)
+	mux.HandleFunc("GET /stac/collections", s.stacCollections)
+	mux.HandleFunc("GET /stac/collections/{id}", s.stacCollection)
+	mux.HandleFunc("GET /stac/collections/{id}/items", s.stacItems)
+	mux.HandleFunc("GET /stac/search", s.stacSearch)
+	mux.HandleFunc("POST /stac/search", s.stacSearch)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
@@ -110,6 +115,7 @@ func (s *Server) landingPage(w http.ResponseWriter, r *http.Request) {
 			{Href: "/api", Rel: "service-desc", Type: "application/vnd.oai.openapi+json;version=3.0", Title: "API definition"},
 			{Href: "/conformance", Rel: "conformance", Type: "application/json", Title: "Conformance classes"},
 			{Href: "/collections", Rel: "data", Type: "application/json", Title: "Collections"},
+			{Href: "/stac", Rel: "stac", Type: "application/json", Title: "STAC catalog"},
 		},
 	})
 }
@@ -137,6 +143,8 @@ func (s *Server) conformance(context.Context, *struct{}) (*conformanceOutput, er
 		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/tilesets-list",
 		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/geodata-tilesets",
 		"http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/mvt",
+		"https://api.stacspec.org/v1.0.0/core",
+		"https://api.stacspec.org/v1.0.0/item-search",
 	}
 	return out, nil
 }
@@ -318,22 +326,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	bbox, err := parseBBox(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	bbox, err = s.inputBBox(r, bbox)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
 	crsFn, contentCRS, err := s.outputCRS(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	overview, err := parseOverview(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -354,46 +347,14 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	filter, err := requestFilter(r)
+	q, err := s.parseFeatureQuery(ctx, r, info, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	tw, err := parseTimeWindow(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if tw.set && info.Kind != "view" {
-		if info.TimeColumn == nil || *info.TimeColumn == "" {
-			http.Error(w, "collection has no time column", http.StatusBadRequest)
-			return
-		}
-		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, tw))
-	}
-	extracted, spatials, err := cql.ExtractSpatial(filter)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	filter = extracted
-	shapes := spatialShapes(spatials)
-	bbox, ok := mergeBBox(bbox, shapes)
-	if !ok {
-		w.Header().Set("Content-Type", "application/geo+json")
-		fw := newFeatureWriter(w, limit, nil)
-		fw.close("")
-		return
-	}
-	order, err := s.sortOrder(ctx, r, info)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	query := r.URL.Query().Get("q")
 	var matched *int64
-	if r.URL.Query().Get("numberMatched") == "true" && len(shapes) == 0 {
-		count, ok, err := s.countMatches(ctx, info, bbox, query, filter, tw)
+	if r.URL.Query().Get("numberMatched") == "true" && len(q.shapes) == 0 {
+		count, ok, err := s.countMatches(ctx, info, q.bbox, q.query, q.filter, q.tw)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -402,29 +363,12 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			matched = &count
 		}
 	}
-	if info.Kind == "view" {
-		if flatgeobuf {
-			http.Error(w, "flatgeobuf export of views is not supported", http.StatusNotImplemented)
-			return
-		}
-		w.Header().Set("Content-Type", "application/geo+json")
-		if contentCRS != "" {
-			w.Header().Set("Content-Crs", contentCRS)
-		}
-		fw := newFeatureWriter(w, limit, matched)
-		var sink featureSink = fw
-		if crsFn != nil {
-			sink = &crsWriter{base: sink, fn: crsFn}
-		}
-		if len(shapes) > 0 {
-			sink = &spatialWriter{base: sink, shapes: shapes}
-		}
-		s.streamView(ctx, sink, info, bbox, query, filter, offset, overview, tw)
-		fw.close(pageLink(r, limit, offset, fw.count))
+	if info.Kind == "view" && flatgeobuf {
+		http.Error(w, "flatgeobuf export of views is not supported", http.StatusNotImplemented)
 		return
 	}
 	if flatgeobuf {
-		s.writeFGB(ctx, w, id, bbox, query, filter, order, shapes, offset, limit, 0)
+		s.writeFGB(ctx, w, id, q.bbox, q.query, q.filter, q.order, q.shapes, q.offset, q.limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
@@ -436,24 +380,13 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	if crsFn != nil {
 		sink = &crsWriter{base: sink, fn: crsFn}
 	}
-	if len(shapes) > 0 {
-		sink = &spatialWriter{base: sink, shapes: shapes}
+	if len(q.shapes) > 0 {
+		sink = &spatialWriter{base: sink, shapes: q.shapes}
 	}
-	switch {
-	case order != nil:
-		s.streamSorted(ctx, sink, info, bbox, query, filter, order, offset)
-	case query != "" || filter != nil:
-		s.streamMatches(ctx, sink, info, bbox, query, filter, offset)
-	default:
-		tier := tierForBounds(bbox)
-		if overview != nil {
-			tier = *overview
-		}
-		if len(shapes) > 0 {
-			tier = 0
-		}
-		s.streamBBox(ctx, sink, info, bbox, offset, tier)
+	sinkFor := func(_ store.CollectionInfo, member viewMember) featureSink {
+		return &memberWriter{base: sink, member: member}
 	}
+	s.streamCollection(ctx, sinkFor, info, q)
 	fw.close(pageLink(r, limit, offset, fw.count))
 }
 
