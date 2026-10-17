@@ -76,3 +76,41 @@ func TestJSONText(t *testing.T) {
 		}
 	}
 }
+
+func TestFlattenJSONColumns(t *testing.T) {
+	cols := []chunk.Column{
+		{Name: "names", Type: flattypes.ColumnTypeJson},
+		{Name: "id", Type: flattypes.ColumnTypeLong},
+	}
+	features := []chunk.InputFeature{
+		{Properties: map[string]json.RawMessage{"names": json.RawMessage(`{"en":"Paris","fr":"Paris","pop":2148000}`)}},
+		{Properties: map[string]json.RawMessage{"names": json.RawMessage(`{"en":"Lyon","pop":515695,"capital":false}`)}},
+		{Properties: map[string]json.RawMessage{"names": json.RawMessage(`{"en":"Nice"}`)}},
+	}
+	out := flattenJSONColumns(cols, features)
+	want := map[string]flattypes.ColumnType{"names_en": flattypes.ColumnTypeString, "names_pop": flattypes.ColumnTypeLong}
+	if len(out) != len(cols)+len(want) {
+		t.Fatalf("columns = %d, want %d", len(out), len(cols)+len(want))
+	}
+	for _, col := range out[len(cols):] {
+		typ, ok := want[col.Name]
+		if !ok {
+			t.Fatalf("unexpected flattened column %q", col.Name)
+		}
+		if col.Type != typ {
+			t.Fatalf("%s type = %v, want %v", col.Name, col.Type, typ)
+		}
+	}
+	if got := string(features[0].Properties["names_en"]); got != `"Paris"` {
+		t.Fatalf("names_en = %s", got)
+	}
+	if got := string(features[1].Properties["names_pop"]); got != "515695" {
+		t.Fatalf("names_pop = %s", got)
+	}
+	if _, ok := features[2].Properties["names_pop"]; ok {
+		t.Fatal("missing key should stay absent")
+	}
+	if _, ok := features[0].Properties["names_fr"]; ok {
+		t.Fatal("a key below the support threshold should not be flattened")
+	}
+}

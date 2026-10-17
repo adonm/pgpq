@@ -35,6 +35,7 @@ func (s *Server) putCollectionData(w http.ResponseWriter, r *http.Request) {
 		Sortable:   sortable,
 		IDColumn:   r.URL.Query().Get("id_column"),
 		TimeColumn: r.URL.Query().Get("time_column"),
+		Flatten:    flattenJSON(r),
 	})
 	if errors.Is(err, ingest.ErrInvalid) {
 		s.metrics.add("postfgb_ingest_total", metricLabels("result", "invalid"), 1)
@@ -121,4 +122,12 @@ func parseList(value string) []string {
 		}
 	}
 	return out
+}
+
+func flattenJSON(r *http.Request) bool {
+	switch strings.ToLower(r.URL.Query().Get("flatten")) {
+	case "off", "none", "false", "0":
+		return false
+	}
+	return true
 }

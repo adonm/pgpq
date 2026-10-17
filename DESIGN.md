@@ -20,6 +20,12 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 - The `collections` catalog row carries per-collection stats (feature count, spatial and temporal extent, kind, members, declared sortable columns), operator metadata (title, description, license, keywords) and a `version` that bumps on every replace; the collection endpoints never scan chunk tables.
 - The core path requires zero PostgreSQL extensions; the legacy `pg_trgm` create is removed.
 
+## JSON columns and flattening
+
+- A string column whose values hold JSON text is promoted to a Json column at ingest, and its object values are **flattened one level** into ordinary columns named `<parent>_<key>` (keys lower-cased, anything outside `[a-z0-9_]` becomes `_`). Scalar keys are typed (string/long/double/bool, promoted to double or string on mixed evidence); a key whose values are arrays of scalars becomes a Json column carrying the array, so nothing is lost. Nested objects and arrays of objects are left in the parent, which is kept as uploaded.
+- The decision is made once, from the first window, and is deterministic: a key must appear in at least two features, at most 24 keys per parent and 64 columns in total, picked by support (ties by name). Keys that appear only later in the stream stay in the parent column, which is still queryable by containment.
+- Performance contract: flattened keys are rows in the same column metadata, so `/queryables` advertises them, the FlatGeobuf schema carries them, the property-filter path (`?key=value`, CQL2) addresses them like any column, equality still uses the sidecar's GIN `jsonb_path_ops` index, and declaring one `sortable` builds a btree on `props->>'key'` — index-backed sorting (verified with an index scan on a flattened key). Range predicates still go through the CASE-guarded `valueExpr`, whose expression does not match that index: teaching the CQL builder the column types so it emits the index expression is the follow-up.
+
 ## Write path — HTTP only
 
 - `PUT /collections/{id}` (writable mode) is content-negotiated. A FlatGeobuf body — the default for any non-JSON content type — creates or replaces the collection from a whole file, not pre-chunked uploads. A JSON body writes catalog metadata: the STAC collection document is stored and echoed by the STAC facade, and its `title`, `description`, `license` and `keywords` feed the OGC collection. `DELETE /collections/{id}` drops the collection.
