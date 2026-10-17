@@ -85,6 +85,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /stac/collections/{id}/items", s.stacItems)
 	mux.HandleFunc("GET /stac/search", s.stacSearch)
 	mux.HandleFunc("POST /stac/search", s.stacSearch)
+	mux.HandleFunc("GET /viewer", s.viewer)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
@@ -95,7 +96,7 @@ func NewWithConfig(cfg Config) http.Handler {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.0")
 		w.Write(body)
 	})
-	return gzipMiddleware(s.observe(mux))
+	return corsMiddleware(gzipMiddleware(s.observe(mux)))
 }
 
 func (s *Server) register(api huma.API) {
@@ -128,6 +129,7 @@ func (s *Server) landingPage(w http.ResponseWriter, r *http.Request) {
 			{Href: "/conformance", Rel: "conformance", Type: "application/json", Title: "Conformance classes"},
 			{Href: "/collections", Rel: "data", Type: "application/json", Title: "Collections"},
 			{Href: "/stac", Rel: "stac", Type: "application/json", Title: "STAC catalog"},
+			{Href: "/viewer", Rel: "http://www.opengis.net/def/rel/ogc/1.0/data", Type: "text/html", Title: "Map viewer"},
 		},
 	})
 }

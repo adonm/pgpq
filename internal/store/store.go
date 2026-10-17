@@ -854,6 +854,21 @@ func scanMatches(ctx context.Context, conn db, sql string, args ...any) ([]Featu
 	return out, rows.Err()
 }
 
+func (s *Store) FindFeature(ctx context.Context, collection string, filter cql.Expr) (FeatureMatch, bool, error) {
+	from, where, args := matchesWhere(collection, nil, "", filter)
+	var match FeatureMatch
+	err := s.Pool.QueryRow(ctx,
+		fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s limit 1`, from, where), args...).
+		Scan(&match.ChunkID, &match.Ord)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return match, false, nil
+	}
+	if err != nil {
+		return match, false, err
+	}
+	return match, true, nil
+}
+
 func (s *Store) CountMatches(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr) (int64, error) {
 	from, where, args := matchesWhere(collection, bbox, query, filter)
 	var count int64

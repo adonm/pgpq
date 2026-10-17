@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>postfgb</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.js"></script>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font:13px/1.4 ui-sans-serif,system-ui,sans-serif;background:#111;color:#e5e5e5}
+#app{display:grid;grid-template-columns:280px 1fr;height:100%}
+#side{background:#18181b;border-right:1px solid #27272a;display:flex;flex-direction:column;overflow:hidden}
+header{padding:12px 14px;border-bottom:1px solid #27272a;display:flex;align-items:center;justify-content:space-between}
+header h1{margin:0;font-size:14px;font-weight:600;letter-spacing:.2px}
+header a{color:#71717a;text-decoration:none;font-size:11px;margin-left:8px}
+header a:hover{color:#e5e5e5}
+#controls{padding:10px 14px;border-bottom:1px solid #27272a;display:grid;gap:6px}
+input{width:100%;background:#09090b;color:#e5e5e5;border:1px solid #27272a;border-radius:4px;padding:6px 8px;font:12px ui-monospace,monospace}
+input:focus{outline:none;border-color:#38bdf8}
+#list{overflow-y:auto;flex:1;padding:6px}
+.item{padding:8px 10px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px}
+.item:hover{background:#27272a}
+.item.active{background:#1e293b}
+.swatch{width:10px;height:10px;border-radius:2px;flex:none}
+.meta{min-width:0;flex:1}
+.name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{font-size:11px;color:#71717a}
+#map{height:100%;width:100%}
+.maplibregl-popup-content{background:#18181b;color:#e5e5e5;padding:10px 12px;border:1px solid #27272a;border-radius:6px;max-width:340px;max-height:280px;overflow:auto;font:11px/1.45 ui-monospace,monospace}
+.maplibregl-popup-tip{border-top-color:#18181b!important;border-bottom-color:#18181b!important}
+.k{color:#94a3b8}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header>
+      <h1>postfgb</h1>
+      <nav><a href="/collections">OGC</a><a href="/stac">STAC</a><a href="/api">OpenAPI</a></nav>
+    </header>
+    <div id="controls">
+      <input id="q" placeholder="q= fulltext (Enter)">
+      <input id="filter" placeholder="filter= CQL2, e.g. kind = 'alpha'">
+    </div>
+    <div id="list"></div>
+  </aside>
+  <div id="map"></div>
+</div>
+<script>
+const palette = ['#38bdf8','#f472b6','#34d399','#fbbf24','#a78bfa','#fb7185','#22d3ee','#f97316'];
+const map = new maplibregl.Map({
+  container: 'map',
+  center: [7.42, 43.74],
+  zoom: 2,
+  style: {
+    version: 8,
+    sources: {
+      osm: {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        attribution: '© OpenStreetMap'
+      }
+    },
+    layers: [{id: 'osm', type: 'raster', source: 'osm', paint: {'raster-brightness-max': 0.55, 'raster-saturation': -0.6}}]
+  }
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+let collections = [];
+let active = new Set();
+
+function tileURL(id) {
+  const params = new URLSearchParams();
+  const q = document.getElementById('q').value.trim();
+  const filter = document.getElementById('filter').value.trim();
+  if (q) params.set('q', q);
+  if (filter) params.set('filter', filter);
+  const qs = params.toString();
+  return `${location.origin}/collections/${encodeURIComponent(id)}/tiles/WebMercatorQuad/{z}/{x}/{y}${qs ? '?' + qs : ''}`;
+}
+
+function addCollection(col) {
+  const id = col.id;
+  const color = col.color;
+  const src = `src-${id}`;
+  if (map.getSource(src)) removeCollection(id);
+  map.addSource(src, {type: 'vector', tiles: [tileURL(id)], minzoom: 0, maxzoom: 16});
+  map.addLayer({
+    id: `fill-${id}`, type: 'fill', source: src, 'source-layer': id,
+    filter: ['==', ['$type'], 'Polygon'],
+    paint: {'fill-color': color, 'fill-opacity': 0.35, 'fill-outline-color': color}
+  });
+  map.addLayer({
+    id: `line-${id}`, type: 'line', source: src, 'source-layer': id,
+    filter: ['in', ['$type'], 'LineString', 'Polygon'],
+    paint: {'line-color': color, 'line-width': 1.5}
+  });
+  map.addLayer({
+    id: `pt-${id}`, type: 'circle', source: src, 'source-layer': id,
+    filter: ['==', ['$type'], 'Point'],
+    paint: {'circle-color': color, 'circle-radius': 4, 'circle-stroke-color': '#09090b', 'circle-stroke-width': 1}
+  });
+}
+
+function removeCollection(id) {
+  for (const prefix of ['fill-', 'line-', 'pt-']) {
+    if (map.getLayer(prefix + id)) map.removeLayer(prefix + id);
+  }
+  if (map.getSource(`src-${id}`)) map.removeSource(`src-${id}`);
+}
+
+function fit(col) {
+  const bbox = col.extent?.spatial?.bbox?.[0];
+  if (bbox && bbox.length === 4) {
+    map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {padding: 40, maxZoom: 16, duration: 500});
+  }
+}
+
+function toggle(col, zoom) {
+  if (active.has(col.id)) {
+    active.delete(col.id);
+    removeCollection(col.id);
+  } else {
+    active.add(col.id);
+    addCollection(col);
+    if (zoom) fit(col);
+  }
+  renderList();
+}
+
+function refreshTiles() {
+  for (const col of collections) {
+    if (active.has(col.id)) addCollection(col);
+  }
+}
+
+function renderList() {
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  for (const col of collections) {
+    const row = document.createElement('div');
+    row.className = 'item' + (active.has(col.id) ? ' active' : '');
+    row.innerHTML = `
+      <span class="swatch" style="background:${col.color}"></span>
+      <div class="meta">
+        <div class="name"></div>
+        <div class="sub"></div>
+      </div>`;
+    row.querySelector('.name').textContent = col.title || col.id;
+    row.querySelector('.sub').textContent = `${col.id} · ${col.kind || 'native'}`;
+    row.onclick = () => toggle(col, true);
+    list.appendChild(row);
+  }
+}
+
+map.on('click', (e) => {
+  const layers = [];
+  for (const id of active) {
+    for (const prefix of ['pt-', 'line-', 'fill-']) {
+      if (map.getLayer(prefix + id)) layers.push(prefix + id);
+    }
+  }
+  if (!layers.length) return;
+  const feats = map.queryRenderedFeatures(e.point, {layers});
+  if (!feats.length) return;
+  const f = feats[0];
+  const rows = [`<div><b>${escapeHTML(f.sourceLayer)}</b>${f.id !== undefined ? ` <span class="k">#${escapeHTML(String(f.id))}</span>` : ''}</div>`];
+  for (const [k, v] of Object.entries(f.properties || {})) {
+    rows.push(`<div><span class="k">${escapeHTML(k)}:</span> ${escapeHTML(String(v))}</div>`);
+  }
+  new maplibregl.Popup({closeButton: false}).setLngLat(e.lngLat).setHTML(rows.join('')).addTo(map);
+});
+
+function escapeHTML(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+for (const id of ['q', 'filter']) {
+  document.getElementById(id).addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') refreshTiles();
+  });
+}
+
+map.on('load', async () => {
+  const res = await fetch('/collections');
+  const data = await res.json();
+  collections = (data.collections || []).map((c, i) => ({...c, color: palette[i % palette.length]}));
+  renderList();
+  if (collections.length) toggle(collections[0], true);
+});
+</script>
+</body>
+</html>

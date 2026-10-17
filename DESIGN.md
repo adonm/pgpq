@@ -40,6 +40,8 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## Read path
 
+- The read surface is CORS-open (`Access-Control-Allow-Origin: *`, ETag and Content-Crs exposed) so browser clients — RustGIS, the embedded `/viewer` — can query any deployment directly; the browser tooling is one CDN-backed static page, not a second API.
+
 - Unfiltered scans stream chunk windows in id order with no fixed chunk cap; offset paging stays exact at any collection size.
 - Filtered requests fan out over matched chunks under a per-request byte budget (`--max-chunk-bytes`, 32 MiB by default) so fetch windows stay bounded no matter how large individual chunks are; short pages always carry honest next links.
 - Items: GeoJSON default; `f=flatgeobuf` streams full detail as a single FGB. Default page 50,000 (1,000,000 for FlatGeobuf), max 1,000,000. `overview=auto|0|1|2` overrides tier selection for unfiltered requests; filters and exports always read full detail. `numberMatched` is opt-in. `/collections/{id}/items/{featureId}` serves one feature.

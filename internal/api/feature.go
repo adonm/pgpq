@@ -79,14 +79,10 @@ func (s *Server) lookupFeature(ctx context.Context, info store.CollectionInfo, f
 }
 
 func (s *Server) featureByProperty(ctx context.Context, info store.CollectionInfo, column string, value any) (*chunk.Feature, bool, error) {
-	matches, err := s.Store.Matches(ctx, info.Name, nil, "", &cql.Compare{Prop: column, Op: "=", Value: value}, 1, 0)
-	if err != nil {
+	match, ok, err := s.Store.FindFeature(ctx, info.Name, &cql.Compare{Prop: column, Op: "=", Value: value})
+	if err != nil || !ok {
 		return nil, false, err
 	}
-	if len(matches) == 0 {
-		return nil, false, nil
-	}
-	match := matches[0]
 	row, err := s.Store.ChunkByID(ctx, info.Name, match.ChunkID)
 	if err != nil {
 		return nil, false, err
