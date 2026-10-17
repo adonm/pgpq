@@ -26,25 +26,53 @@ var viewerPage = template.Must(template.New("viewer").Parse(`<!doctype html>
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:#0b0b0d;color:#e5e5e5;font:12px/1.4 ui-sans-serif,system-ui,sans-serif}
 #app{display:flex;flex-direction:column;height:100%}
-#bar{display:flex;align-items:center;gap:10px;padding:6px 10px;background:#18181b;border-bottom:1px solid #27272a;font:11px ui-monospace,monospace;color:#94a3b8}
-#bar b{color:#e5e5e5;font:600 12px ui-sans-serif,system-ui,sans-serif}
-#bar a{color:#38bdf8;text-decoration:none}
-#bar a:hover{text-decoration:underline}
-#bar .spacer{flex:1}
+#bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:7px 12px;background:#18181b;border-bottom:1px solid #27272a;color:#a1a1aa}
+#bar .brand{font:600 13px ui-sans-serif,system-ui,sans-serif;color:#e5e5e5;letter-spacing:.2px}
+#bar .host{font:11px ui-monospace,monospace;color:#71717a}
+#bar .divider{width:1px;height:16px;background:#3f3f46;flex:none}
+#bar .stats{font:11px ui-monospace,monospace;color:#a1a1aa;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#bar .stats b{color:#e5e5e5;font-weight:600}
+#bar .spacer{flex:1 1 auto}
+#bar a{color:#38bdf8;text-decoration:none;font:11px ui-monospace,monospace;padding:2px 6px;border-radius:4px}
+#bar a:hover{background:#27272a;text-decoration:none}
 iframe{border:0;width:100%;flex:1;background:#0b0b0d}
 </style>
 </head>
 <body>
 <div id="app">
   <div id="bar">
-    <b>postfgb</b>
-    <span>{{.Host}}</span>
+    <span class="brand">postfgb</span>
+    <span class="divider"></span>
+    <span class="host">{{.Host}}</span>
+    <span class="divider"></span>
+    <span class="stats" id="stats">loading stats…</span>
     <span class="spacer"></span>
     <a href="{{.Project}}" target="_blank" rel="noopener">project JSON</a>
+    <span class="divider"></span>
     <a href="{{.Open}}" target="_blank" rel="noopener">open in RustGIS ↗</a>
   </div>
   <iframe src="{{.Embed}}" title="RustGIS" allow="fullscreen; clipboard-write" referrerpolicy="strict-origin-when-cross-origin"></iframe>
 </div>
+<script>
+const bytes = (n) => {
+  if (!n && n !== 0) return "?";
+  const units = ["B", "kB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + " " + units[i];
+};
+fetch("/stats").then((r) => r.json()).then((s) => {
+  const when = new Date(s.updatedAt);
+  document.getElementById("stats").innerHTML = [
+    "<b>" + s.collections + "</b> collections",
+    "<b>" + s.features.toLocaleString() + "</b> features",
+    "<b>" + s.chunks.toLocaleString() + "</b> chunks",
+    "<b>" + bytes(s.storedBytes) + "</b> chunk payload",
+    "<b>" + bytes(s.databaseBytes) + "</b> database",
+    "updated <b>" + when.toLocaleString() + "</b>",
+  ].join(" · ");
+}).catch(() => { document.getElementById("stats").textContent = ""; });
+</script>
 </body>
 </html>
 `))

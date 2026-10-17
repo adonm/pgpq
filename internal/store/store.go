@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -451,10 +453,74 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	if _, err := tx.Exec(ctx, `delete from collections where name = $1`, name); err != nil {
 		return err
 	}
+	if err := dropViewMember(ctx, tx, name); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `delete from tile_cache where collection = $1`, name); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+type memberJSON struct {
+	Collection string            `json:"collection"`
+	Filter     string            `json:"filter,omitempty"`
+	Columns    map[string]string `json:"columns,omitempty"`
+}
+
+func dropViewMember(ctx context.Context, tx pgx.Tx, name string) error {
+	rows, err := tx.Query(ctx, `select name, members from collections where kind = 'view' and members is not null`)
+	if err != nil {
+		return err
+	}
+	type view struct {
+		name    string
+		members []byte
+	}
+	var views []view
+	for rows.Next() {
+		var v view
+		if err := rows.Scan(&v.name, &v.members); err != nil {
+			rows.Close()
+			return err
+		}
+		views = append(views, v)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, v := range views {
+		var members []memberJSON
+		if json.Unmarshal(v.members, &members) != nil {
+			continue
+		}
+		kept := make([]memberJSON, 0, len(members))
+		for _, member := range members {
+			if member.Collection != name {
+				kept = append(kept, member)
+			}
+		}
+		if len(kept) == len(members) {
+			continue
+		}
+		if len(kept) == 0 {
+			if _, err := tx.Exec(ctx, `delete from collections where name = $1`, v.name); err != nil {
+				return err
+			}
+			slog.Info("view dropped with its last member", "view", v.name, "member", name)
+			continue
+		}
+		body, err := json.Marshal(kept)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `update collections set members = $2::jsonb, version = version + 1, updated_at = now() where name = $1`, v.name, body); err != nil {
+			return err
+		}
+		slog.Info("view member removed", "view", v.name, "member", name, "remaining", len(kept))
+	}
+	return nil
 }
 
 func (s *Store) PutView(ctx context.Context, name string, members []byte, meta CollectionMeta) error {
@@ -463,7 +529,7 @@ func (s *Store) PutView(ctx context.Context, name string, members []byte, meta C
 	}
 	tag, err := s.Pool.Exec(ctx, `
 		insert into collections (name, kind, members) values ($1, 'view', $2::jsonb)
-		on conflict (name) do update set kind = 'view', members = excluded.members, version = collections.version + 1
+		on conflict (name) do update set kind = 'view', members = excluded.members, version = collections.version + 1, updated_at = now()
 		where collections.kind = 'view'`, name, members)
 	if err != nil {
 		return err
@@ -508,6 +574,7 @@ func (s *Store) PutMeta(ctx context.Context, name string, doc []byte, meta Colle
 		insert into collections (name, stac, title, description, license, keywords)
 		values ($1, $2::jsonb, $3, $4, $5, coalesce($6::text[], '{}'))
 		on conflict (name) do update set
+			updated_at = now(),
 			stac = excluded.stac,
 			title = coalesce(excluded.title, collections.title),
 			description = coalesce(excluded.description, collections.description),
@@ -597,7 +664,7 @@ func (i *Ingest) DeleteChunksAboveTier(ctx context.Context, tier int) error {
 
 func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string, timeMin, timeMax *time.Time) error {
 	_, err := i.tx.Exec(ctx, `
-		update collections set kind = 'native', version = version + 1, sortable = coalesce($2::text[], '{}'),
+		update collections set kind = 'native', version = version + 1, updated_at = now(), sortable = coalesce($2::text[], '{}'),
 			id_column = $3, time_column = $4, time_min = $5, time_max = $6
 		where name = $1`, i.collection, sortable, nullable(idColumn), nullable(timeColumn), timeMin, timeMax)
 	return err

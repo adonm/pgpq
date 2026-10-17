@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -87,6 +88,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("POST /stac/search", s.stacSearch)
 	mux.HandleFunc("GET /viewer", s.viewer)
 	mux.HandleFunc("GET /viewer.rgis", s.viewerProject)
+	mux.HandleFunc("GET /stats", s.stats)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
@@ -1060,7 +1062,7 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	}
 	filterShapes(collection, shapes)
 	if len(collection.Features) > maxTileFeatures {
-		collection.Features = strideSample(collection.Features, maxTileFeatures)
+		collection.Features = hashSample(collection.Features, maxTileFeatures)
 	}
 	data, empty, err := tiles.Bytes(id, collection, tile)
 	if err != nil {
@@ -1159,6 +1161,12 @@ const (
 	tileChunkMax    = 8
 )
 
+func itemHash(value any) uint64 {
+	h := fnv.New64a()
+	fmt.Fprintf(h, "%v\x00", value)
+	return h.Sum64()
+}
+
 func (s *Server) tileChunks(ctx context.Context, collection string, bbox *[4]float64, tier int) ([]store.ChunkRow, error) {
 	metas, err := s.Store.ChunkMetas(ctx, collection, bbox, s.MaxChunks, tier, 0)
 	if err != nil {
@@ -1170,10 +1178,15 @@ func (s *Server) tileChunks(ctx context.Context, collection string, bbox *[4]flo
 		}
 	}
 	if len(metas) > tileChunkMax {
-		stride := (len(metas) + tileChunkMax - 1) / tileChunkMax
+		k := uint64((len(metas) + tileChunkMax - 1) / tileChunkMax)
 		kept := metas[:0]
-		for i := 0; i < len(metas); i += stride {
-			kept = append(kept, metas[i])
+		for _, meta := range metas {
+			if itemHash(meta.ID)%k == 0 {
+				kept = append(kept, meta)
+			}
+		}
+		if len(kept) == 0 {
+			kept = append(kept, metas[0])
 		}
 		metas = kept
 	}
@@ -1191,6 +1204,23 @@ func (s *Server) tileChunks(ctx context.Context, collection string, bbox *[4]flo
 	return kept, nil
 }
 
+func hashSample(features []*orbgeojson.Feature, max int) []*orbgeojson.Feature {
+	if len(features) <= max {
+		return features
+	}
+	k := uint64((len(features) + max - 1) / max)
+	kept := features[:0]
+	for _, f := range features {
+		if itemHash(fmt.Sprint(f.ID))%k == 0 {
+			kept = append(kept, f)
+		}
+	}
+	if len(kept) == 0 {
+		kept = append(kept, features[0])
+	}
+	return kept
+}
+
 func tierForZoom(z int) int {
 	switch {
 	case z <= 4:
@@ -1200,18 +1230,6 @@ func tierForZoom(z int) int {
 	default:
 		return 0
 	}
-}
-
-func strideSample(features []*orbgeojson.Feature, max int) []*orbgeojson.Feature {
-	if len(features) <= max {
-		return features
-	}
-	stride := (len(features) + max - 1) / max
-	kept := features[:0]
-	for i := 0; i < len(features); i += stride {
-		kept = append(kept, features[i])
-	}
-	return kept
 }
 
 func tierForBounds(bbox *[4]float64) int {

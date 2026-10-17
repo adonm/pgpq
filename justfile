@@ -71,3 +71,16 @@ bench:
 
 layercake layer bbox="" nlt="GEOMETRY":
     LAYER={{layer}} BBOX="{{bbox}}" NLT={{nlt}} LISTS='StringList=String(JSON),IntegerList=String(JSON),RealList=String(JSON),Integer64List=String(JSON)' docker run --rm -i -e LAYER -e BBOX -e NLT -e LISTS -e CPL_VSIL_CURL_CHUNK_SIZE=4194304 --network host {{gdal}} bash -c 'set -euo pipefail; SPAT=""; if [ -n "$BBOX" ]; then SPAT="-spat $BBOX"; fi; NLTARG=""; if [ -n "$NLT" ]; then NLTARG="-nlt $NLT"; fi; ogr2ogr -f FlatGeobuf /tmp/out.fgb "/vsicurl/https://data.openstreetmap.us/layercake/${LAYER}.parquet" "$LAYER" $SPAT $NLTARG -mapFieldType "$LISTS" -lco SPATIAL_INDEX=NO && exec cat /tmp/out.fgb' | curl -sfS -T - -H "Content-Type: application/flatgeobuf" "{{url}}/collections/{{layer}}"
+
+reset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for id in $(curl -sfS "{{url}}/collections" | python3 -c "import json,sys; print('\n'.join(c['id'] for c in json.load(sys.stdin)['collections']))"); do
+      curl -sS -o /dev/null -X DELETE "{{url}}/collections/$id" || true
+      echo "dropped $id"
+    done
+    just fixtures
+    curl -sfS -X PUT -H "Content-Type: application/json" \
+      -d '{"id":"monaco","title":"Monaco (all fixtures)","members":[{"collection":"settlements"},{"collection":"buildings"},{"collection":"highways"},{"collection":"parks"},{"collection":"waterways"},{"collection":"pois"}]}' \
+      "{{url}}/collections/monaco" >/dev/null
+    echo "fixtures loaded, monaco view created"

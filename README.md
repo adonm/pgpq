@@ -76,6 +76,7 @@ curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "
 | `/api` | OpenAPI 3.0 definition (OGC content type) |
 | `/viewer` | minimal HTML host that embeds the RustGIS web app from its CDN (`web.rustgis.app/?embed&project=…`) on the generated `/viewer.rgis` project: one entry per catalog collection (vector tiles for every collection, streamed FlatGeobuf layers for those under 2M features), all hidden by default; a link opens the app on its own domain |
 | `/viewer.rgis` | RustGIS project JSON built from the catalog on every request (`format: 1`, tiles plus streamed layers, all `visible: false`) |
+| `/stats` | catalog totals: collections, features, chunks, stored chunk bytes, database size, last update |
 | `/healthz` | liveness probe, always 200 |
 | `/readyz` | readiness probe: PostgreSQL ping plus migration check |
 | `/metrics` | Prometheus text metrics: requests, durations, bytes, tiles, chunks, ingest counters and pool gauges |
