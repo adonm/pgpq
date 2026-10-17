@@ -4,6 +4,8 @@
 
 The smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pushing filtering into index sidecars.
 
+Design decisions live in [DESIGN.md](DESIGN.md); the agent guide is [AGENTS.md](AGENTS.md).
+
 ## Development setup
 
 Requirements: [mise](https://mise.jdx.dev) (installs Go, just and hk per `mise.toml`) and Docker. Benchmarks use GDAL: a local install, or the bench script pulls `ghcr.io/osgeo/gdal:alpine-small-latest`.
