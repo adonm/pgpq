@@ -1,6 +1,7 @@
 dsn := env("POSTFGB_DSN", "postgres://postgres:postgres@localhost:5432/postfgb?sslmode=disable")
 url := env("POSTFGB_URL", "http://localhost:8080")
 gdal := "ghcr.io/osgeo/gdal:ubuntu-full-latest"
+rustgis_cli := env("RUSTGIS_CLI", "/tmp/opencode/RustGIS-0.3.0-linux-x86_64/rustgis-cli")
 
 default:
     @just --list
@@ -28,6 +29,9 @@ test:
 
 test-integration:
     POSTFGB_TEST_DSN="{{dsn}}" go test -count=1 -timeout 300s ./...
+
+viewer-test:
+    RUSTGIS_CLI={{rustgis_cli}} scripts/viewer-test.sh {{url}}
 
 pg-stats:
     @docker exec postfgb-postgres-1 sh -c 'psql -U postgres -d postfgb -X \

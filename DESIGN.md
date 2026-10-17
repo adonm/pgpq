@@ -54,7 +54,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## HTTP caching
 
-Chunks are immutable with checksum ETags. Tiles and manifests carry ETags derived from a monotonically increasing per-collection `version` (views combine member versions). A shared Postgres tile cache holds rendered MVT keyed by `(collection, version, tier, z, x, y, filter hash)`: every worker sees the same entries, restarts lose nothing, and a replace bumps the version, which invalidates logically — a TTL janitor reclaims old rows. Items stay uncached.
+Responses negotiate content encoding: `Accept-Encoding` picks zstd (klauspost/compress, already used for chunks) over gzip for JSON and GeoJSON, with `Vary: Accept-Encoding`; MVT tiles are gzip bytes and say so (`Content-Encoding: gzip`). Chunks are immutable with checksum ETags. Tiles and manifests carry ETags derived from a monotonically increasing per-collection `version` (views combine member versions). A shared Postgres tile cache holds rendered MVT keyed by `(collection, version, tier, z, x, y, filter hash)`: every worker sees the same entries, restarts lose nothing, and a replace bumps the version, which invalidates logically — a TTL janitor reclaims old rows. Items stay uncached.
 
 ## Exports
 

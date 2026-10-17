@@ -99,7 +99,7 @@ func NewWithConfig(cfg Config) http.Handler {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.0")
 		w.Write(body)
 	})
-	return corsMiddleware(gzipMiddleware(s.observe(mux)))
+	return corsMiddleware(compressionMiddleware(s.observe(mux)))
 }
 
 func (s *Server) register(api huma.API) {
@@ -1019,6 +1019,8 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	} else if ok {
 		s.metrics.add("postfgb_tile_cache_lookups_total", metricLabels("result", "hit"), 1)
 		w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
 		w.Header().Set("ETag", cachedEtag)
 		w.Header().Set("Cache-Control", "public, max-age=600")
 		w.Header().Set("Content-Length", strconv.Itoa(len(cached)))
@@ -1078,6 +1080,8 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	}
 	s.metrics.add("postfgb_tiles_rendered_total", "", 1)
 	w.Header().Set("Content-Type", "application/vnd.mapbox-vector-tile")
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Add("Vary", "Accept-Encoding")
 	w.Header().Set("Cache-Control", "public, max-age=600")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)

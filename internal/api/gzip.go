@@ -2,85 +2,124 @@ package api
 
 import (
 	"compress/gzip"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
-type gzipResponseWriter struct {
+type encodingWriter struct {
 	http.ResponseWriter
-	zw      *gzip.Writer
-	decided bool
-	skip    bool
+	encoding string
+	writer   io.WriteCloser
+	decided  bool
+	skip     bool
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, If-None-Match")
-		w.Header().Set("Access-Control-Expose-Headers", "Content-Crs, Content-Disposition, ETag")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
+func negotiateEncoding(header string) string {
+	zstdQ, gzipQ := 0.0, 0.0
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
 		}
-		next.ServeHTTP(w, r)
-	})
+		name, params, _ := strings.Cut(part, ";")
+		name = strings.ToLower(strings.TrimSpace(name))
+		q := 1.0
+		if strings.Contains(params, "q=") {
+			_, value, _ := strings.Cut(params, "q=")
+			value = strings.TrimSpace(strings.TrimSuffix(value, ","))
+			if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+				q = parsed
+			}
+		}
+		switch name {
+		case "zstd":
+			zstdQ = q
+		case "gzip", "*":
+			if q > gzipQ {
+				gzipQ = q
+			}
+		}
+	}
+	switch {
+	case zstdQ > 0 && zstdQ >= gzipQ:
+		return "zstd"
+	case gzipQ > 0:
+		return "gzip"
+	default:
+		return ""
+	}
 }
 
-func gzipMiddleware(next http.Handler) http.Handler {
+func compressionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		encoding := negotiateEncoding(r.Header.Get("Accept-Encoding"))
+		if encoding == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		gw := &gzipResponseWriter{ResponseWriter: w}
-		defer gw.close()
-		next.ServeHTTP(gw, r)
+		ew := &encodingWriter{ResponseWriter: w, encoding: encoding}
+		defer ew.close()
+		next.ServeHTTP(ew, r)
 	})
 }
 
-func (g *gzipResponseWriter) decide() {
-	if g.decided {
+func (e *encodingWriter) decide() {
+	if e.decided {
 		return
 	}
-	g.decided = true
-	ct := g.Header().Get("Content-Type")
-	g.skip = g.Header().Get("Content-Encoding") != "" ||
+	e.decided = true
+	ct := e.Header().Get("Content-Type")
+	e.skip = e.Header().Get("Content-Encoding") != "" || e.Header().Get("Content-Length") != "" ||
 		!(strings.HasPrefix(ct, "application/json") || strings.HasPrefix(ct, "application/geo+json"))
-	if g.skip {
+	if e.skip {
 		return
 	}
-	g.Header().Del("Content-Length")
-	g.Header().Set("Content-Encoding", "gzip")
-	g.Header().Add("Vary", "Accept-Encoding")
-	g.zw = gzip.NewWriter(g.ResponseWriter)
-}
-
-func (g *gzipResponseWriter) WriteHeader(code int) {
-	g.decide()
-	g.ResponseWriter.WriteHeader(code)
-}
-
-func (g *gzipResponseWriter) Write(b []byte) (int, error) {
-	g.decide()
-	if g.zw != nil {
-		return g.zw.Write(b)
+	e.Header().Del("Content-Length")
+	e.Header().Set("Content-Encoding", e.encoding)
+	e.Header().Add("Vary", "Accept-Encoding")
+	if e.encoding == "zstd" {
+		writer, err := zstd.NewWriter(e.ResponseWriter, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithWindowSize(1<<20))
+		if err != nil {
+			e.skip = true
+			return
+		}
+		e.writer = writer
+		return
 	}
-	return g.ResponseWriter.Write(b)
+	e.writer = gzip.NewWriter(e.ResponseWriter)
 }
 
-func (g *gzipResponseWriter) Flush() {
-	g.decide()
-	if g.zw != nil {
-		g.zw.Flush()
+func (e *encodingWriter) WriteHeader(code int) {
+	e.decide()
+	e.ResponseWriter.WriteHeader(code)
+}
+
+func (e *encodingWriter) Write(b []byte) (int, error) {
+	e.decide()
+	if e.writer != nil {
+		return e.writer.Write(b)
 	}
-	if flusher, ok := g.ResponseWriter.(http.Flusher); ok {
+	return e.ResponseWriter.Write(b)
+}
+
+func (e *encodingWriter) Flush() {
+	e.decide()
+	if e.writer != nil {
+		if flusher, ok := e.writer.(interface{ Flush() error }); ok {
+			flusher.Flush()
+		}
+	}
+	if flusher, ok := e.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
 }
 
-func (g *gzipResponseWriter) close() {
-	if g.zw != nil {
-		g.zw.Close()
+func (e *encodingWriter) close() {
+	if e.writer != nil {
+		e.writer.Close()
 	}
 }
