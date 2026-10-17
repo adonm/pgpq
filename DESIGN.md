@@ -17,7 +17,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 - Chunk payloads are zstd-compressed in Go before insert and stored out-of-line uncompressed (`STORAGE EXTERNAL`): Postgres does no compression work and ships stored bytes as-is; checksums and ETags cover the raw FlatGeobuf.
 - All queries already carry `collection = $1`, so partition pruning turns access into per-collection index scans with unchanged SQL.
 - Each collection also gets a `layers.<name>` SQL view over its tier-0 chunks for database-side introspection, GeoPackage-style.
-- The `collections` catalog row carries per-collection stats (feature count, spatial and temporal extent, kind, members, declared sortable columns) and a `version` that bumps on every replace; the collection endpoints never scan chunk tables.
+- The `collections` catalog row carries per-collection stats (feature count, spatial and temporal extent, kind, members, declared sortable columns), operator metadata (title, description, license, keywords) and a `version` that bumps on every replace; the collection endpoints never scan chunk tables.
 - The core path requires zero PostgreSQL extensions; the legacy `pg_trgm` create is removed.
 
 ## Views — managed union views
@@ -72,7 +72,7 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 - Virtual PMTiles archives and the go-pmtiles dependency (removed; OGC Tiles is the tile interface).
 - Materialized views and DB-native view discovery; views of views.
 - Dynamic per-collection tables and schema-per-collection storage.
-- Async ingest jobs and upload sessions (synchronous chosen); versioned blue/green replace (transactional chosen).
+- Async ingest jobs and upload sessions for push uploads (push stays a synchronous, transactional replace); versioned blue/green replace. STAC pull ingests do run in the background: an internal load spec names the source and the ogr2ogr options, an adjacent loader materializes FlatGeobuf, and progress is tracked on the submitted STAC document itself.
 - cgo PROJ; the rustgis-cli export engine; server-side format conversion (clients convert FlatGeobuf locally); runtime extension accelerators (probing stays as a future hook).
 
 ## Build order
@@ -86,3 +86,4 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 7. Exports through ogr2ogr only.
 8. Ops: healthz/readyz, metrics, lifecycle and pool flags, integration tests in CI.
 9. Performance: parallel chunk fetch, byte budget, shared Postgres tile cache with version-keyed tiles and manifest (ETags from the same version), MVT ids, tileset limits.
+10. STAC: full API facade (catalog, collections, items, search) and pull ingestion via an internal load spec executed by an adjacent ogr2ogr-based loader; ingest progress is tracked on the STAC document itself.

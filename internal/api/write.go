@@ -17,10 +17,28 @@ func (s *Server) ingestData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	sortable := parseSortable(r.URL.Query().Get("sortable"))
+	sortable := parseList(r.URL.Query().Get("sortable"))
 	if len(sortable) > 4 {
 		http.Error(w, "at most 4 sortable columns", http.StatusBadRequest)
 		return
+	}
+	query := r.URL.Query()
+	var meta store.CollectionMeta
+	if query.Has("title") {
+		value := query.Get("title")
+		meta.Title = &value
+	}
+	if query.Has("description") {
+		value := query.Get("description")
+		meta.Description = &value
+	}
+	if query.Has("license") {
+		value := query.Get("license")
+		meta.License = &value
+	}
+	if query.Has("keywords") {
+		value := parseList(query.Get("keywords"))
+		meta.Keywords = &value
 	}
 	id := r.PathValue("id")
 	result, err := ingest.Run(r.Context(), s.Store, r.Body, ingest.Options{
@@ -28,6 +46,7 @@ func (s *Server) ingestData(w http.ResponseWriter, r *http.Request) {
 		Sortable:   sortable,
 		IDColumn:   r.URL.Query().Get("id_column"),
 		TimeColumn: r.URL.Query().Get("time_column"),
+		Meta:       meta,
 	})
 	if errors.Is(err, ingest.ErrInvalid) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
@@ -59,7 +78,11 @@ func (s *Server) putView(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
 	var req struct {
-		Members []viewMember `json:"members"`
+		Title       *string      `json:"title"`
+		Description *string      `json:"description"`
+		License     *string      `json:"license"`
+		Keywords    *[]string    `json:"keywords"`
+		Members     []viewMember `json:"members"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, "invalid view definition", http.StatusBadRequest)
@@ -113,7 +136,8 @@ func (s *Server) putView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := s.Store.PutView(ctx, id, payload); errors.Is(err, store.ErrConflict) {
+	meta := store.CollectionMeta{Title: req.Title, Description: req.Description, License: req.License, Keywords: req.Keywords}
+	if err := s.Store.PutView(ctx, id, payload, meta); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "collection exists and is not a view", http.StatusConflict)
 		return
 	} else if err != nil {
@@ -147,7 +171,7 @@ func (s *Server) deleteCollection(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func parseSortable(value string) []string {
+func parseList(value string) []string {
 	if value == "" {
 		return nil
 	}

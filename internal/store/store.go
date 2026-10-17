@@ -91,6 +91,17 @@ type CollectionInfo struct {
 	IDColumn     *string
 	TimeColumn   *string
 	Sortable     []string
+	Title        *string
+	Description  *string
+	License      *string
+	Keywords     []string
+}
+
+type CollectionMeta struct {
+	Title       *string
+	Description *string
+	License     *string
+	Keywords    *[]string
 }
 
 type FeatureMatch struct {
@@ -280,7 +291,7 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	return tx.Commit(ctx)
 }
 
-func (s *Store) PutView(ctx context.Context, name string, members []byte) error {
+func (s *Store) PutView(ctx context.Context, name string, members []byte, meta CollectionMeta) error {
 	if !collectionName.MatchString(name) {
 		return fmt.Errorf("invalid collection name %q", name)
 	}
@@ -294,7 +305,29 @@ func (s *Store) PutView(ctx context.Context, name string, members []byte) error 
 	if tag.RowsAffected() == 0 {
 		return ErrConflict
 	}
-	return nil
+	var set []string
+	args := []any{name}
+	if meta.Title != nil {
+		args = append(args, nullable(*meta.Title))
+		set = append(set, fmt.Sprintf("title = $%d", len(args)))
+	}
+	if meta.Description != nil {
+		args = append(args, nullable(*meta.Description))
+		set = append(set, fmt.Sprintf("description = $%d", len(args)))
+	}
+	if meta.License != nil {
+		args = append(args, nullable(*meta.License))
+		set = append(set, fmt.Sprintf("license = $%d", len(args)))
+	}
+	if meta.Keywords != nil {
+		args = append(args, *meta.Keywords)
+		set = append(set, fmt.Sprintf("keywords = coalesce($%d::text[], '{}')", len(args)))
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	_, err = s.Pool.Exec(ctx, `update collections set `+strings.Join(set, ", ")+` where name = $1`, args...)
+	return err
 }
 
 func (s *Store) TileCacheGet(ctx context.Context, collection, version string, tier, z, x, y int, filterKey string) ([]byte, string, bool, error) {
@@ -359,11 +392,28 @@ func (i *Ingest) RefreshStats(ctx context.Context) error {
 	return refreshStats(ctx, i.tx, i.collection)
 }
 
-func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string, timeMin, timeMax *time.Time) error {
-	_, err := i.tx.Exec(ctx, `
-		update collections set kind = 'native', version = version + 1, sortable = coalesce($2::text[], '{}'),
-			id_column = $3, time_column = $4, time_min = $5, time_max = $6
-		where name = $1`, i.collection, sortable, nullable(idColumn), nullable(timeColumn), timeMin, timeMax)
+func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string, timeMin, timeMax *time.Time, meta CollectionMeta) error {
+	sql := `update collections set kind = 'native', version = version + 1, sortable = coalesce($2::text[], '{}'),
+			id_column = $3, time_column = $4, time_min = $5, time_max = $6`
+	args := []any{i.collection, sortable, nullable(idColumn), nullable(timeColumn), timeMin, timeMax}
+	if meta.Title != nil {
+		sql += fmt.Sprintf(", title = $%d", len(args)+1)
+		args = append(args, nullable(*meta.Title))
+	}
+	if meta.Description != nil {
+		sql += fmt.Sprintf(", description = $%d", len(args)+1)
+		args = append(args, nullable(*meta.Description))
+	}
+	if meta.License != nil {
+		sql += fmt.Sprintf(", license = $%d", len(args)+1)
+		args = append(args, nullable(*meta.License))
+	}
+	if meta.Keywords != nil {
+		sql += fmt.Sprintf(", keywords = coalesce($%d::text[], '{}')", len(args)+1)
+		args = append(args, *meta.Keywords)
+	}
+	sql += ` where name = $1`
+	_, err := i.tx.Exec(ctx, sql, args...)
 	return err
 }
 
@@ -629,7 +679,7 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, kind, members, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable from collections`
+const collectionColumns = `select name, kind, members, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, sortable, title, description, license, keywords from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
@@ -641,7 +691,8 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	for rows.Next() {
 		var info CollectionInfo
 		if err := rows.Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
-			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable); err != nil {
+			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable,
+			&info.Title, &info.Description, &info.License, &info.Keywords); err != nil {
 			return nil, err
 		}
 		out = append(out, info)
@@ -653,7 +704,8 @@ func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, er
 	var info CollectionInfo
 	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
 		Scan(&info.Name, &info.Kind, &info.Members, &info.Version, &info.ChunkCount, &info.FeatureCount,
-			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable)
+			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn, &info.Sortable,
+			&info.Title, &info.Description, &info.License, &info.Keywords)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return info, ErrNotFound
 	}

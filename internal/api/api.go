@@ -155,11 +155,12 @@ type extent struct {
 }
 
 type collection struct {
-	ID     string  `json:"id"`
-	Title  string  `json:"title,omitempty"`
-	Kind   string  `json:"kind,omitempty"`
-	Extent *extent `json:"extent,omitempty"`
-	Links  []link  `json:"links"`
+	ID          string  `json:"id"`
+	Title       string  `json:"title,omitempty"`
+	Description string  `json:"description,omitempty"`
+	Kind        string  `json:"kind,omitempty"`
+	Extent      *extent `json:"extent,omitempty"`
+	Links       []link  `json:"links"`
 }
 
 type collectionsOutput struct {
@@ -202,9 +203,13 @@ func (s *Server) collection(ctx context.Context, in *collectionInput) (*collecti
 }
 
 func (s *Server) collectionBody(ctx context.Context, info store.CollectionInfo) collection {
+	title := info.Name
+	if info.Title != nil && *info.Title != "" {
+		title = *info.Title
+	}
 	body := collection{
 		ID:    info.Name,
-		Title: info.Name,
+		Title: title,
 		Kind:  info.Kind,
 		Links: []link{
 			{Href: "/collections/" + info.Name, Rel: "self", Type: "application/json"},
@@ -212,6 +217,9 @@ func (s *Server) collectionBody(ctx context.Context, info store.CollectionInfo) 
 			{Href: "/collections/" + info.Name + "/items?f=flatgeobuf", Rel: "alternate", Type: "application/flatgeobuf", Title: "Items (FlatGeobuf)"},
 			{Href: "/collections/" + info.Name + "/tiles", Rel: "http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector", Type: "application/json"},
 		},
+	}
+	if info.Description != nil {
+		body.Description = *info.Description
 	}
 	body.Extent = s.collectionExtent(ctx, info)
 	return body
