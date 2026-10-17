@@ -12,6 +12,7 @@ import (
 )
 
 type manifestChunk struct {
+	Collection   string          `json:"collection,omitempty"`
 	ID           int64           `json:"id"`
 	BBox         []float64       `json:"bbox"`
 	FeatureCount int             `json:"featureCount"`
@@ -47,32 +48,84 @@ func (s *Server) manifest(ctx context.Context, in *manifestInput) (*manifestOutp
 	if err != nil {
 		return nil, err
 	}
+	out := &manifestOutput{}
+	out.Body.Collection = info.Name
+	if info.Kind == "view" {
+		if err := s.viewManifest(ctx, info, out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
 	metas, err := s.Store.ChunkMetas(ctx, in.ID, nil, 1000000, 0, 0)
 	if err != nil {
 		return nil, err
 	}
-	out := &manifestOutput{}
-	out.Body.Collection = info.Name
 	out.Body.ChunkCount = len(metas)
 	out.Body.FeatureCount = info.FeatureCount
 	if info.MinX != nil && info.MinY != nil && info.MaxX != nil && info.MaxY != nil {
 		out.Body.Extent = []float64{*info.MinX, *info.MinY, *info.MaxX, *info.MaxY}
 	}
 	for _, meta := range metas {
-		chunk := manifestChunk{
-			ID:           meta.ID,
-			BBox:         []float64{meta.MinX, meta.MinY, meta.MaxX, meta.MaxY},
-			FeatureCount: meta.FeatureCount,
-			SizeBytes:    meta.SizeBytes,
-			Href:         "/collections/" + in.ID + "/chunks/" + strconv.FormatInt(meta.ID, 10),
-		}
-		if meta.Checksum != nil {
-			chunk.Checksum = *meta.Checksum
-		}
-		if len(meta.Columns) > 0 {
-			chunk.Columns = json.RawMessage(meta.Columns)
-		}
-		out.Body.Chunks = append(out.Body.Chunks, chunk)
+		out.Body.Chunks = append(out.Body.Chunks, manifestChunkOf(in.ID, meta))
 	}
 	return out, nil
+}
+
+func (s *Server) viewManifest(ctx context.Context, info store.CollectionInfo, out *manifestOutput) error {
+	members, err := parseMembers(info)
+	if err != nil {
+		return err
+	}
+	var minX, minY, maxX, maxY float64
+	spatial := false
+	var featureCount int64
+	for _, member := range members {
+		mi, err := s.Store.Collection(ctx, member.Collection)
+		if err != nil {
+			return err
+		}
+		featureCount += mi.FeatureCount
+		if mi.MinX != nil && mi.MinY != nil && mi.MaxX != nil && mi.MaxY != nil {
+			if !spatial {
+				minX, minY, maxX, maxY = *mi.MinX, *mi.MinY, *mi.MaxX, *mi.MaxY
+				spatial = true
+			} else {
+				minX = min(minX, *mi.MinX)
+				minY = min(minY, *mi.MinY)
+				maxX = max(maxX, *mi.MaxX)
+				maxY = max(maxY, *mi.MaxY)
+			}
+		}
+		metas, err := s.Store.ChunkMetas(ctx, member.Collection, nil, 1000000, 0, 0)
+		if err != nil {
+			return err
+		}
+		for _, meta := range metas {
+			out.Body.Chunks = append(out.Body.Chunks, manifestChunkOf(member.Collection, meta))
+		}
+	}
+	out.Body.ChunkCount = len(out.Body.Chunks)
+	out.Body.FeatureCount = featureCount
+	if spatial {
+		out.Body.Extent = []float64{minX, minY, maxX, maxY}
+	}
+	return nil
+}
+
+func manifestChunkOf(collection string, meta store.ChunkMeta) manifestChunk {
+	chunk := manifestChunk{
+		Collection:   collection,
+		ID:           meta.ID,
+		BBox:         []float64{meta.MinX, meta.MinY, meta.MaxX, meta.MaxY},
+		FeatureCount: meta.FeatureCount,
+		SizeBytes:    meta.SizeBytes,
+		Href:         "/collections/" + collection + "/chunks/" + strconv.FormatInt(meta.ID, 10),
+	}
+	if meta.Checksum != nil {
+		chunk.Checksum = *meta.Checksum
+	}
+	if len(meta.Columns) > 0 {
+		chunk.Columns = json.RawMessage(meta.Columns)
+	}
+	return chunk
 }

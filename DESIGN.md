@@ -24,7 +24,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 - A view is catalog metadata: an ordered list of members, each a collection plus an optional CQL2 filter and column mapping. No extra storage.
 - Schema rule: union by name — member columns merge, missing columns are absent. The view can project and rename columns.
-- Paging walks members in order; the manifest unions member chunk metadata (chunk URLs remain member-scoped); tiles render across members. Overview tiers resolve per member with the standard fallback.
+- Members walk in order for paging; the manifest unions member chunk metadata (chunk URLs remain member-scoped); tiles render across members. Items on views read full detail unless `overview=` asks otherwise; unfiltered tiles resolve tiers per member by zoom.
 - Spatial and temporal extents are live unions of member extents. Views are read-only and exactly one level deep.
 
 ## Write path — HTTP only

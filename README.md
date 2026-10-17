@@ -17,6 +17,7 @@ Design decisions are recorded in [DESIGN.md](DESIGN.md).
 - Ingest also builds two overview tiers (10% and 1%): ordinal-stride samples, Douglas-Peucker simplified, with small non-point features dropped. Unfiltered tile and items requests read the smallest tier their zoom or bbox area allows; filtered requests, exports and raw chunks always use full detail (tiers add ~11% storage on the demo set).
 - Attribute equality filters live in a `jsonb`/GIN sidecar (`chunk_props`); any non-reserved query parameter becomes a containment filter intersected with the spatial and text paths.
 - Responses page with `links` (`rel=next`), so GDAL and other OGC clients walk the entire collection.
+- A view is catalog metadata: an ordered member list with per-member CQL2 filters and column mappings (union-by-name, projection and rename); items, tiles and manifests union members live, and views are read-only and one level deep.
 - Read clients can fetch `/collections/{id}/manifest` and prune chunks locally, downloading only the FlatGeobuf chunks they need; chunk responses are immutable, with `Cache-Control` and ETags.
 - The raw chunk and manifest endpoints can be locked with `--admin-token` (bearer auth); OGC endpoints stay open and always apply server-side filtering. Filtered FlatGeobuf is served as an alternate encoding of items, never as raw chunks, so clients cannot bypass filters.
 - CQL2-text `filter=` supports comparisons, `IN`, `BETWEEN`, `LIKE`, `IS NULL` and `AND`/`OR`/`NOT`; clauses compile to type-guarded SQL over the jsonb sidecar, with equality served by GIN containment.
@@ -52,10 +53,11 @@ curl -X PUT --data-binary @features.fgb "localhost:8080/collections/demo/data"
 | `/conformance` | conformance classes |
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged (50,000 default); `overview=auto|0|1|2` picks or bypasses the overview tier; `numberMatched=true` adds the match count; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
+| `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged (50,000 default); `overview=auto|0|1|2` picks or bypasses the overview tier (views serve full detail unless set); `numberMatched=true` adds the match count; `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
 | `/collections/{id}/items/{featureId}` | single feature; ids come from an id-like property (`id`, `fid`, ...) or the synthetic `chunkID-ord` |
 | `/collections/{id}/queryables` | JSON Schema of the filterable properties |
 | `PUT /collections/{id}/data?sortable=` | create-or-replace the collection from a whole FlatGeobuf upload; synchronous, transactional, reprojected to WGS84; `sortable` declares up to 4 indexed columns (admin token) |
+| `PUT /collections/{id}/view` | define or replace a union view: ordered members with optional CQL2 filter and column mapping (admin token) |
 | `DELETE /collections/{id}` | drop a collection and its partitions (admin token) |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
@@ -96,7 +98,7 @@ ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/benc
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (create-or-replace PUT, transactional, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, on-demand filtered exports through rustgis-cli or ogr2ogr, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (union views, client features, ops).
+Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (create-or-replace PUT, transactional, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, union views with per-member filters and column mapping, OGC API Features with windowed next-link paging (50,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, on-demand filtered exports through rustgis-cli or ogr2ogr, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (client features, ops, performance).
 
 ## License
 

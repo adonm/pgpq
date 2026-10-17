@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
@@ -65,6 +66,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
 	mux.HandleFunc("GET /collections/{id}/items/{featureID}", s.feature)
 	mux.HandleFunc("PUT /collections/{id}/data", s.ingestData)
+	mux.HandleFunc("PUT /collections/{id}/view", s.putView)
 	mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
 	mux.HandleFunc("GET /collections/{id}/export", s.export)
@@ -147,13 +149,19 @@ type spatialExtent struct {
 	BBox [][]float64 `json:"bbox"`
 }
 
+type temporalExtent struct {
+	Interval [][]string `json:"interval"`
+}
+
 type extent struct {
-	Spatial spatialExtent `json:"spatial"`
+	Spatial  spatialExtent   `json:"spatial"`
+	Temporal *temporalExtent `json:"temporal,omitempty"`
 }
 
 type collection struct {
 	ID     string  `json:"id"`
 	Title  string  `json:"title,omitempty"`
+	Kind   string  `json:"kind,omitempty"`
 	Extent *extent `json:"extent,omitempty"`
 	Links  []link  `json:"links"`
 }
@@ -172,7 +180,7 @@ func (s *Server) collections(ctx context.Context, _ *struct{}) (*collectionsOutp
 	}
 	out := &collectionsOutput{}
 	for _, info := range infos {
-		out.Body.Collections = append(out.Body.Collections, s.collectionBody(info))
+		out.Body.Collections = append(out.Body.Collections, s.collectionBody(ctx, info))
 	}
 	out.Body.Links = []link{{Href: "/collections", Rel: "self", Type: "application/json"}}
 	return out, nil
@@ -194,13 +202,14 @@ func (s *Server) collection(ctx context.Context, in *collectionInput) (*collecti
 	if err != nil {
 		return nil, err
 	}
-	return &collectionOutput{Body: s.collectionBody(info)}, nil
+	return &collectionOutput{Body: s.collectionBody(ctx, info)}, nil
 }
 
-func (s *Server) collectionBody(info store.CollectionInfo) collection {
+func (s *Server) collectionBody(ctx context.Context, info store.CollectionInfo) collection {
 	body := collection{
 		ID:    info.Name,
 		Title: info.Name,
+		Kind:  info.Kind,
 		Links: []link{
 			{Href: "/collections/" + info.Name, Rel: "self", Type: "application/json"},
 			{Href: "/collections/" + info.Name + "/items", Rel: "items", Type: "application/geo+json"},
@@ -208,12 +217,70 @@ func (s *Server) collectionBody(info store.CollectionInfo) collection {
 			{Href: "/collections/" + info.Name + "/tiles", Rel: "http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector", Type: "application/json"},
 		},
 	}
-	if info.MinX != nil && info.MinY != nil && info.MaxX != nil && info.MaxY != nil {
-		body.Extent = &extent{Spatial: spatialExtent{
+	body.Extent = s.collectionExtent(ctx, info)
+	return body
+}
+
+func (s *Server) collectionExtent(ctx context.Context, info store.CollectionInfo) *extent {
+	if info.Kind != "view" {
+		if info.MinX == nil || info.MinY == nil || info.MaxX == nil || info.MaxY == nil {
+			return nil
+		}
+		out := &extent{Spatial: spatialExtent{
 			BBox: [][]float64{{*info.MinX, *info.MinY, *info.MaxX, *info.MaxY}},
 		}}
+		if info.TimeMin != nil && info.TimeMax != nil {
+			out.Temporal = timeInterval(*info.TimeMin, *info.TimeMax)
+		}
+		return out
 	}
-	return body
+	members, err := parseMembers(info)
+	if err != nil {
+		return nil
+	}
+	var minX, minY, maxX, maxY float64
+	var timeMin, timeMax *time.Time
+	spatial := false
+	for _, member := range members {
+		mi, err := s.Store.Collection(ctx, member.Collection)
+		if err != nil {
+			continue
+		}
+		if mi.MinX != nil && mi.MinY != nil && mi.MaxX != nil && mi.MaxY != nil {
+			if !spatial {
+				minX, minY, maxX, maxY = *mi.MinX, *mi.MinY, *mi.MaxX, *mi.MaxY
+				spatial = true
+			} else {
+				minX = min(minX, *mi.MinX)
+				minY = min(minY, *mi.MinY)
+				maxX = max(maxX, *mi.MaxX)
+				maxY = max(maxY, *mi.MaxY)
+			}
+		}
+		if mi.TimeMin != nil && mi.TimeMax != nil {
+			if timeMin == nil || mi.TimeMin.Before(*timeMin) {
+				timeMin = mi.TimeMin
+			}
+			if timeMax == nil || mi.TimeMax.After(*timeMax) {
+				timeMax = mi.TimeMax
+			}
+		}
+	}
+	if !spatial && timeMin == nil {
+		return nil
+	}
+	out := &extent{}
+	if spatial {
+		out.Spatial = spatialExtent{BBox: [][]float64{{minX, minY, maxX, maxY}}}
+	}
+	if timeMin != nil && timeMax != nil {
+		out.Temporal = timeInterval(*timeMin, *timeMax)
+	}
+	return out
+}
+
+func timeInterval(minT, maxT time.Time) *temporalExtent {
+	return &temporalExtent{Interval: [][]string{{minT.UTC().Format(time.RFC3339), maxT.UTC().Format(time.RFC3339)}}}
 }
 
 var reservedParams = map[string]bool{
@@ -289,6 +356,17 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			matched = &count
 		}
 	}
+	if info.Kind == "view" {
+		if flatgeobuf {
+			http.Error(w, "flatgeobuf export of views is not supported", http.StatusNotImplemented)
+			return
+		}
+		w.Header().Set("Content-Type", "application/geo+json")
+		fw := newFeatureWriter(w, limit, matched)
+		s.streamView(ctx, fw, info, bbox, query, filter, offset, overview)
+		fw.close(pageLink(r, limit, offset, fw.count))
+		return
+	}
 	if flatgeobuf {
 		s.writeFGB(ctx, w, id, bbox, query, filter, offset, limit, 0)
 		return
@@ -307,7 +385,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	fw.close(pageLink(r, limit, offset, fw.count))
 }
 
-func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, info store.CollectionInfo, bbox *[4]float64, offset, tier int) {
+func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.CollectionInfo, bbox *[4]float64, offset, tier int) int {
 	after := int64(0)
 	fallback := tier > 0
 	skipped := 0
@@ -315,7 +393,7 @@ func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, info store.C
 		metas, err := s.Store.ChunkMetas(ctx, info.Name, bbox, s.MaxChunks, tier, after)
 		if err != nil {
 			slog.Error("chunk metas query failed", "collection", info.Name, "error", err)
-			return
+			return skipped
 		}
 		if len(metas) == 0 {
 			if fallback && after == 0 {
@@ -323,12 +401,12 @@ func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, info store.C
 				fallback = false
 				continue
 			}
-			return
+			return skipped
 		}
 		fallback = false
 		for _, meta := range metas {
-			if fw.count >= fw.limit {
-				return
+			if sink.full() {
+				return skipped
 			}
 			if bbox == nil && skipped+meta.FeatureCount <= offset {
 				skipped += meta.FeatureCount
@@ -359,20 +437,20 @@ func (s *Server) streamBBox(ctx context.Context, fw *featureWriter, info store.C
 					continue
 				}
 				g.ID = featureID(info, meta.ID, i, g.Properties)
-				if !fw.add(g) {
-					return
+				if !sink.add(g) {
+					return skipped
 				}
 			}
 		}
 		if len(metas) < s.MaxChunks {
-			return
+			return skipped
 		}
 		after = metas[len(metas)-1].ID
 	}
 }
 
-func (s *Server) streamMatches(ctx context.Context, fw *featureWriter, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int) {
-	matches, err := s.Store.Matches(ctx, info.Name, bbox, query, filter, fw.limit, offset)
+func (s *Server) streamMatches(ctx context.Context, sink featureSink, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int) {
+	matches, err := s.Store.Matches(ctx, info.Name, bbox, query, filter, sink.remaining(), offset)
 	if err != nil {
 		slog.Error("matches query failed", "collection", info.Name, "error", err)
 		return
@@ -419,12 +497,26 @@ func (s *Server) streamMatches(ctx context.Context, fw *featureWriter, info stor
 					continue
 				}
 				g.ID = featureID(info, row.ID, i, g.Properties)
-				if !fw.add(g) {
+				if !sink.add(g) {
 					return
 				}
 			}
 		}
 	}
+}
+
+type featureSink interface {
+	add(f *chunk.Feature) bool
+	full() bool
+	remaining() int
+}
+
+func (fw *featureWriter) full() bool {
+	return fw.count >= fw.limit
+}
+
+func (fw *featureWriter) remaining() int {
+	return fw.limit - fw.count
 }
 
 type featureWriter struct {
@@ -540,6 +632,27 @@ func typedLiteral(value string) any {
 }
 
 func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr) (int64, bool, error) {
+	if info.Kind == "view" {
+		if bbox != nil || query != "" || filter != nil {
+			return 0, false, nil
+		}
+		members, err := parseMembers(info)
+		if err != nil {
+			return 0, false, err
+		}
+		var total int64
+		for _, member := range members {
+			if member.Filter != "" {
+				return 0, false, nil
+			}
+			mi, err := s.Store.Collection(ctx, member.Collection)
+			if err != nil {
+				return 0, false, err
+			}
+			total += mi.FeatureCount
+		}
+		return total, true, nil
+	}
 	if query != "" || filter != nil {
 		count, err := s.Store.CountMatches(ctx, info.Name, bbox, query, filter)
 		if err != nil {
@@ -787,10 +900,12 @@ func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
-	if _, err := s.Store.Collection(ctx, id); errors.Is(err, store.ErrNotFound) {
+	info, err := s.Store.Collection(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "collection not found", http.StatusNotFound)
 		return
-	} else if err != nil {
+	}
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -816,7 +931,18 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	bound := tile.Bound()
 	bbox := [4]float64{bound.Min[0], bound.Min[1], bound.Max[0], bound.Max[1]}
 	var collection *orbgeojson.FeatureCollection
-	if query == "" && filter == nil {
+	switch {
+	case info.Kind == "view":
+		tier := tierForZoom(int(z))
+		if overview != nil {
+			tier = *overview
+		}
+		collection, err = s.viewTile(ctx, info, bbox, query, filter, tier)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	case query == "" && filter == nil:
 		tier := tierForZoom(int(z))
 		if overview != nil {
 			tier = *overview
@@ -841,7 +967,7 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 			}
 			appendFeatures(collection, c, raw)
 		}
-	} else {
+	default:
 		collection, err = s.tileMatches(ctx, id, bbox, query, filter)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

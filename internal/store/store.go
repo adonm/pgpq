@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -22,6 +23,8 @@ import (
 var migrations embed.FS
 
 var ErrNotFound = errors.New("store: not found")
+
+var ErrConflict = errors.New("store: conflict")
 
 var TrackedExtensions = []string{
 	"postgis",
@@ -76,10 +79,14 @@ type ChunkMeta struct {
 
 type CollectionInfo struct {
 	Name         string
+	Kind         string
+	Members      []byte
 	ChunkCount   int64
 	FeatureCount int64
 	MinX, MinY   *float64
 	MaxX, MaxY   *float64
+	TimeMin      *time.Time
+	TimeMax      *time.Time
 	IDColumn     *string
 }
 
@@ -265,6 +272,23 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *Store) PutView(ctx context.Context, name string, members []byte) error {
+	if !collectionName.MatchString(name) {
+		return fmt.Errorf("invalid collection name %q", name)
+	}
+	tag, err := s.Pool.Exec(ctx, `
+		insert into collections (name, kind, members) values ($1, 'view', $2::jsonb)
+		on conflict (name) do update set kind = 'view', members = excluded.members
+		where collections.kind = 'view'`, name, members)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrConflict
+	}
+	return nil
 }
 
 func (i *Ingest) Commit(ctx context.Context) error {
@@ -546,7 +570,7 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, chunk_count, feature_count, minx, miny, maxx, maxy, id_column from collections`
+const collectionColumns = `select name, kind, members, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column from collections`
 
 func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	rows, err := s.Pool.Query(ctx, collectionColumns+` order by name`)
@@ -557,8 +581,8 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 	var out []CollectionInfo
 	for rows.Next() {
 		var info CollectionInfo
-		if err := rows.Scan(&info.Name, &info.ChunkCount, &info.FeatureCount,
-			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.IDColumn); err != nil {
+		if err := rows.Scan(&info.Name, &info.Kind, &info.Members, &info.ChunkCount, &info.FeatureCount,
+			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn); err != nil {
 			return nil, err
 		}
 		out = append(out, info)
@@ -569,8 +593,8 @@ func (s *Store) Collections(ctx context.Context) ([]CollectionInfo, error) {
 func (s *Store) Collection(ctx context.Context, name string) (CollectionInfo, error) {
 	var info CollectionInfo
 	err := s.Pool.QueryRow(ctx, collectionColumns+` where name = $1`, name).
-		Scan(&info.Name, &info.ChunkCount, &info.FeatureCount,
-			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.IDColumn)
+		Scan(&info.Name, &info.Kind, &info.Members, &info.ChunkCount, &info.FeatureCount,
+			&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return info, ErrNotFound
 	}
