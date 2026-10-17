@@ -14,7 +14,7 @@ func TestRename(t *testing.T) {
 		return prop
 	})
 	var args []any
-	renamed.SQL("props", &args)
+	renamed.SQL("props", &args, nil)
 	found := false
 	for _, arg := range args {
 		if arg == "bb" {

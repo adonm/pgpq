@@ -13,7 +13,7 @@ type Spatial struct {
 	Shape geo.Shape
 }
 
-func (e *Spatial) SQL(string, *[]any) string {
+func (e *Spatial) SQL(string, *[]any, Casts) string {
 	return "true"
 }
 

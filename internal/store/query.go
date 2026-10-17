@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -110,7 +111,39 @@ func scanChunks(ctx context.Context, conn db, query string, args ...any) ([]Chun
 	return out, rows.Err()
 }
 
-func matchesWhere(collection string, bbox *[4]float64, query string, filter cql.Expr) (string, string, []any) {
+func (s *Store) ColumnCasts(ctx context.Context, collection string) (cql.Casts, error) {
+	casts := cql.Casts{}
+	metas, err := s.ChunkMetas(ctx, collection, nil, 1, 0, 0)
+	if err != nil {
+		return casts, err
+	}
+	if len(metas) == 0 || len(metas[0].Columns) == 0 {
+		return casts, nil
+	}
+	var cols []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(metas[0].Columns, &cols); err != nil {
+		return casts, nil
+	}
+	for _, col := range cols {
+		casts[col.Name] = CastOf(col.Type)
+	}
+	return casts, nil
+}
+
+func CastOf(columnType string) string {
+	switch columnType {
+	case "Bool":
+		return "boolean"
+	case "Byte", "UByte", "Short", "UShort", "Int", "UInt", "Long", "ULong", "Float", "Double":
+		return "numeric"
+	}
+	return ""
+}
+
+func matchesWhere(collection string, casts cql.Casts, bbox *[4]float64, query string, filter cql.Expr) (string, string, []any) {
 	from := `chunk_props m`
 	where := `m.collection = $1`
 	args := []any{collection}
@@ -118,14 +151,14 @@ func matchesWhere(collection string, bbox *[4]float64, query string, filter cql.
 	case query != "" && filter != nil:
 		from = `chunk_text m join chunk_props p on p.collection = m.collection and p.chunk_id = m.chunk_id and p.feature_ord = m.feature_ord`
 		args = append(args, query)
-		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2) and ` + filter.SQL("p.props", &args)
+		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2) and ` + filter.SQL("p.props", &args, casts)
 	case query != "":
 		from = `chunk_text m`
 		args = append(args, query)
 		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2)`
 	default:
 		if filter != nil {
-			where += ` and ` + filter.SQL("m.props", &args)
+			where += ` and ` + filter.SQL("m.props", &args, casts)
 		}
 	}
 	if bbox != nil {
@@ -141,29 +174,33 @@ func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64
 	if query == "" && filter == nil {
 		return nil, nil
 	}
+	casts, err := s.ColumnCasts(ctx, collection)
+	if err != nil {
+		return nil, err
+	}
 	budget := matchOrderedBudget + time.Duration(limit+offset)*20*time.Microsecond
 	if budget > maxMatchBudget {
 		budget = maxMatchBudget
 	}
 	probe, cancel := context.WithTimeout(ctx, budget)
-	matches, err := s.matchesInIndexOrder(probe, collection, bbox, query, filter, limit, offset)
+	matches, err := s.matchesInIndexOrder(probe, collection, casts, bbox, query, filter, limit, offset)
 	cancel()
 	if err == nil || !matchTimedOut(err) {
 		return matches, err
 	}
-	return s.matchesByIndexScan(ctx, collection, bbox, query, filter, limit, offset)
+	return s.matchesByIndexScan(ctx, collection, casts, bbox, query, filter, limit, offset)
 }
 
-func (s *Store) matchesInIndexOrder(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
-	from, where, args := matchesWhere(collection, bbox, query, filter)
+func (s *Store) matchesInIndexOrder(ctx context.Context, collection string, casts cql.Casts, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+	from, where, args := matchesWhere(collection, casts, bbox, query, filter)
 	args = append(args, limit, offset)
 	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by m.chunk_id, m.feature_ord limit $%d offset $%d`,
 		from, where, len(args)-1, len(args))
 	return scanMatches(ctx, s.Pool, sql, args...)
 }
 
-func (s *Store) matchesByIndexScan(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
-	from, where, args := matchesWhere(collection, bbox, query, filter)
+func (s *Store) matchesByIndexScan(ctx context.Context, collection string, casts cql.Casts, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+	from, where, args := matchesWhere(collection, casts, bbox, query, filter)
 	args = append(args, limit, offset)
 	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by (m.chunk_id + 0), m.feature_ord limit $%d offset $%d`,
 		from, where, len(args)-1, len(args))
@@ -179,7 +216,11 @@ func matchTimedOut(err error) bool {
 }
 
 func (s *Store) Sorted(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, order []string, limit, offset int) ([]FeatureMatch, error) {
-	from, where, args := matchesWhere(collection, bbox, query, filter)
+	casts, err := s.ColumnCasts(ctx, collection)
+	if err != nil {
+		return nil, err
+	}
+	from, where, args := matchesWhere(collection, casts, bbox, query, filter)
 	args = append(args, limit, offset)
 	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by %s, m.chunk_id, m.feature_ord limit $%d offset $%d`,
 		from, where, strings.Join(order, ", "), len(args)-1, len(args))
@@ -204,9 +245,13 @@ func scanMatches(ctx context.Context, conn db, sql string, args ...any) ([]Featu
 }
 
 func (s *Store) FindFeature(ctx context.Context, collection string, filter cql.Expr) (FeatureMatch, bool, error) {
-	from, where, args := matchesWhere(collection, nil, "", filter)
+	casts, err := s.ColumnCasts(ctx, collection)
+	if err != nil {
+		return FeatureMatch{}, false, err
+	}
+	from, where, args := matchesWhere(collection, casts, nil, "", filter)
 	var match FeatureMatch
-	err := s.Pool.QueryRow(ctx,
+	err = s.Pool.QueryRow(ctx,
 		fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s limit 1`, from, where), args...).
 		Scan(&match.ChunkID, &match.Ord)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -219,9 +264,13 @@ func (s *Store) FindFeature(ctx context.Context, collection string, filter cql.E
 }
 
 func (s *Store) CountMatches(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr) (int64, error) {
-	from, where, args := matchesWhere(collection, bbox, query, filter)
+	casts, err := s.ColumnCasts(ctx, collection)
+	if err != nil {
+		return 0, err
+	}
+	from, where, args := matchesWhere(collection, casts, bbox, query, filter)
 	var count int64
-	err := s.Pool.QueryRow(ctx, fmt.Sprintf(`select count(*) from %s where %s`, from, where), args...).Scan(&count)
+	err = s.Pool.QueryRow(ctx, fmt.Sprintf(`select count(*) from %s where %s`, from, where), args...).Scan(&count)
 	return count, err
 }
 

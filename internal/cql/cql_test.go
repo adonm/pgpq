@@ -12,7 +12,7 @@ func TestSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	var args []any
-	sql := expr.SQL("props", &args)
+	sql := expr.SQL("props", &args, nil)
 	want := "((case when jsonb_typeof(props -> $1) = 'number' then (props ->> $1)::numeric end) >= $2" +
 		" and (props @> jsonb_build_object($3::text, $4::text) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($4::text))))"
 	if sql != want {
@@ -30,7 +30,7 @@ func TestEqualityUsesContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	var args []any
-	sql := expr.SQL("props", &args)
+	sql := expr.SQL("props", &args, nil)
 	want := "((props @> jsonb_build_object($1::text, $2::text) or (jsonb_typeof(props -> $1::text) = 'array' and props -> $1::text @> jsonb_build_array($2::text))) and (((props @> jsonb_build_object($3::text, $4::numeric) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($4::numeric))) or (props @> jsonb_build_object($3::text, $5::text) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($5::text)))) or ((props @> jsonb_build_object($6::text, $7::numeric) or (jsonb_typeof(props -> $6::text) = 'array' and props -> $6::text @> jsonb_build_array($7::numeric))) or (props @> jsonb_build_object($6::text, $8::text) or (jsonb_typeof(props -> $6::text) = 'array' and props -> $6::text @> jsonb_build_array($8::text))))))"
 	if sql != want {
 		t.Fatalf("sql = %s, want %s", sql, want)
@@ -61,8 +61,8 @@ func TestJSONParity(t *testing.T) {
 			t.Fatalf("%s: %v", tc.json, err)
 		}
 		var textArgs, jsonArgs []any
-		textSQL := textExpr.SQL("props", &textArgs)
-		jsonSQL := jsonParsed.SQL("props", &jsonArgs)
+		textSQL := textExpr.SQL("props", &textArgs, nil)
+		jsonSQL := jsonParsed.SQL("props", &jsonArgs, nil)
 		if textSQL != jsonSQL {
 			t.Fatalf("%s: sql %q != %q", tc.text, textSQL, jsonSQL)
 		}
@@ -109,7 +109,7 @@ func TestClauses(t *testing.T) {
 			t.Fatalf("%s: %v", tc.in, err)
 		}
 		var args []any
-		sql := expr.SQL("props", &args)
+		sql := expr.SQL("props", &args, nil)
 		if len(args) != tc.argCount {
 			t.Fatalf("%s: %d args, want %d", tc.in, len(args), tc.argCount)
 		}
@@ -134,5 +134,42 @@ func TestErrors(t *testing.T) {
 		if _, err := Parse(in); err == nil {
 			t.Fatalf("%s: expected error", in)
 		}
+	}
+}
+
+func TestTypedColumnsUseTheIndexedExpression(t *testing.T) {
+	args := []any{}
+	text, err := Parse("diets_vegan >= 'yes'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := text.SQL("props", &args, Casts{"diets_vegan": ""})
+	if want := ColumnExpr("props", "diets_vegan", "") + " >= $1"; sql != want {
+		t.Fatalf("text column = %s, want %s", sql, want)
+	}
+	if value, ok := args[0].(string); !ok || value != "yes" {
+		t.Fatalf("bound value = %#v", args[0])
+	}
+
+	numberArgs := []any{}
+	number, err := Parse("population > '10'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql = number.SQL("props", &numberArgs, Casts{"population": "numeric"})
+	if want := ColumnExpr("props", "population", "numeric") + " > $1"; sql != want {
+		t.Fatalf("numeric column = %s, want %s", sql, want)
+	}
+	if value, ok := numberArgs[0].(int64); !ok || value != 10 {
+		t.Fatalf("bound value = %#v", numberArgs[0])
+	}
+
+	unknownArgs := []any{}
+	unknown, err := Parse("population > '10'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sql := unknown.SQL("props", &unknownArgs, nil); !strings.Contains(sql, "jsonb_typeof(props -> $1)") {
+		t.Fatalf("unknown property should keep its key as a parameter: %s", sql)
 	}
 }

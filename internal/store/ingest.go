@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/adonm/postfgb/internal/cql"
 )
 
 type Ingest struct {
@@ -295,16 +297,11 @@ func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, ti
 }
 
 func SortExpr(name, cast string) string {
-	key := strings.ReplaceAll(name, "'", "''")
-	expr := `props->>'` + key + `'`
 	switch cast {
-	case "":
-		return expr
-	case "numeric", "boolean", "timestamptz":
-		return `(` + expr + `)::` + cast
-	default:
-		return ""
+	case "", "numeric", "boolean", "timestamptz":
+		return cql.ColumnExpr("props", name, cast)
 	}
+	return ""
 }
 
 func (i *Ingest) CreateSortIndexes(ctx context.Context, cols []SortColumn) error {
@@ -313,7 +310,7 @@ func (i *Ingest) CreateSortIndexes(ctx context.Context, cols []SortColumn) error
 		if expr == "" {
 			return fmt.Errorf("sortable: unsupported cast %q", col.Cast)
 		}
-		name := pgx.Identifier{fmt.Sprintf("chunk_props_%s_sort_%d_idx", i.collection, idx)}.Sanitize()
+		name := pgx.Identifier{fmt.Sprintf("%s_sort_%d_idx", i.staging["chunk_props"], idx)}.Sanitize()
 		table := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
 		if _, err := i.tx.Exec(ctx, `create index `+name+` on `+table+` ((`+expr+`))`); err != nil {
 			return err

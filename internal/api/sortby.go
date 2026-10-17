@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,7 +18,7 @@ func (s *Server) sortOrder(ctx context.Context, r *http.Request, info store.Coll
 	if len(info.Sortable) == 0 {
 		return nil, errors.New("collection has no sortable columns")
 	}
-	casts, err := s.columnCasts(ctx, info)
+	casts, err := s.Store.ColumnCasts(ctx, info.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -62,37 +61,4 @@ func declaredSortable(sortable []string, name string) bool {
 		}
 	}
 	return false
-}
-
-func (s *Server) columnCasts(ctx context.Context, info store.CollectionInfo) (map[string]string, error) {
-	casts := map[string]string{}
-	metas, err := s.Store.ChunkMetas(ctx, info.Name, nil, 1, 0, 0)
-	if err != nil {
-		return casts, err
-	}
-	if len(metas) == 0 || len(metas[0].Columns) == 0 {
-		return casts, nil
-	}
-	var cols []struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(metas[0].Columns, &cols); err != nil {
-		return casts, nil
-	}
-	for _, col := range cols {
-		casts[col.Name] = sortCast(col.Type)
-	}
-	return casts, nil
-}
-
-func sortCast(columnType string) string {
-	switch columnType {
-	case "Bool":
-		return "boolean"
-	case "Byte", "UByte", "Short", "UShort", "Int", "UInt", "Long", "ULong", "Float", "Double":
-		return "numeric"
-	default:
-		return ""
-	}
 }

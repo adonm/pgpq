@@ -853,17 +853,10 @@ func sortColumns(cols []chunk.Column, sortable []string) []store.SortColumn {
 	for _, name := range sortable {
 		cast := ""
 		for _, col := range cols {
-			if col.Name != name {
-				continue
+			if col.Name == name {
+				cast = store.CastOf(col.Type.String())
+				break
 			}
-			switch col.Type {
-			case flattypes.ColumnTypeBool:
-				cast = "boolean"
-			case flattypes.ColumnTypeInt, flattypes.ColumnTypeUInt, flattypes.ColumnTypeLong,
-				flattypes.ColumnTypeULong, flattypes.ColumnTypeFloat, flattypes.ColumnTypeDouble:
-				cast = "numeric"
-			}
-			break
 		}
 		out = append(out, store.SortColumn{Name: name, Cast: cast})
 	}

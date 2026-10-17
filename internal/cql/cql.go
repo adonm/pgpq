@@ -9,8 +9,26 @@ import (
 	"unicode"
 )
 
+type Casts map[string]string
+
 type Expr interface {
-	SQL(col string, args *[]any) string
+	SQL(col string, args *[]any, casts Casts) string
+}
+
+func ColumnExpr(col, prop, cast string) string {
+	key := strings.ReplaceAll(prop, "'", "''")
+	lit := col + " -> '" + key + "'"
+	text := col + " ->> '" + key + "'"
+	switch cast {
+	case "numeric":
+		return "(case when jsonb_typeof(" + lit + ") = 'number' then (" + text + ")::numeric end)"
+	case "boolean":
+		return "(case when jsonb_typeof(" + lit + ") = 'boolean' then (" + text + ")::boolean end)"
+	case "timestamptz":
+		return "(case when jsonb_typeof(" + lit + ") = 'string' then (" + text + ")::timestamptz end)"
+	default:
+		return "(case when jsonb_typeof(" + lit + ") = 'string' then " + text + " end)"
+	}
 }
 
 func And(left, right Expr) Expr {
@@ -25,20 +43,20 @@ func And(left, right Expr) Expr {
 
 type andExpr struct{ left, right Expr }
 
-func (e andExpr) SQL(col string, args *[]any) string {
-	return "(" + e.left.SQL(col, args) + " and " + e.right.SQL(col, args) + ")"
+func (e andExpr) SQL(col string, args *[]any, casts Casts) string {
+	return "(" + e.left.SQL(col, args, casts) + " and " + e.right.SQL(col, args, casts) + ")"
 }
 
 type orExpr struct{ left, right Expr }
 
-func (e orExpr) SQL(col string, args *[]any) string {
-	return "(" + e.left.SQL(col, args) + " or " + e.right.SQL(col, args) + ")"
+func (e orExpr) SQL(col string, args *[]any, casts Casts) string {
+	return "(" + e.left.SQL(col, args, casts) + " or " + e.right.SQL(col, args, casts) + ")"
 }
 
 type notExpr struct{ inner Expr }
 
-func (e notExpr) SQL(col string, args *[]any) string {
-	return "(not " + e.inner.SQL(col, args) + ")"
+func (e notExpr) SQL(col string, args *[]any, casts Casts) string {
+	return "(not " + e.inner.SQL(col, args, casts) + ")"
 }
 
 type Compare struct {
@@ -47,11 +65,12 @@ type Compare struct {
 	Value any
 }
 
-func (e *Compare) SQL(col string, args *[]any) string {
+func (e *Compare) SQL(col string, args *[]any, casts Casts) string {
 	if e.Op == "=" {
 		return equalityExpr(col, args, e.Prop, e.Value)
 	}
-	return valueExpr(col, args, e.Prop, e.Value) + " " + e.Op + " " + placeholder(args, e.Value)
+	value := coerce(e.Value, casts[e.Prop])
+	return valueExpr(col, args, e.Prop, value, casts) + " " + e.Op + " " + placeholder(args, value)
 }
 
 type Between struct {
@@ -60,9 +79,11 @@ type Between struct {
 	Not    bool
 }
 
-func (e *Between) SQL(col string, args *[]any) string {
-	sql := valueExpr(col, args, e.Prop, e.Lo) +
-		" between " + placeholder(args, e.Lo) + " and " + placeholder(args, e.Hi)
+func (e *Between) SQL(col string, args *[]any, casts Casts) string {
+	lo := coerce(e.Lo, casts[e.Prop])
+	hi := coerce(e.Hi, casts[e.Prop])
+	sql := valueExpr(col, args, e.Prop, lo, casts) +
+		" between " + placeholder(args, lo) + " and " + placeholder(args, hi)
 	if e.Not {
 		return "(not " + sql + ")"
 	}
@@ -75,7 +96,7 @@ type In struct {
 	Not    bool
 }
 
-func (e *In) SQL(col string, args *[]any) string {
+func (e *In) SQL(col string, args *[]any, casts Casts) string {
 	parts := make([]string, len(e.Values))
 	for i, v := range e.Values {
 		parts[i] = equalityExpr(col, args, e.Prop, v)
@@ -93,8 +114,8 @@ type Like struct {
 	Not     bool
 }
 
-func (e *Like) SQL(col string, args *[]any) string {
-	sql := valueExpr(col, args, e.Prop, "") + " like " + placeholder(args, e.Pattern)
+func (e *Like) SQL(col string, args *[]any, casts Casts) string {
+	sql := valueExpr(col, args, e.Prop, "", casts) + " like " + placeholder(args, e.Pattern)
 	if e.Not {
 		return "(not " + sql + ")"
 	}
@@ -106,7 +127,7 @@ type IsNull struct {
 	Not  bool
 }
 
-func (e *IsNull) SQL(col string, args *[]any) string {
+func (e *IsNull) SQL(col string, args *[]any, casts Casts) string {
 	key := placeholder(args, e.Prop)
 	cond := fmt.Sprintf("(%s -> %s is null or jsonb_typeof(%s -> %s) = 'null')", col, key, col, key)
 	if e.Not {
@@ -139,7 +160,10 @@ func equalityClause(col, key, val string) string {
 		col, key, val, col, key, col, key, val)
 }
 
-func valueExpr(col string, args *[]any, prop string, value any) string {
+func valueExpr(col string, args *[]any, prop string, value any, casts Casts) string {
+	if cast, ok := casts[prop]; ok && indexable(value, cast) {
+		return ColumnExpr(col, prop, cast)
+	}
 	key := placeholder(args, prop)
 	switch value.(type) {
 	case bool:
@@ -151,6 +175,53 @@ func valueExpr(col string, args *[]any, prop string, value any) string {
 	default:
 		return fmt.Sprintf("(case when jsonb_typeof(%s -> %s) = 'string' then %s ->> %s end)", col, key, col, key)
 	}
+}
+
+func indexable(value any, cast string) bool {
+	switch cast {
+	case "numeric":
+		switch value.(type) {
+		case int, int64, float64:
+			return true
+		}
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "timestamptz":
+		_, ok := value.(time.Time)
+		return ok
+	case "":
+		_, ok := value.(string)
+		return ok
+	}
+	return false
+}
+
+func coerce(value any, cast string) any {
+	switch cast {
+	case "numeric":
+		switch v := value.(type) {
+		case int, int64, float64:
+			return v
+		case string:
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				return n
+			}
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				return f
+			}
+		}
+	case "boolean":
+		if v, ok := value.(string); ok {
+			switch v {
+			case "true":
+				return true
+			case "false":
+				return false
+			}
+		}
+	}
+	return value
 }
 
 func placeholder(args *[]any, value any) string {
