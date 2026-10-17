@@ -47,7 +47,7 @@ curl "localhost:8080/collections/bench/items?bbox=-10,45,10,55&limit=100"
 curl 'localhost:8080/collections/bench/items?q="feature-42"'
 curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
 curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i between 5 and 7 and name like 'feature-6%'"
-curl -X PUT -H "Content-Type: application/flatgeobuf" --data-binary @features.fgb "localhost:8080/collections/demo"
+curl -T features.fgb -H "Content-Type: application/flatgeobuf" "localhost:8080/collections/demo"
 curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "localhost:8080/collections/demo"
 ```
 
@@ -87,7 +87,7 @@ just layercake settlements "-74.05 40.65 -73.92 40.82"   # NYC, ~3 s
 just layercake buildings "7.40 43.72 7.44 43.76"         # Monaco, ~10 s
 ```
 
-The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` and an optional `-spat` bbox; omit the bbox to stream an entire layer (settlements is 188 MiB, buildings is 42.9 GiB planet-wide). Layer types are normalized with `-nlt GEOMETRY` by default so mixed-geometry layers (highways, POIs) load as-is, and list-valued tag columns are flattened to scalars because FlatGeobuf has no list types. Layers land with their real tags, OSM timestamps (time filtering and `extent.temporal` come along) and polygon geometry. `just fixtures` loads the six main layers over one shared bbox, ready for view and union tests.
+The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` and an optional `-spat` bbox; omit the bbox to stream an entire layer (settlements is 188 MiB, buildings is 42.9 GiB planet-wide). Uploads stream with `curl -T` (or `-T -` for a pipe from `ogr2ogr`): the body never sits in curl's memory — `--data-binary` buffers the whole upload in RAM, which kills multi-gigabyte loads. Layer types are normalized with `-nlt GEOMETRY` by default so mixed-geometry layers (highways, POIs) load as-is, and list-valued tag columns are flattened to scalars because FlatGeobuf has no list types. Layers land with their real tags, OSM timestamps (time filtering and `extent.temporal` come along) and polygon geometry. `just fixtures` loads the six main layers over one shared bbox, ready for view and union tests.
 
 ## Benchmarks
 
