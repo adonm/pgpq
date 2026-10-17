@@ -61,7 +61,7 @@ func (m *viewMember) transformProps(props map[string]any) map[string]any {
 }
 
 type memberWriter struct {
-	base   *featureWriter
+	base   featureSink
 	member viewMember
 }
 
@@ -71,11 +71,11 @@ func (w *memberWriter) add(g *chunk.Feature) bool {
 }
 
 func (w *memberWriter) full() bool {
-	return w.base.count >= w.base.limit
+	return w.base.full()
 }
 
 func (w *memberWriter) remaining() int {
-	return w.base.limit - w.base.count
+	return w.base.remaining()
 }
 
 func (s *Server) memberFilter(member viewMember) (cql.Expr, error) {
@@ -85,7 +85,7 @@ func (s *Server) memberFilter(member viewMember) (cql.Expr, error) {
 	return cql.Parse(member.Filter)
 }
 
-func (s *Server) streamView(ctx context.Context, fw *featureWriter, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int, overview *int) {
+func (s *Server) streamView(ctx context.Context, fw featureSink, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int, overview *int) {
 	members, err := parseMembers(info)
 	if err != nil {
 		slog.Error("view members parse failed", "collection", info.Name, "error", err)
@@ -93,7 +93,7 @@ func (s *Server) streamView(ctx context.Context, fw *featureWriter, info store.C
 	}
 	remaining := offset
 	for _, member := range members {
-		if fw.count >= fw.limit {
+		if fw.full() {
 			return
 		}
 		mi, err := s.Store.Collection(ctx, member.Collection)

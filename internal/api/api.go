@@ -322,6 +322,16 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	bbox, err = s.inputBBox(r, bbox)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	crsFn, contentCRS, err := s.outputCRS(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	overview, err := parseOverview(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -377,8 +387,15 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/geo+json")
+		if contentCRS != "" {
+			w.Header().Set("Content-Crs", contentCRS)
+		}
 		fw := newFeatureWriter(w, limit, matched)
-		s.streamView(ctx, fw, info, bbox, query, filter, offset, overview)
+		var sink featureSink = fw
+		if crsFn != nil {
+			sink = &crsWriter{base: sink, fn: crsFn}
+		}
+		s.streamView(ctx, sink, info, bbox, query, filter, offset, overview)
 		fw.close(pageLink(r, limit, offset, fw.count))
 		return
 	}
@@ -387,18 +404,25 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
+	if contentCRS != "" {
+		w.Header().Set("Content-Crs", contentCRS)
+	}
 	fw := newFeatureWriter(w, limit, matched)
+	var sink featureSink = fw
+	if crsFn != nil {
+		sink = &crsWriter{base: sink, fn: crsFn}
+	}
 	switch {
 	case order != nil:
-		s.streamSorted(ctx, fw, info, bbox, query, filter, order, offset)
+		s.streamSorted(ctx, sink, info, bbox, query, filter, order, offset)
 	case query != "" || filter != nil:
-		s.streamMatches(ctx, fw, info, bbox, query, filter, offset)
+		s.streamMatches(ctx, sink, info, bbox, query, filter, offset)
 	default:
 		tier := tierForBounds(bbox)
 		if overview != nil {
 			tier = *overview
 		}
-		s.streamBBox(ctx, fw, info, bbox, offset, tier)
+		s.streamBBox(ctx, sink, info, bbox, offset, tier)
 	}
 	fw.close(pageLink(r, limit, offset, fw.count))
 }

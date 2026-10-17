@@ -379,7 +379,7 @@ func toInput(header *flattypes.Header, f *flattypes.Feature, transform wgs84.Fun
 		return chunk.InputFeature{}, errors.New("geometry collections are not supported")
 	}
 	if transform != nil {
-		if err := transformGeometry(g.Geometry, transform); err != nil {
+		if err := TransformGeometry(g.Geometry, transform); err != nil {
 			return chunk.InputFeature{}, err
 		}
 	}
@@ -401,7 +401,7 @@ func toInput(header *flattypes.Header, f *flattypes.Feature, transform wgs84.Fun
 	}, nil
 }
 
-func transformGeometry(g *chunk.Geometry, fn wgs84.Func) error {
+func TransformGeometry(g *chunk.Geometry, fn wgs84.Func) error {
 	switch c := g.Coordinates.(type) {
 	case []float64:
 		return transformPoint(c, fn)
