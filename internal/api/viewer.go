@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"net/url"
 
@@ -15,9 +16,54 @@ const (
 	projectCameraWorld = 40075016.685578488 / 512
 )
 
+var viewerPage = template.Must(template.New("viewer").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>postfgb · RustGIS</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#0b0b0d;color:#e5e5e5;font:12px/1.4 ui-sans-serif,system-ui,sans-serif}
+#app{display:flex;flex-direction:column;height:100%}
+#bar{display:flex;align-items:center;gap:10px;padding:6px 10px;background:#18181b;border-bottom:1px solid #27272a;font:11px ui-monospace,monospace;color:#94a3b8}
+#bar b{color:#e5e5e5;font:600 12px ui-sans-serif,system-ui,sans-serif}
+#bar a{color:#38bdf8;text-decoration:none}
+#bar a:hover{text-decoration:underline}
+#bar .spacer{flex:1}
+iframe{border:0;width:100%;flex:1;background:#0b0b0d}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <b>postfgb</b>
+    <span>{{.Host}}</span>
+    <span class="spacer"></span>
+    <a href="{{.Project}}" target="_blank" rel="noopener">project JSON</a>
+    <a href="{{.Open}}" target="_blank" rel="noopener">open in RustGIS ↗</a>
+  </div>
+  <iframe src="{{.Embed}}" title="RustGIS" allow="fullscreen; clipboard-write" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+</div>
+</body>
+</html>
+`))
+
 func (s *Server) viewer(w http.ResponseWriter, r *http.Request) {
-	target := rustgisWeb + "?project=" + url.QueryEscape(baseURL(r)+"/viewer.rgis")
-	http.Redirect(w, r, target, http.StatusFound)
+	base := baseURL(r)
+	project := base + "/viewer.rgis"
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	viewerPage.Execute(w, struct {
+		Host    string
+		Project string
+		Open    string
+		Embed   string
+	}{
+		Host:    r.Host,
+		Project: project,
+		Open:    rustgisWeb + "?project=" + url.QueryEscape(project),
+		Embed:   rustgisWeb + "?embed&project=" + url.QueryEscape(project),
+	})
 }
 
 func (s *Server) viewerProject(w http.ResponseWriter, r *http.Request) {

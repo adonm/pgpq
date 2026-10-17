@@ -74,7 +74,7 @@ curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "
 | `/collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | MVT tile; accepts `q`, `filter` (CQL2 text and JSON) and `{property}=` filters, always evaluated against full detail; unfiltered tiles read the overview tiers at low zooms and honor `overview=` |
 | `/tileMatrixSets`, `/tileMatrixSets/WebMercatorQuad` | tile matrix set list and WebMercatorQuad definition |
 | `/api` | OpenAPI 3.0 definition (OGC content type) |
-| `/viewer` | 302 to the RustGIS web app opened on the generated `/viewer.rgis` project: one entry per catalog collection (vector tiles for every collection, streamed FlatGeobuf layers for those under 2M features), all hidden by default |
+| `/viewer` | minimal HTML host that embeds the RustGIS web app from its CDN (`web.rustgis.app/?embed&project=…`) on the generated `/viewer.rgis` project: one entry per catalog collection (vector tiles for every collection, streamed FlatGeobuf layers for those under 2M features), all hidden by default; a link opens the app on its own domain |
 | `/viewer.rgis` | RustGIS project JSON built from the catalog on every request (`format: 1`, tiles plus streamed layers, all `visible: false`) |
 | `/healthz` | liveness probe, always 200 |
 | `/readyz` | readiness probe: PostgreSQL ping plus migration check |
