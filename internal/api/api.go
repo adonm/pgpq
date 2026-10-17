@@ -33,6 +33,7 @@ type Server struct {
 	ReadOnly     bool
 	metrics      *metrics
 	virtuals     *virtualCache
+	chunks       *chunkByteCache
 	sweepMu      sync.Mutex
 	lastSweep    time.Time
 }
@@ -63,7 +64,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	}
 	s := &Server{
 		Store: cfg.Store, MaxChunks: 64, MaxBytes: cfg.MaxBytes, DefaultLimit: 50000,
-		ReadOnly: cfg.ReadOnly, metrics: newMetrics(), virtuals: newVirtualCache(),
+		ReadOnly: cfg.ReadOnly, metrics: newMetrics(), virtuals: newVirtualCache(), chunks: newChunkByteCache(),
 	}
 	s.register(api)
 	mux.HandleFunc("GET /{$}", s.landingPage)
