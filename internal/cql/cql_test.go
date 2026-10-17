@@ -31,11 +31,11 @@ func TestEqualityUsesContainment(t *testing.T) {
 	}
 	var args []any
 	sql := expr.SQL("props", &args)
-	want := "((props @> jsonb_build_object($1::text, $2::text) or (jsonb_typeof(props -> $1::text) = 'array' and props -> $1::text @> jsonb_build_array($2::text))) and ((props @> jsonb_build_object($3::text, $4::numeric) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($4::numeric))) or (props @> jsonb_build_object($5::text, $6::numeric) or (jsonb_typeof(props -> $5::text) = 'array' and props -> $5::text @> jsonb_build_array($6::numeric)))))"
+	want := "((props @> jsonb_build_object($1::text, $2::text) or (jsonb_typeof(props -> $1::text) = 'array' and props -> $1::text @> jsonb_build_array($2::text))) and (((props @> jsonb_build_object($3::text, $4::numeric) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($4::numeric))) or (props @> jsonb_build_object($3::text, $5::text) or (jsonb_typeof(props -> $3::text) = 'array' and props -> $3::text @> jsonb_build_array($5::text)))) or ((props @> jsonb_build_object($6::text, $7::numeric) or (jsonb_typeof(props -> $6::text) = 'array' and props -> $6::text @> jsonb_build_array($7::numeric))) or (props @> jsonb_build_object($6::text, $8::text) or (jsonb_typeof(props -> $6::text) = 'array' and props -> $6::text @> jsonb_build_array($8::text))))))"
 	if sql != want {
 		t.Fatalf("sql = %s, want %s", sql, want)
 	}
-	if len(args) != 6 {
+	if len(args) != 8 {
 		t.Fatalf("args = %v", args)
 	}
 }
@@ -94,12 +94,12 @@ func TestClauses(t *testing.T) {
 		contains string
 	}{
 		{`name like 'a%'`, 2, "like $2"},
-		{`i in (1, 2)`, 4, " or "},
+		{`i in (1, 2)`, 6, " or "},
 		{`i not between 1 and 5`, 3, "between $2 and $3"},
 		{`x is null`, 1, "is null or jsonb_typeof"},
 		{`x is not null`, 1, "not ("},
 		{`not (a = 'b' or c > 1)`, 4, "not ("},
-		{`flag = true`, 2, "jsonb_build_object"},
+		{`flag = true`, 3, "jsonb_build_object"},
 		{`i <> 3`, 2, "<>"},
 		{`i != 3`, 2, "<>"},
 	}

@@ -117,15 +117,24 @@ func (e *IsNull) SQL(col string, args *[]any) string {
 
 func equalityExpr(col string, args *[]any, prop string, value any) string {
 	key := placeholder(args, prop) + "::text"
-	val := placeholder(args, value)
+	clauses := make([]string, 0, 2)
 	switch value.(type) {
 	case bool:
-		val += "::boolean"
+		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::boolean"))
+		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::text"))
 	case int, int64, float64:
-		val += "::numeric"
+		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::numeric"))
+		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::text"))
 	default:
-		val += "::text"
+		clauses = append(clauses, equalityClause(col, key, placeholder(args, value)+"::text"))
 	}
+	if len(clauses) == 1 {
+		return clauses[0]
+	}
+	return "(" + strings.Join(clauses, " or ") + ")"
+}
+
+func equalityClause(col, key, val string) string {
 	return fmt.Sprintf("(%s @> jsonb_build_object(%s, %s) or (jsonb_typeof(%s -> %s) = 'array' and %s -> %s @> jsonb_build_array(%s)))",
 		col, key, val, col, key, col, key, val)
 }
