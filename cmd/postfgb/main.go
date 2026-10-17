@@ -1,28 +1,21 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 
-	"github.com/paulmach/orb"
-	orbgeojson "github.com/paulmach/orb/geojson"
-	"github.com/paulmach/orb/simplify"
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
 	"github.com/adonm/postfgb/internal/api"
 	"github.com/adonm/postfgb/internal/chunk"
-	"github.com/adonm/postfgb/internal/cover"
 	"github.com/adonm/postfgb/internal/store"
-	"github.com/adonm/postfgb/internal/tiles"
 )
 
 func main() {
@@ -33,8 +26,6 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		serve(os.Args[2:])
-	case "ingest":
-		ingest(os.Args[2:])
 	case "gen":
 		genFeatures(os.Args[2:])
 	default:
@@ -44,7 +35,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: postfgb <serve|ingest|gen> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: postfgb <serve|gen> [flags]")
 }
 
 func fatal(err error) {
@@ -56,7 +47,7 @@ func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
-	adminToken := fs.String("admin-token", os.Getenv("POSTFGB_ADMIN_TOKEN"), "bearer token for the manifest, chunk and export endpoints")
+	adminToken := fs.String("admin-token", os.Getenv("POSTFGB_ADMIN_TOKEN"), "bearer token for the manifest, chunk, export and ingest endpoints")
 	rustgisCLI := fs.String("rustgis-cli", os.Getenv("POSTFGB_RUSTGIS_CLI"), "rustgis-cli binary used by the export endpoint")
 	ogr2ogr := fs.String("ogr2ogr", os.Getenv("POSTFGB_OGR2OGR"), "ogr2ogr binary used by the export endpoint")
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
@@ -90,285 +81,42 @@ func serve(args []string) {
 	})))
 }
 
-type rawFeature struct {
-	Type       string                     `json:"type"`
-	Geometry   chunk.RawGeometry          `json:"geometry"`
-	Properties map[string]json.RawMessage `json:"properties"`
-}
-
-func ingest(args []string) {
-	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
-	collection := fs.String("collection", "", "collection name")
-	file := fs.String("file", "", "geojson FeatureCollection file")
-	chunkSize := fs.Int("chunk-size", 50000, "features per chunk")
-	overviews := fs.Bool("overviews", true, "build 10% and 1% overview tiers after ingest")
-	runMigrations := fs.Bool("migrate", true, "run migrations at startup")
-	fs.Parse(args)
-	if *collection == "" || *file == "" {
-		fs.Usage()
-		os.Exit(2)
-	}
-	ctx := context.Background()
-	st, err := store.Open(ctx, *dsn)
-	if err != nil {
-		fatal(err)
-	}
-	defer st.Close()
-	if *runMigrations {
-		if err := st.Migrate(ctx); err != nil {
-			fatal(err)
-		}
-	}
-	if err := st.EnsureCollection(ctx, *collection); err != nil {
-		fatal(err)
-	}
-	f, err := os.Open(*file)
-	if err != nil {
-		fatal(err)
-	}
-	defer f.Close()
-	dec := json.NewDecoder(bufio.NewReaderSize(f, 1<<20))
-	tok, err := dec.Token()
-	if err != nil {
-		fatal(err)
-	}
-	if tok != json.Delim('{') {
-		fatal(errors.New("expected a GeoJSON FeatureCollection object"))
-	}
-	batch := make([]chunk.InputFeature, 0, *chunkSize)
-	total, chunks := 0, 0
-	for dec.More() {
-		key, err := dec.Token()
-		if err != nil {
-			fatal(err)
-		}
-		if key != "features" {
-			var skip json.RawMessage
-			if err := dec.Decode(&skip); err != nil {
-				fatal(err)
-			}
-			continue
-		}
-		if _, err := dec.Token(); err != nil {
-			fatal(err)
-		}
-		for dec.More() {
-			var rf rawFeature
-			if err := dec.Decode(&rf); err != nil {
-				fatal(err)
-			}
-			batch = append(batch, chunk.InputFeature{Geometry: rf.Geometry, Properties: rf.Properties})
-			total++
-			if len(batch) == *chunkSize {
-				putChunk(ctx, st, *collection, batch, 0)
-				chunks++
-				slog.Info("chunk stored", "features", total, "chunks", chunks)
-				batch = batch[:0]
-			}
-		}
-		if _, err := dec.Token(); err != nil {
-			fatal(err)
-		}
-	}
-	if len(batch) > 0 {
-		putChunk(ctx, st, *collection, batch, 0)
-		chunks++
-	}
-	if *overviews {
-		buildOverviews(ctx, st, *collection)
-	}
-	if err := st.RefreshStats(ctx, *collection); err != nil {
-		fatal(err)
-	}
-	slog.Info("done", "features", total, "chunks", chunks)
-}
-
-func putChunk(ctx context.Context, st *store.Store, collection string, batch []chunk.InputFeature, tier int) {
-	data, err := chunk.Encode(collection, batch)
-	if err != nil {
-		fatal(err)
-	}
-	c, err := chunk.Open(data)
-	if err != nil {
-		fatal(err)
-	}
-	env, ok := c.Envelope()
-	if !ok {
-		fatal(errors.New("chunk missing envelope"))
-	}
-	payload := store.Payload{
-		Data:  data,
-		Count: c.Count(),
-		Tier:  tier,
-		MinX:  env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
-		Cover: cover.Chunk(env[0], env[1], env[2], env[3]),
-	}
-	sum := sha256.Sum256(data)
-	payload.Checksum = hex.EncodeToString(sum[:])
-	type column struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-	}
-	cols := c.Columns()
-	list := make([]column, len(cols))
-	for i, col := range cols {
-		list[i] = column{Name: col.Name, Type: col.Type.String()}
-	}
-	columns, err := json.Marshal(list)
-	if err != nil {
-		fatal(err)
-	}
-	payload.Columns = string(columns)
-	id, err := st.PutChunk(ctx, collection, payload)
-	if err != nil {
-		fatal(err)
-	}
-	if tier > 0 {
-		return
-	}
-	docs := make([]string, len(batch))
-	for i := range batch {
-		docs[i] = chunk.Text(batch[i].Properties)
-	}
-	if err := st.PutChunkText(ctx, collection, id, docs); err != nil {
-		fatal(err)
-	}
-	props := make([]string, len(batch))
-	for i := range batch {
-		body, err := json.Marshal(batch[i].Properties)
-		if err != nil {
-			fatal(err)
-		}
-		props[i] = string(body)
-	}
-	if err := st.PutChunkProps(ctx, collection, id, props); err != nil {
-		fatal(err)
-	}
-}
-
-func buildOverviews(ctx context.Context, st *store.Store, collection string) {
-	rows, err := st.Chunks(ctx, collection, nil, 1000000, 0)
-	if err != nil {
-		fatal(err)
-	}
-	if err := st.DeleteChunksAboveTier(ctx, collection, 0); err != nil {
-		fatal(err)
-	}
-	tiers := []struct {
-		tier    int
-		stride  int
-		tol     float64
-		minDiag float64
-	}{
-		{tier: 1, stride: 10, tol: 0.01, minDiag: 0.05},
-		{tier: 2, stride: 100, tol: 0.05, minDiag: 0.2},
-	}
-	totals := map[int]int{}
-	for _, row := range rows {
-		c, err := chunk.Open(row.Data)
-		if err != nil {
-			fatal(err)
-		}
-		feats, err := c.SearchAll()
-		if err != nil {
-			fatal(err)
-		}
-		for _, spec := range tiers {
-			batch := make([]chunk.InputFeature, 0, len(feats)/spec.stride+1)
-			for i, f := range feats {
-				if i%spec.stride != 0 {
-					continue
-				}
-				g := c.GeoJSON(f)
-				geom := tiles.ToOrb(g.Geometry)
-				if geom == nil {
-					continue
-				}
-				if _, ok := geom.(orb.Collection); ok {
-					continue
-				}
-				simp := geom
-				if !pointFamily(geom) {
-					simp = simplify.DouglasPeucker(spec.tol).Simplify(geom)
-					if simp == nil {
-						continue
-					}
-					bound := simp.Bound()
-					dx := bound.Max[0] - bound.Min[0]
-					dy := bound.Max[1] - bound.Min[1]
-					if dx*dx+dy*dy < spec.minDiag*spec.minDiag {
-						continue
-					}
-				}
-				body, err := json.Marshal(orbgeojson.NewGeometry(simp))
-				if err != nil {
-					continue
-				}
-				var raw chunk.RawGeometry
-				if err := json.Unmarshal(body, &raw); err != nil {
-					continue
-				}
-				props := make(map[string]json.RawMessage, len(g.Properties))
-				for name, value := range g.Properties {
-					encoded, err := json.Marshal(value)
-					if err != nil {
-						continue
-					}
-					props[name] = encoded
-				}
-				batch = append(batch, chunk.InputFeature{Geometry: raw, Properties: props})
-			}
-			if len(batch) == 0 {
-				continue
-			}
-			putChunk(ctx, st, collection, batch, spec.tier)
-			totals[spec.tier] += len(batch)
-		}
-	}
-	for tier, count := range totals {
-		slog.Info("overview tier stored", "collection", collection, "tier", tier, "features", count)
-	}
-}
-
-func pointFamily(g orb.Geometry) bool {
-	switch g.(type) {
-	case orb.Point, orb.MultiPoint:
-		return true
-	default:
-		return false
-	}
-}
-
 func genFeatures(args []string) {
 	fs := flag.NewFlagSet("gen", flag.ExitOnError)
 	n := fs.Int("n", 1000000, "feature count")
-	out := fs.String("out", "features.geojson", "output file")
+	out := fs.String("out", "features.fgb", "output flatgeobuf file")
 	minX := fs.Float64("minx", -180, "minimum longitude")
 	minY := fs.Float64("miny", -85, "minimum latitude")
 	maxX := fs.Float64("maxx", 180, "maximum longitude")
 	maxY := fs.Float64("maxy", 85, "maximum latitude")
 	seed := fs.Int64("seed", 42, "random seed")
 	fs.Parse(args)
+	rng := rand.New(rand.NewSource(*seed))
+	features := make([]chunk.InputFeature, *n)
+	for i := range features {
+		x := *minX + rng.Float64()*(*maxX-*minX)
+		y := *minY + rng.Float64()*(*maxY-*minY)
+		features[i] = chunk.InputFeature{
+			Geometry: chunk.RawGeometry{
+				Type:        "Point",
+				Coordinates: json.RawMessage(fmt.Sprintf("[%g,%g]", x, y)),
+			},
+			Properties: map[string]json.RawMessage{
+				"i":    json.RawMessage(strconv.Itoa(i)),
+				"name": json.RawMessage(strconv.Quote(fmt.Sprintf("feature-%d", i))),
+			},
+		}
+	}
 	f, err := os.Create(*out)
 	if err != nil {
 		fatal(err)
 	}
 	defer f.Close()
-	w := bufio.NewWriterSize(f, 1<<20)
-	defer w.Flush()
-	rng := rand.New(rand.NewSource(*seed))
-	w.WriteString(`{"type":"FeatureCollection","features":[`)
-	for i := 0; i < *n; i++ {
-		x := *minX + rng.Float64()*(*maxX-*minX)
-		y := *minY + rng.Float64()*(*maxY-*minY)
-		if i > 0 {
-			w.WriteByte(',')
-		}
-		fmt.Fprintf(w,
-			`{"type":"Feature","geometry":{"type":"Point","coordinates":[%g,%g]},"properties":{"i":%d,"name":"feature-%d"}}`,
-			x, y, i, i)
+	cols := []chunk.Column{
+		{Name: "i", Type: flattypes.ColumnTypeLong},
+		{Name: "name", Type: flattypes.ColumnTypeString},
 	}
-	w.WriteString(`]}`)
-	slog.Info("generated", "features", *n, "file", *out)
+	if _, err := chunk.WriteFile(f, "features", cols, features); err != nil {
+		fatal(err)
+	}
 }

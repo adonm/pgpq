@@ -31,7 +31,7 @@ Requires [mise](https://mise.jdx.dev) (installs Go, just and hk) and Docker.
 ```sh
 mise install
 hk install --mise   # pre-commit hooks: gofmt, go vet, go mod tidy, go test
-just demo           # PostgreSQL 18 via Docker, 1M features generated and ingested
+just demo           # PostgreSQL 18 via Docker, 1M features as FlatGeobuf, ingested over HTTP
 just serve          # http://localhost:8080
 ```
 
@@ -41,6 +41,7 @@ curl "localhost:8080/collections/bench/items?bbox=-10,45,10,55&limit=100"
 curl 'localhost:8080/collections/bench/items?q="feature-42"'
 curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
 curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i between 5 and 7 and name like 'feature-6%'"
+curl -X PUT --data-binary @features.fgb "localhost:8080/collections/demo/data"
 ```
 
 ## Endpoints
@@ -52,6 +53,8 @@ curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i betw
 | `/collections` | collections with extents |
 | `/collections/{id}` | collection detail |
 | `/collections/{id}/items?bbox=&limit=&offset=&q=&filter=&{property}=&f=` | features: bbox, fulltext, CQL2 (text and JSON) filters, paged (50,000 default); `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf |
+| `PUT /collections/{id}/data?sortable=` | create-or-replace the collection from a whole FlatGeobuf upload; synchronous, transactional, reprojected to WGS84; `sortable` declares up to 4 indexed columns (admin token) |
+| `DELETE /collections/{id}` | drop a collection and its partitions (admin token) |
 | `/collections/{id}/chunks/{chunkID}` | raw FlatGeobuf chunk |
 | `/collections/{id}/manifest` | chunk manifest: bboxes, counts, sizes, checksums, columns, chunk URLs |
 | `/collections/{id}/export?format=` | filtered features converted on the fly: fgb, geojson, gpkg, parquet, shp, kml, gpx (needs `--rustgis-cli` or `--ogr2ogr`; admin token when configured) |
@@ -91,7 +94,7 @@ ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/benc
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, ingest with 10%/1% overview tiers, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, OGC API Features with next-link paging (50,000 default), MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, on-demand filtered exports through rustgis-cli or ogr2ogr, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (virtual-GeoPackage storage, HTTP FlatGeobuf ingest, union views, client features).
+Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (create-or-replace PUT, transactional, reprojected to WGS84, declared sortable indexes) with 10%/1% overview tiers, S2 multirange chunk pruning, fulltext (`?q=`), property filters, CQL2-text and CQL2-JSON filters, OGC API Features with next-link paging (50,000 default), MVT tiles with server-side filters and overview tiers below full detail, tileset and tile matrix set metadata, chunk manifest with checksums, immutable chunk caching, gzip on JSON, on-demand filtered exports through rustgis-cli or ogr2ogr, capability probing, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s, tiles ~0.6s. Next: the build order in DESIGN.md (read correctness and overview overrides, union views, client features, ops).
 
 ## License
 

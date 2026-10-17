@@ -62,6 +62,8 @@ func NewWithConfig(cfg Config) http.Handler {
 	}
 	s.register(api)
 	mux.HandleFunc("GET /collections/{id}/items", s.items)
+	mux.HandleFunc("PUT /collections/{id}/data", s.ingestData)
+	mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
 	mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
 	mux.HandleFunc("GET /collections/{id}/export", s.export)
 	mux.HandleFunc("GET /collections/{id}/tiles/WebMercatorQuad/{z}/{x}/{y}", s.tile)
@@ -672,6 +674,13 @@ func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
+	if _, err := s.Store.Collection(ctx, id); errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "collection not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	z, errZ := strconv.ParseUint(r.PathValue("z"), 10, 32)
 	x, errX := strconv.ParseUint(r.PathValue("x"), 10, 32)
 	y, errY := strconv.ParseUint(strings.TrimSuffix(r.PathValue("y"), ".mvt"), 10, 32)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -43,34 +44,55 @@ var geometryTypes = map[string]flattypes.GeometryType{
 }
 
 func Encode(name string, features []InputFeature) ([]byte, error) {
+	return EncodeCols(name, inferColumns(features), features)
+}
+
+func EncodeCols(name string, cols []Column, features []InputFeature) ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := encode(&buf, name, cols, features, true); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func WriteFile(w io.Writer, name string, cols []Column, features []InputFeature) (int, error) {
+	return encode(w, name, cols, features, false)
+}
+
+func encode(dest io.Writer, name string, cols []Column, features []InputFeature, memory bool) (int, error) {
 	if len(features) == 0 {
-		return nil, errors.New("chunk: no features to encode")
+		return 0, errors.New("chunk: no features to encode")
 	}
 	parsed := make([]*parsedGeometry, len(features))
 	for i := range features {
 		g, err := parseGeometry(&features[i].Geometry)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		parsed[i] = g
 	}
-	cols := inferColumns(features)
 	headerBuilder := flatbuffers.NewBuilder(0)
 	header := writer.NewHeader(headerBuilder).
 		SetName(name).
-		SetGeometryType(geometryType(features))
+		SetGeometryType(geometryType(features)).
+		SetCrs(writer.NewCrs(headerBuilder).
+			SetOrg("EPSG").
+			SetCode(4326).
+			SetCodeString("EPSG:4326").
+			SetName("WGS 84"))
 	wcols := make([]*writer.Column, len(cols))
 	for i, col := range cols {
 		wcols[i] = writer.NewColumn(headerBuilder).SetName(col.Name).SetType(col.Type)
 	}
 	header.SetColumns(wcols)
 	gen := &generator{features: features, parsed: parsed, cols: cols}
-	w := writer.NewWriter(header, true, gen, nil, writer.WithMemory())
-	var buf bytes.Buffer
-	if _, err := w.Write(&buf); err != nil {
-		return nil, err
+	var w *writer.Writer
+	if memory {
+		w = writer.NewWriter(header, true, gen, nil, writer.WithMemory())
+	} else {
+		w = writer.NewWriter(header, true, gen, nil)
 	}
-	return buf.Bytes(), nil
+	return w.Write(dest)
 }
 
 type generator struct {

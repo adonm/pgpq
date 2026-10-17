@@ -28,7 +28,7 @@ Run `just` for the full list. The common ones:
 | `just ci` | gofmt check, vet, unit tests |
 | `just pg-up` / `just pg-down` | PostgreSQL 18 via docker compose |
 | `just gen` | generate 1M synthetic features into `bench/features.geojson` |
-| `just ingest` | chunk and load the generated file |
+| `just ingest` | upload `bench/features.fgb` to the running server over HTTP |
 | `just serve` | run the OGC API server on `:8080` |
 | `just image-tar` | build the container image with ko |
 | `just demo` | pg-up + gen + ingest |

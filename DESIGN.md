@@ -13,7 +13,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 ## Storage — one database, one virtual GeoPackage
 
 - `chunks`, `chunk_text` and `chunk_props` are LIST-partitioned by collection: every collection owns three physical partitions with their own heaps and indexes, which removes today's cross-collection GIN noise and scopes vacuum and drop.
-- Chunk ids stay globally unique (identity on the parent). Primary keys: `(collection, id)` and `(collection, chunk_id, feature_ord)`.
+- Chunk ids stay globally unique (identity on the parent). Primary keys: `(collection, id)` and `(collection, chunk_id, feature_ord)`. Sidecar integrity comes from the partition lifecycle, not foreign keys — partitioned FKs would block partition swaps.
 - All queries already carry `collection = $1`, so partition pruning turns access into per-collection index scans with unchanged SQL.
 - Each collection also gets a `layers.<name>` SQL view over its tier-0 chunks for database-side introspection, GeoPackage-style.
 - The `collections` catalog row carries per-collection stats (feature count, spatial and temporal extent, kind, members, declared sortable columns), maintained in the ingest transaction; the collection endpoints never scan chunk tables.
@@ -30,9 +30,9 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 - `PUT /collections/{id}/data` (admin bearer token) takes a whole-file FlatGeobuf body — not pre-chunked. Create-or-replace.
 - Synchronous within one transaction: readers always see the old collection or the new one. Failure or disconnect rolls back; loads are retried from scratch (accepted cost).
-- Input CRS: any CRS supported by the pure-Go projection layer is reprojected to WGS84 during ingest. Stored geometries are 2D (Z dropped).
+- Input CRS: any CRS supported by the pure-Go projection layer ([wroge/wgs84](https://github.com/wroge/wgs84)) is reprojected to WGS84 during ingest; anything else is rejected at upload time. Stored geometries are 2D (Z dropped), and chunks declare EPSG:4326.
 - The FGB header supplies the uniform schema. Features stream in packed-Hilbert order, so server-side chunking yields spatially coherent chunks.
-- Time column: first DateTime-typed column (overridable). Feature id preference: FGB feature id, then an id-like property, then the synthetic `chunkID-ord`.
+- Time column: first DateTime-typed column (overridable). Feature id preference: an id-like property (`id`, `fid`, `gid`, `ogc_fid`), then the synthetic `chunkID-ord`.
 - Sortable columns are declared on the PUT request and indexed during the load (btree expression indexes per partition).
 - Overview tiers (10%, 1%) are rebuilt inside the load transaction. `DELETE /collections/{id}` removes the collection.
 - The ingest CLI is removed; the development loop is `gen` (emits FlatGeobuf) plus curl against a local server.

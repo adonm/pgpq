@@ -9,6 +9,7 @@ require (
 	github.com/google/flatbuffers v25.12.19+incompatible
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/paulmach/orb v0.13.0
+	github.com/wroge/wgs84/v2 v2.0.0-alpha.20
 )
 
 require (

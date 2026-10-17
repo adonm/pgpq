@@ -56,17 +56,21 @@ func (c *Chunk) Envelope() ([4]float64, bool) {
 	return env, true
 }
 
-func (c *Chunk) Columns() []Column {
-	n := c.header.ColumnsLength()
+func HeaderColumns(header *flattypes.Header) []Column {
+	n := header.ColumnsLength()
 	cols := make([]Column, 0, n)
 	for i := 0; i < n; i++ {
 		var col flattypes.Column
-		if !c.header.Columns(&col, i) {
+		if !header.Columns(&col, i) {
 			break
 		}
 		cols = append(cols, Column{Name: string(col.Name()), Type: col.Type()})
 	}
 	return cols
+}
+
+func (c *Chunk) Columns() []Column {
+	return HeaderColumns(c.header)
 }
 
 func (c *Chunk) Search(minX, minY, maxX, maxY float64) ([]*flattypes.Feature, error) {
@@ -88,13 +92,17 @@ func (c *Chunk) SearchOptional(bbox *[4]float64) ([]*flattypes.Feature, error) {
 	return c.Search(bbox[0], bbox[1], bbox[2], bbox[3])
 }
 
-func (c *Chunk) GeoJSON(f *flattypes.Feature) *Feature {
+func GeoJSONFeature(header *flattypes.Header, f *flattypes.Feature) *Feature {
 	var raw flattypes.Geometry
 	return &Feature{
 		Type:       "Feature",
-		Geometry:   decodeGeometry(f.Geometry(&raw), c.header.GeometryType()),
-		Properties: decodeProperties(f.PropertiesBytes(), c.Columns()),
+		Geometry:   decodeGeometry(f.Geometry(&raw), header.GeometryType()),
+		Properties: decodeProperties(f.PropertiesBytes(), HeaderColumns(header)),
 	}
+}
+
+func (c *Chunk) GeoJSON(f *flattypes.Feature) *Feature {
+	return GeoJSONFeature(c.header, f)
 }
 
 func decodeGeometry(g *flattypes.Geometry, fallback flattypes.GeometryType) *Geometry {

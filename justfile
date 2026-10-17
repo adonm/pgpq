@@ -35,10 +35,10 @@ pg-down:
     docker compose down -v
 
 gen:
-    go run ./cmd/postfgb gen --n 1000000 --out bench/features.geojson
+    go run ./cmd/postfgb gen --n 1000000 --out bench/features.fgb
 
 ingest:
-    go run ./cmd/postfgb ingest --dsn "{{dsn}}" --collection bench --file bench/features.geojson
+    curl -sf -X PUT --data-binary @bench/features.fgb "{{url}}/collections/bench/data"
 
 serve:
     go run ./cmd/postfgb serve --dsn "{{dsn}}"
