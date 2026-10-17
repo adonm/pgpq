@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -48,26 +47,14 @@ func Encode(name string, features []InputFeature) ([]byte, error) {
 }
 
 func EncodeCols(name string, cols []Column, features []InputFeature) ([]byte, error) {
-	var buf bytes.Buffer
-	if _, err := encode(&buf, name, cols, features, true); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func WriteFile(w io.Writer, name string, cols []Column, features []InputFeature) (int, error) {
-	return encode(w, name, cols, features, false)
-}
-
-func encode(dest io.Writer, name string, cols []Column, features []InputFeature, memory bool) (int, error) {
 	if len(features) == 0 {
-		return 0, errors.New("chunk: no features to encode")
+		return nil, errors.New("chunk: no features to encode")
 	}
 	parsed := make([]*parsedGeometry, len(features))
 	for i := range features {
 		g, err := parseGeometry(&features[i].Geometry)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		parsed[i] = g
 	}
@@ -86,13 +73,12 @@ func encode(dest io.Writer, name string, cols []Column, features []InputFeature,
 	}
 	header.SetColumns(wcols)
 	gen := &generator{features: features, parsed: parsed, cols: cols}
-	var w *writer.Writer
-	if memory {
-		w = writer.NewWriter(header, true, gen, nil, writer.WithMemory())
-	} else {
-		w = writer.NewWriter(header, true, gen, nil)
+	w := writer.NewWriter(header, true, gen, nil, writer.WithMemory())
+	var buf bytes.Buffer
+	if _, err := w.Write(&buf); err != nil {
+		return nil, err
 	}
-	return w.Write(dest)
+	return buf.Bytes(), nil
 }
 
 type generator struct {

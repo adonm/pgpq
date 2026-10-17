@@ -27,11 +27,11 @@ Run `just` for the full list. The common ones:
 | --- | --- |
 | `just ci` | gofmt check, vet, unit tests |
 | `just pg-up` / `just pg-down` | PostgreSQL 18 via docker compose |
-| `just gen` | generate 1M synthetic features into `bench/features.geojson` |
-| `just ingest` | upload `bench/features.fgb` to the running server over HTTP |
+| `just fixtures` | load a small multi-layer OSM set (Layercake) for development |
+| `just layercake <layer> <bbox>` | stream any OSM Layercake GeoParquet layer into a collection over HTTP |
 | `just serve` | run the OGC API server on `:8080` |
 | `just image-tar` | build the container image with ko |
-| `just demo` | pg-up + gen + ingest |
+| `just demo` | pg-up + OSM fixture layers |
 | `just bench` | GDAL client benchmark against a running server |
 | `just layercake <layer> <bbox>` | stream an OSM Layercake GeoParquet layer into a collection over HTTP |
 
@@ -53,7 +53,7 @@ Run `just` for the full list. The common ones:
 
 ## Benchmark methodology
 
-`just gen` produces 1M point features; `just ingest` loads them as ~50k-feature chunks. The scaling claim to defend: as feature count grows, Postgres row count, chunk pruning cost, and query latency stay near constant. Report:
+`just layercake <layer> <bbox>` streams real OSM layers through the GDAL sidecar (whole layers by leaving the bbox out — settlements is 4.6M points). The scaling claim to defend: as feature count grows, Postgres row count, chunk pruning cost, and query latency stay near constant. Report:
 - features and chunks ingested,
 - OAPIF full-scan wall time from GDAL,
 - OAPIF `-spat` wall time,

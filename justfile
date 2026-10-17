@@ -34,11 +34,15 @@ pg-up:
 pg-down:
     docker compose down -v
 
-gen:
-    go run ./cmd/postfgb gen --n 1000000 --out bench/features.fgb
+fixtures:
+    just layercake settlements "7.40 43.72 7.44 43.76"
+    just layercake buildings "7.40 43.72 7.44 43.76"
+    just layercake highways "7.40 43.72 7.44 43.76"
+    just layercake parks "7.40 43.72 7.44 43.76"
+    just layercake waterways "7.40 43.72 7.44 43.76"
+    just layercake pois "7.40 43.72 7.44 43.76"
 
-ingest:
-    curl -sf -X PUT --data-binary @bench/features.fgb "{{url}}/collections/bench/data"
+demo: pg-up fixtures
 
 serve:
     go run ./cmd/postfgb serve --dsn "{{dsn}}"

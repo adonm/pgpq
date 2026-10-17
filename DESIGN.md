@@ -36,7 +36,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 - Time column: first DateTime-typed column (overridable). Feature id preference: an id-like property (`id`, `fid`, `gid`, `ogc_fid`), then the synthetic `chunkID-ord`.
 - Sortable columns are declared on the PUT request and indexed during the load (btree expression indexes per partition).
 - Overview tiers (10%, 1%) are rebuilt inside the load transaction. `DELETE /collections/{id}` removes the collection.
-- The ingest CLI is removed; the development loop is `gen` (emits FlatGeobuf) plus curl against a local server.
+- The ingest CLI is removed; fixtures come from Layercake GeoParquet piped through ogr2ogr (`just layercake`, `just fixtures`) or any FlatGeobuf via curl.
 
 ## Read path
 

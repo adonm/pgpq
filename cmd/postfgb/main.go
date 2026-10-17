@@ -2,22 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"net/http"
 	"os"
-	"sort"
-	"strconv"
-	"time"
-
-	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
-	"github.com/flatgeobuf/flatgeobuf/src/go/index"
 
 	"github.com/adonm/postfgb/internal/api"
-	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -29,8 +20,6 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		serve(os.Args[2:])
-	case "gen":
-		genFeatures(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -38,7 +27,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: postfgb <serve|gen> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: postfgb serve [flags]")
 }
 
 func fatal(err error) {
@@ -82,76 +71,4 @@ func serve(args []string) {
 		RustgisCLI: *rustgisCLI,
 		OGR2OGR:    *ogr2ogr,
 	})))
-}
-
-func genFeatures(args []string) {
-	fs := flag.NewFlagSet("gen", flag.ExitOnError)
-	n := fs.Int("n", 1000000, "feature count")
-	out := fs.String("out", "features.fgb", "output flatgeobuf file")
-	minX := fs.Float64("minx", -180, "minimum longitude")
-	minY := fs.Float64("miny", -85, "minimum latitude")
-	maxX := fs.Float64("maxx", 180, "maximum longitude")
-	maxY := fs.Float64("maxy", 85, "maximum latitude")
-	seed := fs.Int64("seed", 42, "random seed")
-	withTime := fs.Bool("time", false, "add a DateTime column spanning 2020-01-01 plus one second per feature")
-	fs.Parse(args)
-	rng := rand.New(rand.NewSource(*seed))
-	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	features := make([]chunk.InputFeature, *n)
-	keys := make([]uint32, *n)
-	for i := range features {
-		x := *minX + rng.Float64()*(*maxX-*minX)
-		y := *minY + rng.Float64()*(*maxY-*minY)
-		keys[i] = hilbertKey(x, y, *minX, *minY, *maxX, *maxY)
-		props := map[string]json.RawMessage{
-			"i":    json.RawMessage(strconv.Itoa(i)),
-			"name": json.RawMessage(strconv.Quote(fmt.Sprintf("feature-%d", i))),
-		}
-		if *withTime {
-			props["ts"] = json.RawMessage(strconv.Quote(base.Add(time.Duration(i) * time.Second).Format(time.RFC3339)))
-		}
-		features[i] = chunk.InputFeature{
-			Geometry: chunk.RawGeometry{
-				Type:        "Point",
-				Coordinates: json.RawMessage(fmt.Sprintf("[%g,%g]", x, y)),
-			},
-			Properties: props,
-		}
-	}
-	order := make([]int, len(features))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return keys[order[a]] < keys[order[b]] })
-	sorted := make([]chunk.InputFeature, len(features))
-	for i, j := range order {
-		sorted[i] = features[j]
-	}
-	f, err := os.Create(*out)
-	if err != nil {
-		fatal(err)
-	}
-	defer f.Close()
-	cols := []chunk.Column{
-		{Name: "i", Type: flattypes.ColumnTypeLong},
-		{Name: "name", Type: flattypes.ColumnTypeString},
-	}
-	if *withTime {
-		cols = append(cols, chunk.Column{Name: "ts", Type: flattypes.ColumnTypeDateTime})
-	}
-	if _, err := chunk.WriteFile(f, "features", cols, sorted); err != nil {
-		fatal(err)
-	}
-}
-
-func hilbertKey(x, y, minX, minY, maxX, maxY float64) uint32 {
-	const hilbertMax = 0xFFFF
-	var hx, hy uint32
-	if maxX > minX {
-		hx = uint32(float64(hilbertMax) * (x - minX) / (maxX - minX))
-	}
-	if maxY > minY {
-		hy = uint32(float64(hilbertMax) * (y - minY) / (maxY - minY))
-	}
-	return index.Hilbert(hx, hy)
 }
