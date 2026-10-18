@@ -120,22 +120,8 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	windowBytes := 0
 	var timeMin, timeMax *time.Time
 	jsonDecided := false
+	var flat flattening
 	flush := func() error {
-		if !jsonDecided {
-			decideJSONColumns(cols, batch)
-			rewriteJSONValues(cols, batch)
-			if opts.Flatten {
-				cols = flattenJSONColumns(cols, batch)
-			}
-			for _, name := range opts.Sortable {
-				if !hasColumn(cols, name) {
-					return invalid(fmt.Errorf("sortable column %q is not in the schema", name))
-				}
-			}
-			jsonDecided = true
-		} else {
-			rewriteJSONValues(cols, batch)
-		}
 		encoded, err := putChunk(ctx, ing, opts.Collection, cols, batch, 0)
 		if err != nil {
 			return err
@@ -147,6 +133,22 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	}
 	drain := func() error {
 		sortWindow(window)
+		if !jsonDecided {
+			decideJSONColumns(cols, window)
+			rewriteJSONValues(cols, window)
+			if opts.Flatten {
+				cols, flat = flattenJSONColumns(cols, window)
+			}
+			for _, name := range opts.Sortable {
+				if !hasColumn(cols, name) {
+					return invalid(fmt.Errorf("sortable column %q is not in the schema", name))
+				}
+			}
+			jsonDecided = true
+		} else {
+			rewriteJSONValues(cols, window)
+		}
+		flat.apply(window)
 		for i := range window {
 			batch = append(batch, window[i])
 			sizer.add(window[i])
@@ -281,7 +283,12 @@ type flattenStat struct {
 	kind  string
 }
 
-func flattenJSONColumns(cols []chunk.Column, features []chunk.InputFeature) []chunk.Column {
+type flattening struct {
+	parents []string
+	names   map[string]bool
+}
+
+func flattenJSONColumns(cols []chunk.Column, features []chunk.InputFeature) ([]chunk.Column, flattening) {
 	var parents []string
 	for _, col := range cols {
 		if col.Type == flattypes.ColumnTypeJson {
@@ -289,7 +296,7 @@ func flattenJSONColumns(cols []chunk.Column, features []chunk.InputFeature) []ch
 		}
 	}
 	if len(parents) == 0 {
-		return cols
+		return cols, flattening{}
 	}
 	stats := map[string]map[string]*flattenStat{}
 	seen := map[string]bool{}
@@ -366,15 +373,19 @@ func flattenJSONColumns(cols []chunk.Column, features []chunk.InputFeature) []ch
 		selected = selected[:maxFlattenColumns]
 	}
 	if len(selected) == 0 {
-		return cols
+		return cols, flattening{}
 	}
-	kinds := map[string]flattypes.ColumnType{}
+	names := make(map[string]bool, len(selected))
 	for _, item := range selected {
-		kinds[item.name] = flattenType(item.kind)
-		cols = append(cols, chunk.Column{Name: item.name, Type: kinds[item.name]})
+		names[item.name] = true
+		cols = append(cols, chunk.Column{Name: item.name, Type: flattenType(item.kind)})
 	}
+	return cols, flattening{parents: parents, names: names}
+}
+
+func (f flattening) apply(features []chunk.InputFeature) {
 	for i := range features {
-		for _, parent := range parents {
+		for _, parent := range f.parents {
 			raw, ok := features[i].Properties[parent]
 			if !ok {
 				continue
@@ -384,15 +395,12 @@ func flattenJSONColumns(cols []chunk.Column, features []chunk.InputFeature) []ch
 				continue
 			}
 			for key, value := range object {
-				name := flattenName(parent, key)
-				if _, ok := kinds[name]; !ok {
-					continue
+				if name := flattenName(parent, key); f.names[name] {
+					features[i].Properties[name] = value
 				}
-				features[i].Properties[name] = value
 			}
 		}
 	}
-	return cols
 }
 
 func jsonObject(raw json.RawMessage) (map[string]json.RawMessage, bool) {

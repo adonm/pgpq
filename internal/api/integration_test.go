@@ -797,6 +797,91 @@ func TestPostgresRecreatedNameServesCurrentBytes(t *testing.T) {
 	assertCurrentFile(t, h, fresh, "/collections/"+view+"/items.fgb", 10, staleTag)
 }
 
+func flattenedFGB(t *testing.T, count int) []byte {
+	t.Helper()
+	features := make([]chunk.InputFeature, 0, count)
+	for i := 0; i < count; i++ {
+		coords, err := json.Marshal([]float64{7.4 + float64(i%400)*0.0005, 43.72 + float64(i/400)*0.0005})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tags := fmt.Sprintf(`{"kind":"k%d","rank":%d,"ok":%t,"level":%d.5,"label":"lbl-%d","group":"g%d"}`, i%4, i%9, i%2 == 0, i%7, i, i%5)
+		features = append(features, chunk.InputFeature{
+			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords},
+			Properties: map[string]json.RawMessage{
+				"id":   json.RawMessage(strconv.Itoa(i)),
+				"tags": json.RawMessage(strconv.Quote(tags)),
+			},
+		})
+	}
+	body, err := chunk.Encode("itest", features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestPostgresFlattenedAcrossWindows(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name := "itest_flat_windows"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	h := New(st)
+	const count = 60000
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", flattenedFGB(t, count)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	if chunks := len(chunkStarts(t, st, name)); chunks < 4 {
+		t.Fatalf("want the upload in several chunks across sort windows, got %d", chunks)
+	}
+	var withKeys int
+	if err := st.Pool.QueryRow(ctx, `select count(*) from chunk_props where collection = $1 and props ? 'tags_kind'`, name).Scan(&withKeys); err != nil {
+		t.Fatal(err)
+	}
+	if withKeys != count {
+		t.Fatalf("chunk_props carry tags_kind for %d of %d features", withKeys, count)
+	}
+	rows, err := st.Pool.Query(ctx, `select data from chunks where collection = $1 and tier = 0 order by id`, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			t.Fatal(err)
+		}
+		c, err := chunk.Open(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		features, err := c.SearchAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range features {
+			if _, ok := c.GeoJSON(f).Properties["tags_kind"]; !ok {
+				t.Fatal("a chunk holds a feature without tags_kind")
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	late := call(h, "GET", fmt.Sprintf("/collections/%s/items/%d", name, count-1), "", nil)
+	if late.Code != 200 || !bytes.Contains(late.Body.Bytes(), []byte(`"tags_kind":"k3"`)) {
+		t.Fatalf("last feature = %d: %s", late.Code, late.Body.String())
+	}
+	matched := call(h, "GET", "/collections/"+name+"/items?limit=1&numberMatched=true&filter="+url.QueryEscape("tags_kind = 'k1'"), "", nil)
+	var counted struct {
+		NumberMatched *int64 `json:"numberMatched"`
+	}
+	if err := json.Unmarshal(matched.Body.Bytes(), &counted); err != nil || counted.NumberMatched == nil || *counted.NumberMatched != count/4 {
+		t.Fatalf("tags_kind = 'k1' matched %s, want %d", matched.Body.String(), count/4)
+	}
+}
+
 func extraColumnFGB(t *testing.T, count int) []byte {
 	t.Helper()
 	features := make([]chunk.InputFeature, 0, count)

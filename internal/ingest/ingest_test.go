@@ -87,7 +87,8 @@ func TestFlattenJSONColumns(t *testing.T) {
 		{Properties: map[string]json.RawMessage{"names": json.RawMessage(`{"en":"Lyon","pop":515695,"capital":false}`)}},
 		{Properties: map[string]json.RawMessage{"names": json.RawMessage(`{"en":"Nice"}`)}},
 	}
-	out := flattenJSONColumns(cols, features)
+	out, flat := flattenJSONColumns(cols, features)
+	flat.apply(features)
 	want := map[string]flattypes.ColumnType{"names_en": flattypes.ColumnTypeString, "names_pop": flattypes.ColumnTypeLong}
 	if len(out) != len(cols)+len(want) {
 		t.Fatalf("columns = %d, want %d", len(out), len(cols)+len(want))
@@ -112,5 +113,10 @@ func TestFlattenJSONColumns(t *testing.T) {
 	}
 	if _, ok := features[0].Properties["names_fr"]; ok {
 		t.Fatal("a key below the support threshold should not be flattened")
+	}
+	later := []chunk.InputFeature{{Properties: map[string]json.RawMessage{"names": json.RawMessage(`{"en":"Metz","pop":119000}`)}}}
+	flat.apply(later)
+	if got := string(later[0].Properties["names_pop"]); got != "119000" {
+		t.Fatalf("a later window names_pop = %s, want 119000", got)
 	}
 }
