@@ -1,13 +1,108 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/store"
 )
+
+type collectSink struct {
+	hits  []hit
+	limit int
+}
+
+func (c *collectSink) add(h hit) error {
+	c.hits = append(c.hits, h)
+	return nil
+}
+
+func (c *collectSink) remaining() int {
+	return c.limit - len(c.hits)
+}
+
+func TestSkipChunks(t *testing.T) {
+	metas := []store.ChunkMeta{{ID: 1, FeatureCount: 100}, {ID: 2, FeatureCount: 50}, {ID: 3, FeatureCount: 10}}
+	cases := []struct {
+		offset int
+		ids    []int64
+		starts []int
+		rest   int
+	}{
+		{0, []int64{1, 2, 3}, []int{0, 0, 0}, 0},
+		{100, []int64{2, 3}, []int{0, 0}, 0},
+		{110, []int64{2, 3}, []int{10, 0}, 0},
+		{120, []int64{2, 3}, []int{20, 0}, 0},
+		{200, nil, nil, 40},
+	}
+	for _, tc := range cases {
+		read, starts, rest := skipChunks(metas, tc.offset)
+		var ids []int64
+		for _, meta := range read {
+			ids = append(ids, meta.ID)
+		}
+		if !slices.Equal(ids, tc.ids) || !slices.Equal(starts, tc.starts) || rest != tc.rest {
+			t.Fatalf("offset %d: chunks %v starts %v rest %d, want %v %v %d", tc.offset, ids, starts, rest, tc.ids, tc.starts, tc.rest)
+		}
+	}
+}
+
+func TestEmitSkipsOnlyExactMatches(t *testing.T) {
+	var features []chunk.InputFeature
+	for i := 0; i < 10; i++ {
+		coords, err := json.Marshal([]float64{float64(i), 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		features = append(features, chunk.InputFeature{Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords}})
+	}
+	body, err := chunk.Encode("unit", features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := chunk.FromRaw(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := c.SearchAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := &[4]float64{2.5, -1, 7.5, 1}
+	cases := []struct {
+		bbox   *[4]float64
+		offset int
+		limit  int
+		want   []string
+		rest   int
+	}{
+		{inside, 0, 10, []string{"9-3", "9-4", "9-5", "9-6", "9-7"}, 0},
+		{inside, 2, 3, []string{"9-5", "9-6", "9-7"}, 0},
+		{inside, 5, 3, nil, 0},
+		{inside, 7, 3, nil, 2},
+		{nil, 3, 2, []string{"9-3", "9-4"}, 0},
+	}
+	for _, tc := range cases {
+		sink := &collectSink{limit: tc.limit}
+		rest, err := emit(store.CollectionInfo{Name: "unit"}, tc.bbox, 9, c, all, ordinals(0, len(all)), tc.offset, sink)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, h := range sink.hits {
+			got = append(got, fmt.Sprint(h.geo.ID))
+		}
+		if !slices.Equal(got, tc.want) || rest != tc.rest {
+			t.Fatalf("offset %d limit %d: got %v rest %d, want %v rest %d", tc.offset, tc.limit, got, rest, tc.want, tc.rest)
+		}
+	}
+}
 
 func TestSplitBatches(t *testing.T) {
 	ids := []int64{1, 2, 3, 4, 5}

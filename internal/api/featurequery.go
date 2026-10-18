@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -209,11 +210,11 @@ func (s *Server) walkFeatures(ctx context.Context, info store.CollectionInfo, q 
 			continue
 		}
 		if filter == nil {
-			skipped, err := s.walkChunks(ctx, target, q, tier, offset, out)
+			remaining, err := s.walkChunks(ctx, target, q, tier, offset, out)
 			if err != nil {
 				return err
 			}
-			offset -= skipped
+			offset = remaining
 			continue
 		}
 		skip := 0
@@ -233,52 +234,70 @@ func (s *Server) walkFeatures(ctx context.Context, info store.CollectionInfo, q 
 }
 
 func (s *Server) walkChunks(ctx context.Context, target store.CollectionInfo, q featureQuery, tier, offset int, out sink) (int, error) {
-	skipped, after := 0, int64(0)
+	after := int64(0)
 	for out.remaining() > 0 {
 		metas, err := s.Store.ChunkMetas(ctx, target.Name, q.bbox, s.MaxChunks, tier, after)
 		if err != nil {
-			return skipped, err
+			return offset, err
 		}
 		if len(metas) == 0 && tier > 0 && after == 0 {
 			tier = 0
 			continue
 		}
 		if len(metas) == 0 {
-			return skipped, nil
+			return offset, nil
 		}
-		metas, trimmed := budgetMetas(metas, s.MaxBytes)
-		var fetch []store.ChunkMeta
-		var ids []int64
-		for _, meta := range metas {
-			if q.bbox == nil && skipped+meta.FeatureCount <= offset {
-				skipped += meta.FeatureCount
-				continue
-			}
-			fetch = append(fetch, meta)
-			ids = append(ids, meta.ID)
+		window, trimmed := budgetMetas(metas, s.MaxBytes)
+		read, starts := window, make([]int, len(window))
+		if q.bbox == nil {
+			read, starts, offset = skipChunks(window, offset)
+		}
+		ids := make([]int64, len(read))
+		for j, meta := range read {
+			ids[j] = meta.ID
 		}
 		rows := s.fetchRows(ctx, target.Name, ids)
-		for j, meta := range fetch {
+		for j, meta := range read {
 			if out.remaining() == 0 {
-				return skipped, nil
+				return offset, nil
 			}
 			c, features, err := s.openFeatures(ctx, target, meta.ID, rows[j])
 			if err != nil {
 				slog.Error("chunk read failed", "chunk", meta.ID, "error", err)
 				continue
 			}
-			from := min(len(features), max(offset-skipped, 0))
-			skipped += from
-			if err := emit(target, q.bbox, meta.ID, c, features, func(i int) bool { return i >= from }, out); err != nil {
-				return skipped, err
+			if offset, err = emit(target, q.bbox, meta.ID, c, features, ordinals(starts[j], len(features)), offset, out); err != nil {
+				return offset, err
 			}
 		}
-		if len(metas) < s.MaxChunks && !trimmed {
-			return skipped, nil
+		if len(window) < s.MaxChunks && !trimmed {
+			return offset, nil
 		}
-		after = metas[len(metas)-1].ID
+		after = window[len(window)-1].ID
 	}
-	return skipped, nil
+	return offset, nil
+}
+
+func skipChunks(metas []store.ChunkMeta, offset int) ([]store.ChunkMeta, []int, int) {
+	var read []store.ChunkMeta
+	var starts []int
+	for _, meta := range metas {
+		start := min(offset, meta.FeatureCount)
+		offset -= start
+		if start < meta.FeatureCount {
+			read = append(read, meta)
+			starts = append(starts, start)
+		}
+	}
+	return read, starts, offset
+}
+
+func ordinals(start, count int) []int {
+	ords := make([]int, 0, max(count-start, 0))
+	for i := min(start, count); i < count; i++ {
+		ords = append(ords, i)
+	}
+	return ords
 }
 
 func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q featureQuery, filter cql.Expr, skip int, out sink) error {
@@ -286,16 +305,13 @@ func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q
 	if err != nil {
 		return err
 	}
-	picked := map[int64]map[int]bool{}
 	var ids []int64
+	picked := map[int64][]int{}
 	for _, m := range matches {
-		set := picked[m.ChunkID]
-		if set == nil {
-			set = map[int]bool{}
-			picked[m.ChunkID] = set
+		if _, seen := picked[m.ChunkID]; !seen {
 			ids = append(ids, m.ChunkID)
 		}
-		set[m.Ord] = true
+		picked[m.ChunkID] = append(picked[m.ChunkID], m.Ord)
 	}
 	for _, batch := range s.chunkBatches(ctx, target.Name, ids) {
 		rows := s.fetchRows(ctx, target.Name, batch)
@@ -303,13 +319,14 @@ func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q
 			if row.Data == nil {
 				continue
 			}
-			set := picked[batch[j]]
 			c, features, err := s.openFeatures(ctx, target, batch[j], row)
 			if err != nil {
 				slog.Error("chunk read failed", "chunk", batch[j], "error", err)
 				continue
 			}
-			if err := emit(target, q.bbox, batch[j], c, features, func(i int) bool { return set[i] }, out); err != nil {
+			ords := picked[batch[j]]
+			n, _ := slices.BinarySearch(ords, len(features))
+			if _, err := emit(target, q.bbox, batch[j], c, features, ords[:n], 0, out); err != nil {
 				return err
 			}
 			if out.remaining() == 0 {
@@ -320,33 +337,31 @@ func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q
 	return nil
 }
 
-func emit(target store.CollectionInfo, bbox *[4]float64, chunkID int64, c *chunk.Chunk, features []*flattypes.Feature, keep func(int) bool, out sink) error {
-	var ords []int
-	for i := range features {
-		if keep(i) {
-			ords = append(ords, i)
-		}
-	}
-	for start := 0; start < len(ords); {
+func emit(target store.CollectionInfo, bbox *[4]float64, chunkID int64, c *chunk.Chunk, features []*flattypes.Feature, ords []int, offset int, out sink) (int, error) {
+	for start := 0; start < len(ords) && out.remaining() > 0; {
 		end := min(start+max(out.remaining(), minDecodeWindow), len(ords))
 		window := ords[start:end]
 		geos := decodeAt(c, features, window)
 		for j, ord := range window {
 			if out.remaining() == 0 {
-				return nil
+				break
 			}
 			g := geos[j]
 			if !inBounds(g, bbox) {
 				continue
 			}
+			if offset > 0 {
+				offset--
+				continue
+			}
 			g.ID = featureID(target, chunkID, ord, g.Properties)
 			if err := out.add(hit{chunk: c, raw: features[ord], geo: g}); err != nil {
-				return err
+				return offset, err
 			}
 		}
 		start = end
 	}
-	return nil
+	return offset, nil
 }
 
 func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, q featureQuery) (int64, bool, error) {

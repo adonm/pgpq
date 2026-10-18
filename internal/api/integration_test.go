@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/adonm/postfgb/internal/chunk"
@@ -35,6 +37,10 @@ func integrationStore(t *testing.T) *store.Store {
 }
 
 func fixtureFGB(t *testing.T, count int) []byte {
+	return sizedFixtureFGB(t, count, 0)
+}
+
+func sizedFixtureFGB(t *testing.T, count, pad int) []byte {
 	t.Helper()
 	features := make([]chunk.InputFeature, 0, count)
 	for i := 0; i < count; i++ {
@@ -46,7 +52,7 @@ func fixtureFGB(t *testing.T, count int) []byte {
 			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords},
 			Properties: map[string]json.RawMessage{
 				"id":   json.RawMessage(strconv.Itoa(i)),
-				"name": json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("feature-%d", i))),
+				"name": json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("feature-%d%s", i, strings.Repeat("x", pad)))),
 			},
 		})
 	}
@@ -281,5 +287,123 @@ func TestPostgresViewPaging(t *testing.T) {
 	slices.Sort(fromFGB)
 	if len(fromJSON) != 3 || !slices.Equal(fromJSON, fromFGB) {
 		t.Fatalf("view offset 6 page = %v, export = %v", fromJSON, fromFGB)
+	}
+}
+
+func chunkStarts(t *testing.T, st *store.Store, name string) []int {
+	t.Helper()
+	rows, err := st.Pool.Query(context.Background(),
+		`select feature_count from chunks where collection = $1 and tier = 0 order by id`, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var starts []int
+	at := 0
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		starts = append(starts, at)
+		at += n
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return starts
+}
+
+func walkIDs(t *testing.T, s *Server, info store.CollectionInfo, q featureQuery, limit int) []string {
+	t.Helper()
+	out := &collectSink{limit: limit}
+	if err := s.walkFeatures(context.Background(), info, q, out); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(out.hits))
+	for _, h := range out.hits {
+		ids = append(ids, fmt.Sprint(h.geo.ID))
+	}
+	return ids
+}
+
+func TestPostgresChunkOffsets(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name := "itest_offsets"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	h := New(st)
+	const count, page = 25000, 50
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", sizedFixtureFGB(t, count, 200)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	info, err := st.Collection(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := chunkStarts(t, st, name)
+	if len(starts) < 3 {
+		t.Fatalf("want several chunks, got %d", len(starts))
+	}
+	full := walkIDs(t, &Server{Store: st, MaxChunks: 64, MaxBytes: 32 << 20, virtuals: newVirtualCache(), chunks: newChunkByteCache()}, info, featureQuery{}, count)
+	if len(full) != count {
+		t.Fatalf("full walk = %d features, want %d", len(full), count)
+	}
+	rng := rand.New(rand.NewPCG(9, 9))
+	var offsets []int
+	for _, start := range starts[1:] {
+		offsets = append(offsets, start-1, start, start+1)
+	}
+	for range 40 {
+		offsets = append(offsets, rng.IntN(count-page))
+	}
+	box := [4]float64{7.4, 43.72, 7.405, 45}
+	var inside []string
+	for _, id := range full {
+		i, _ := strconv.Atoi(id)
+		x, y := 7.4+float64(i%10)*0.002, 43.72+float64(i/10)*0.002
+		if x >= box[0] && x <= box[2] && y >= box[1] && y <= box[3] {
+			inside = append(inside, id)
+		}
+	}
+	bboxOffsets := make([]int, 20)
+	for i := range bboxOffsets {
+		bboxOffsets[i] = rng.IntN(len(inside) - page)
+	}
+	for _, batch := range []struct{ chunks, bytes int }{{1, 32 << 20}, {64, 32 << 20}, {64, 1 << 20}} {
+		s := &Server{Store: st, MaxChunks: batch.chunks, MaxBytes: batch.bytes, virtuals: newVirtualCache(), chunks: newChunkByteCache()}
+		for _, k := range offsets {
+			got := walkIDs(t, s, info, featureQuery{offset: k}, page)
+			if want := full[k:min(k+page, count)]; !slices.Equal(got, want) {
+				t.Fatalf("batch %+v offset %d: got %v, want %v", batch, k, got, want)
+			}
+		}
+		if got := walkIDs(t, s, info, featureQuery{bbox: &box}, count); !slices.Equal(got, inside) {
+			t.Fatalf("batch %+v bbox walk = %d features, want %d", batch, len(got), len(inside))
+		}
+		for _, k := range bboxOffsets {
+			got := walkIDs(t, s, info, featureQuery{bbox: &box, offset: k}, page)
+			if want := inside[k : k+page]; !slices.Equal(got, want) {
+				t.Fatalf("batch %+v bbox offset %d: got %v, want %v", batch, k, got, want)
+			}
+		}
+	}
+
+	w := call(h, "GET", fmt.Sprintf("/collections/%s/items?limit=%d&offset=%d", name, page, starts[1]-1), "", nil)
+	var doc struct {
+		Features []struct {
+			ID any `json:"id"`
+		} `json:"features"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil || w.Code != 200 {
+		t.Fatalf("items = %d: %s", w.Code, w.Body.String())
+	}
+	var got []string
+	for _, f := range doc.Features {
+		got = append(got, fmt.Sprint(f.ID))
+	}
+	if want := full[starts[1]-1 : starts[1]-1+page]; !slices.Equal(got, want) {
+		t.Fatalf("handler offset %d: got %v, want %v", starts[1]-1, got, want)
 	}
 }
