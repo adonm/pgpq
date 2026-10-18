@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/adonm/postfgb/internal/cover"
 	"github.com/adonm/postfgb/internal/cql"
 )
 
@@ -18,11 +17,11 @@ func bboxPredicate(prefix string, bbox *[4]float64, next int) (string, []any) {
 	if bbox == nil {
 		return "", nil
 	}
-	minx, miny, maxx, maxy := next+1, next+2, next+3, next+4
+	minx, miny, maxx, maxy := next, next+1, next+2, next+3
 	fragment := fmt.Sprintf(
-		` and %scover && $%d::int8multirange and not (%smaxx < $%d or %sminx > $%d or %smaxy < $%d or %sminy > $%d)`,
-		prefix, next, prefix, minx, prefix, maxx, prefix, miny, prefix, maxy)
-	return fragment, []any{cover.Query(bbox[0], bbox[1], bbox[2], bbox[3]), bbox[0], bbox[1], bbox[2], bbox[3]}
+		` and box(point(%[1]sminx, %[1]sminy), point(%[1]smaxx, %[1]smaxy)) && box(point($%[2]d::float8, $%[3]d::float8), point($%[4]d::float8, $%[5]d::float8)) and not (%[1]smaxx < $%[2]d or %[1]sminx > $%[4]d or %[1]smaxy < $%[3]d or %[1]sminy > $%[5]d)`,
+		prefix, minx, miny, maxx, maxy)
+	return fragment, []any{bbox[0], bbox[1], bbox[2], bbox[3]}
 }
 
 func chunks(ctx context.Context, conn db, table, collection string, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {

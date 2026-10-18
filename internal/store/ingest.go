@@ -56,7 +56,6 @@ func (i *Ingest) createStaging(ctx context.Context) error {
 		miny double precision not null,
 		maxx double precision not null,
 		maxy double precision not null,
-		cover int8multirange not null,
 		checksum text,
 		columns jsonb not null default '[]',
 		data bytea not null,
@@ -79,7 +78,7 @@ func (i *Ingest) createStaging(ctx context.Context) error {
 
 func (i *Ingest) createIndexes(ctx context.Context) error {
 	chunks := pgx.Identifier{i.staging["chunks"]}.Sanitize()
-	if _, err := i.tx.Exec(ctx, `create index on `+chunks+` using gist (cover)`); err != nil {
+	if _, err := i.tx.Exec(ctx, `create index on `+chunks+` using gist (box(point(minx, miny), point(maxx, maxy)))`); err != nil {
 		return err
 	}
 	if _, err := i.tx.Exec(ctx, `create index on `+chunks+` (tier, id)`); err != nil {
@@ -327,11 +326,11 @@ func nullable(s string) any {
 func putChunk(ctx context.Context, conn db, table, collection string, payload Payload) (int64, error) {
 	var id int64
 	err := conn.QueryRow(ctx, `
-		insert into `+table+` (id, collection, tier, feature_count, size_bytes, feature_bytes, minx, miny, maxx, maxy, cover, checksum, columns, data)
-		values (nextval(pg_get_serial_sequence('chunks', 'id')), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::int8multirange, $11, $12::jsonb, $13)
+		insert into `+table+` (id, collection, tier, feature_count, size_bytes, feature_bytes, minx, miny, maxx, maxy, checksum, columns, data)
+		values (nextval(pg_get_serial_sequence('chunks', 'id')), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
 		returning id`,
 		collection, payload.Tier, payload.Count, payload.Size, payload.FeatureBytes,
-		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY, payload.Cover,
+		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY,
 		payload.Checksum, payload.Columns, payload.Data).Scan(&id)
 	return id, err
 }

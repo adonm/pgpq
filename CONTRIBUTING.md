@@ -39,7 +39,7 @@ Run `just` for the full list. The common ones:
 
 - No comments. Names and small functions carry the meaning.
 - Smallest reasonable implementation; stdlib first, one dependency must justify itself.
-- The core path uses no PostgreSQL extensions: chunk pruning is an S2 cell `int8multirange` overlap plus scalar float comparisons. Never push geometry parsing or spatial library functions into the query path — real spatial work happens in Go over FlatGeobuf chunks. Optional accelerators (`pg_roaringbitmap`, `hll`, `pg_trgm`, ...) must be discovered at runtime via `pg_available_extensions` (see `store.Capabilities`) and never required.
+- The core path uses no PostgreSQL extensions: chunk pruning is a bounding-box overlap on a GiST index plus scalar float comparisons. Never push geometry parsing or spatial library functions into the query path — real spatial work happens in Go over FlatGeobuf chunks. Optional accelerators (`pg_roaringbitmap`, `hll`, `pg_trgm`, ...) must be discovered at runtime via `pg_available_extensions` (see `store.Capabilities`) and never required.
 - Chunk sizing, property encoding, and the FlatGeobuf wire format must stay interoperable with GDAL, QGIS, and the reference implementations. When in doubt, verify with `ogrinfo`.
 
 ## Testing

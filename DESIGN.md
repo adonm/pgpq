@@ -8,7 +8,7 @@ The smallest Go package that serves OGC API Features over spatial records held i
 
 ## Architecture
 
-Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and stored as bytea. Chunk bounds are scalar floats plus an S2 covering stored as int8multirange with a GiST index; the database compares ranges and floats and never parses geometry. Filtering lives in an index sidecar: jsonb/GIN for attributes. huma serves the metadata endpoints; items and the range-readable file stream from handlers. FlatGeobuf chunks are also served as one range-readable file per collection, so clients read windows in place.
+Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and stored as bytea. Chunk bounds are scalar floats with a GiST index on their bounding box; the database compares the boxes built from those floats and never parses geometry. Filtering lives in an index sidecar: jsonb/GIN for attributes. huma serves the metadata endpoints; items and the range-readable file stream from handlers. FlatGeobuf chunks are also served as one range-readable file per collection, so clients read windows in place.
 
 ## Storage — one database, one virtual GeoPackage
 
@@ -87,6 +87,7 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 - cgo PROJ; the rustgis-cli export engine; server-side format conversion (clients convert FlatGeobuf locally); runtime extension accelerators (probing stays as a future hook).
 - Server-side auth (bearer tokens, API keys, OAuth): the app ships no auth; production terminates auth in an adjacent layer and picks the worker mode (writable/readonly) that matches the route it is deployed on.
 - Removed: the raw chunk and manifest endpoints (`/items.fgb` serves chunk-level reads in place), the `/stats` catalog totals (not an OGC or STAC surface), fulltext (`q`: no conformance class claims it, and its `chunk_text` tsvector sidecar duplicated every text attribute at ingest), `sortby` (no conformance class claims it; declared sortable columns still serve range filters), and CRS negotiation beyond CRS84 (ingest still reprojects uploads). `sortby` and `q`, and any `crs` or `bbox-crs` other than CRS84, answer 400.
+- Removed: S2 coverings (bounding-box pruning is enough because features are tested exactly after pruning).
 
 ## Build order
 

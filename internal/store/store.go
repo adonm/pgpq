@@ -53,7 +53,6 @@ type Payload struct {
 	Tier         int
 	MinX, MinY   float64
 	MaxX, MaxY   float64
-	Cover        string
 	Checksum     string
 	Columns      string
 	FeatureBytes int

@@ -22,7 +22,6 @@ import (
 	"github.com/wroge/wgs84/v2"
 
 	"github.com/adonm/postfgb/internal/chunk"
-	"github.com/adonm/postfgb/internal/cover"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/geo"
@@ -524,7 +523,6 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 	payload := store.Payload{
 		Data: chunk.Compress(data), Size: len(data), Count: c.Count(), Tier: tier,
 		MinX: env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
-		Cover:        cover.Chunk(env[0], env[1], env[2], env[3]),
 		Checksum:     hex.EncodeToString(sum[:]),
 		Columns:      string(columns),
 		FeatureBytes: featureBytes,

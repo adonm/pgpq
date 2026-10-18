@@ -6,7 +6,6 @@ require (
 	github.com/ctessum/polyclip-go v1.1.0
 	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/flatgeobuf/flatgeobuf/src/go v0.0.0-20261010111732-d8b6d6afcfe2
-	github.com/golang/geo v0.0.0-20260928092222-7d12f68cfadb
 	github.com/google/flatbuffers v25.12.19+incompatible
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/klauspost/compress v1.20.3
@@ -18,6 +17,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/gonum/floats v0.0.0-20181209220543-c233463c7e82 // indirect
 	github.com/gonum/internal v0.0.0-20181124074243-f884aa714029 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
