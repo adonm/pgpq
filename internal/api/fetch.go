@@ -17,7 +17,7 @@ import (
 
 const (
 	chunkFetchWorkers = 8
-	decodeWindow      = 256
+	minDecodeWindow   = 256
 )
 
 func (s *Server) fetchRows(ctx context.Context, collection string, ids []int64) []store.ChunkRow {

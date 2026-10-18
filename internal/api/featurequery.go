@@ -327,8 +327,9 @@ func emit(target store.CollectionInfo, bbox *[4]float64, chunkID int64, c *chunk
 			ords = append(ords, i)
 		}
 	}
-	for start := 0; start < len(ords); start += decodeWindow {
-		window := ords[start:min(start+decodeWindow, len(ords))]
+	for start := 0; start < len(ords); {
+		end := min(start+max(out.remaining(), minDecodeWindow), len(ords))
+		window := ords[start:end]
 		geos := decodeAt(c, features, window)
 		for j, ord := range window {
 			if out.remaining() == 0 {
@@ -343,6 +344,7 @@ func emit(target store.CollectionInfo, bbox *[4]float64, chunkID int64, c *chunk
 				return err
 			}
 		}
+		start = end
 	}
 	return nil
 }
