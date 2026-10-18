@@ -196,7 +196,11 @@ func Index(chunks [][]Leaf, lengths []int64, nodeSize uint16) ([]byte, [4]float6
 	return buf.Bytes(), [4]float64{slice[0], slice[1], slice[2], slice[3]}, true
 }
 
-func Header(name string, blob []byte, count uint64, envelope [4]float64) ([]byte, bool) {
+func GeometryOf(blob []byte) flattypes.GeometryType {
+	return flattypes.GetSizePrefixedRootAsHeader(blob, 0).GeometryType()
+}
+
+func Header(name string, blob []byte, count uint64, envelope [4]float64, geometry flattypes.GeometryType) ([]byte, bool) {
 	src := flattypes.GetSizePrefixedRootAsHeader(blob, 0)
 	if src == nil {
 		return nil, false
@@ -205,7 +209,7 @@ func Header(name string, blob []byte, count uint64, envelope [4]float64) ([]byte
 	header := writer.NewHeader(builder).
 		SetName(name).
 		SetEnvelope([]float64{envelope[0], envelope[1], envelope[2], envelope[3]}).
-		SetGeometryType(src.GeometryType()).
+		SetGeometryType(geometry).
 		SetHasZ(src.HasZ()).
 		SetHasM(src.HasM()).
 		SetFeaturesCount(count).

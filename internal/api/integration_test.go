@@ -1015,6 +1015,98 @@ func TestPostgresEqualityFollowsColumnCast(t *testing.T) {
 	matched("c_double=Inf", 0)
 }
 
+func polygonFixtureFGB(t *testing.T, count int) []byte {
+	t.Helper()
+	features := make([]chunk.InputFeature, 0, count)
+	for i := 0; i < count; i++ {
+		x, y := 7.4+float64(i)*0.001, 43.74
+		coords, err := json.Marshal([][][]float64{{{x, y}, {x + 0.0005, y}, {x + 0.0005, y + 0.0005}, {x, y}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		features = append(features, chunk.InputFeature{
+			Geometry: chunk.RawGeometry{Type: "Polygon", Coordinates: coords},
+			Properties: map[string]json.RawMessage{
+				"id":   json.RawMessage(strconv.Itoa(i)),
+				"name": json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("polygon-%d", i))),
+			},
+		})
+	}
+	body, err := chunk.Encode("itest", features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func geometryCounts(t *testing.T, body []byte) map[string]int {
+	t.Helper()
+	c, err := chunk.Open(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	features, err := c.SearchAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, f := range features {
+		if g := c.GeoJSON(f).Geometry; g != nil {
+			counts[g.Type]++
+		}
+	}
+	return counts
+}
+
+func TestPostgresViewMixedGeometry(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	mixed, same := "itest_mixed_view", "itest_same_view"
+	points, polygons, morePoints := "itest_mixed_pt", "itest_mixed_poly", "itest_mixed_pt2"
+	for _, name := range []string{mixed, same, points, polygons, morePoints} {
+		st.DropCollection(ctx, name)
+		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	}
+	h := New(st)
+	for _, member := range []struct {
+		name string
+		body []byte
+	}{{points, fixtureFGB(t, 5)}, {polygons, polygonFixtureFGB(t, 5)}, {morePoints, fixtureFGB(t, 5)}} {
+		if w := call(h, "PUT", "/collections/"+member.name, "application/flatgeobuf", member.body); w.Code != 201 {
+			t.Fatalf("ingest %s = %d: %s", member.name, w.Code, w.Body.String())
+		}
+	}
+	for _, view := range []struct{ name, members string }{
+		{mixed, `["itest_mixed_pt","itest_mixed_poly"]`},
+		{same, `["itest_mixed_pt","itest_mixed_pt2"]`},
+	} {
+		if w := call(h, "PUT", "/collections/"+view.name, "application/json", []byte(`{"members":`+view.members+`}`)); w.Code != 201 {
+			t.Fatalf("view %s = %d: %s", view.name, w.Code, w.Body.String())
+		}
+	}
+	geometryOf := func(path string) (flattypes.GeometryType, []byte) {
+		t.Helper()
+		w := call(h, "GET", path, "", nil)
+		header := fgbHeader(w.Body.Bytes())
+		if w.Code != 200 || header == nil {
+			t.Fatalf("%s = %d: %s", path, w.Code, w.Body.String())
+		}
+		return header.GeometryType(), w.Body.Bytes()
+	}
+	for _, path := range []string{"/collections/" + mixed + "/items.fgb", "/collections/" + mixed + "/items?f=flatgeobuf&limit=100"} {
+		geometry, body := geometryOf(path)
+		if geometry != flattypes.GeometryTypeUnknown {
+			t.Fatalf("%s declares geometry %v, want Unknown", path, geometry)
+		}
+		if got := geometryCounts(t, body); !maps.Equal(got, map[string]int{"Point": 5, "Polygon": 5}) {
+			t.Fatalf("%s features = %v, want 5 points and 5 polygons", path, got)
+		}
+	}
+	if geometry, _ := geometryOf("/collections/" + same + "/items.fgb"); geometry != flattypes.GeometryTypePoint {
+		t.Fatalf("view of two point members declares geometry %v, want Point", geometry)
+	}
+}
+
 func extraColumnFGB(t *testing.T, count int) []byte {
 	t.Helper()
 	features := make([]chunk.InputFeature, 0, count)

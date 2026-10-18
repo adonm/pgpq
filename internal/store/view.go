@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+
 	"github.com/adonm/postfgb/internal/fgb"
 )
 
@@ -169,6 +171,7 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 		lengths      []int64
 		names        []string
 		memberHeader []byte
+		geometry     flattypes.GeometryType
 		schema       []byte
 		features     int64
 	)
@@ -189,10 +192,14 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 			return fmt.Errorf("%w: members %q and %q of view %q have different schemas", ErrInvalidView, names[0], member.Name, info.Name)
 		}
 		schema = columns
+		header, err := readVirtual(ctx, tx, member.Name, member.Version, 0, 0, 0, int64(layout.HeaderBytes))
+		if err != nil {
+			return err
+		}
 		if memberHeader == nil {
-			if memberHeader, err = readVirtual(ctx, tx, member.Name, member.Version, 0, 0, 0, int64(layout.HeaderBytes)); err != nil {
-				return err
-			}
+			memberHeader, geometry = header, fgb.GeometryOf(header)
+		} else if fgb.GeometryOf(header) != geometry {
+			geometry = flattypes.GeometryTypeUnknown
 		}
 		count, err := storedFeatures(ctx, tx, member.Name, layout)
 		if err != nil {
@@ -210,7 +217,7 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 	if !ok {
 		return errors.New("view: empty index")
 	}
-	header, ok := fgb.Header(info.Name, memberHeader, uint64(features), extent)
+	header, ok := fgb.Header(info.Name, memberHeader, uint64(features), extent, geometry)
 	if !ok {
 		return errors.New("view: unreadable member header")
 	}

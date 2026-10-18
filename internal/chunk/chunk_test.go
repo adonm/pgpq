@@ -110,7 +110,7 @@ func TestEncodeFeaturesRoundTrip(t *testing.T) {
 	if len(in) != 100 {
 		t.Fatalf("source features = %d, want 100", len(in))
 	}
-	out, err := EncodeFeatures("copy", c.Header(), in)
+	out, err := EncodeFeatures("copy", c.Header(), c.Header().GeometryType(), in)
 	if err != nil {
 		t.Fatal(err)
 	}

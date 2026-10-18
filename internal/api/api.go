@@ -342,7 +342,7 @@ func (s *Server) writeFGB(w http.ResponseWriter, r *http.Request, info store.Col
 		newPageWriter(w, limit, nil).close("")
 		return
 	}
-	data, err := chunk.EncodeFeatures(info.Name, out.header, out.features)
+	data, err := chunk.EncodeFeatures(info.Name, out.header, out.geometry, out.features)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -404,6 +404,7 @@ func (p *pageWriter) close(next string) {
 type fgbCollector struct {
 	limit    int
 	header   *flattypes.Header
+	geometry flattypes.GeometryType
 	last     *chunk.Chunk
 	features []*flattypes.Feature
 }
@@ -411,10 +412,13 @@ type fgbCollector struct {
 func (f *fgbCollector) add(h hit) error {
 	if h.chunk != f.last {
 		header := h.chunk.Header()
-		if f.header == nil {
-			f.header = header
-		} else if !sameColumns(f.header, header) {
+		switch {
+		case f.header == nil:
+			f.header, f.geometry = header, header.GeometryType()
+		case !sameColumns(f.header, header):
 			return errors.New("collection chunks have differing schemas")
+		case header.GeometryType() != f.geometry:
+			f.geometry = flattypes.GeometryTypeUnknown
 		}
 		f.last = h.chunk
 	}

@@ -58,7 +58,8 @@ func testChunks(t *testing.T, sizes ...int) ([]byte, []byte) {
 	if !ok {
 		t.Fatal("index build failed")
 	}
-	header, ok := Header("t", headerBlobOf(t, chunks[0]), uint64(total), envelope)
+	blob := headerBlobOf(t, chunks[0])
+	header, ok := Header("t", blob, uint64(total), envelope, GeometryOf(blob))
 	if !ok {
 		t.Fatal("header build failed")
 	}

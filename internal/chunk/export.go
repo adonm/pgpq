@@ -13,14 +13,14 @@ func (c *Chunk) Header() *flattypes.Header {
 	return c.header
 }
 
-func EncodeFeatures(name string, header *flattypes.Header, features []*flattypes.Feature) ([]byte, error) {
+func EncodeFeatures(name string, header *flattypes.Header, geometry flattypes.GeometryType, features []*flattypes.Feature) ([]byte, error) {
 	if len(features) == 0 {
 		return nil, errors.New("chunk: no features to encode")
 	}
 	headerBuilder := flatbuffers.NewBuilder(0)
 	wheader := writer.NewHeader(headerBuilder).
 		SetName(name).
-		SetGeometryType(header.GeometryType())
+		SetGeometryType(geometry)
 	if n := header.ColumnsLength(); n > 0 {
 		cols := make([]*writer.Column, 0, n)
 		for i := 0; i < n; i++ {

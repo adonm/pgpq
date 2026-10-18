@@ -50,7 +50,7 @@ func (i *Ingest) buildVirtual(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		header, ok := fgb.Header(i.collection, chunks.header, chunks.count, envelope)
+		header, ok := fgb.Header(i.collection, chunks.header, chunks.count, envelope, fgb.GeometryOf(chunks.header))
 		if !ok {
 			continue
 		}
