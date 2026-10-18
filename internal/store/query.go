@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -226,18 +225,6 @@ func matchTimedOut(err error) bool {
 	}
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "57014"
-}
-
-func (s *Store) Sorted(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, order []string, limit, offset int) ([]FeatureMatch, error) {
-	casts, err := s.ColumnCasts(ctx, collection)
-	if err != nil {
-		return nil, err
-	}
-	from, where, args := matchesWhere(collection, casts, bbox, query, filter)
-	args = append(args, limit, offset)
-	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by %s, m.chunk_id, m.feature_ord limit $%d offset $%d`,
-		from, where, strings.Join(order, ", "), len(args)-1, len(args))
-	return scanMatches(ctx, s.Pool, sql, args...)
 }
 
 func scanMatches(ctx context.Context, conn db, sql string, args ...any) ([]FeatureMatch, error) {

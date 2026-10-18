@@ -128,29 +128,17 @@ func TestPostgresIngestQuery(t *testing.T) {
 		t.Fatalf("feature = %d: %s", w.Code, w.Body.String())
 	}
 
-	w = call(h, "GET", "/collections/"+name+"/manifest", "", nil)
-	if w.Code != 200 {
-		t.Fatalf("manifest = %d: %s", w.Code, w.Body.String())
+	w = call(h, "GET", "/collections/"+name+"/items?limit=1&crs="+crs84, "", nil)
+	if w.Code != 200 || w.Header().Get("Content-Crs") != crs84 {
+		t.Fatalf("crs84 items = %d, Content-Crs %q", w.Code, w.Header().Get("Content-Crs"))
 	}
-	etag := w.Header().Get("ETag")
-	if etag == "" {
-		t.Fatal("manifest has no ETag")
+	w = call(h, "GET", "/collections/"+name+"/items?crs=EPSG:3857", "", nil)
+	if w.Code != 400 {
+		t.Fatalf("epsg:3857 items = %d, want 400", w.Code)
 	}
-	var manifest struct {
-		ChunkCount int `json:"chunkCount"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &manifest); err != nil {
-		t.Fatal(err)
-	}
-	if manifest.ChunkCount < 1 {
-		t.Fatalf("manifest chunks = %d", manifest.ChunkCount)
-	}
-	revalidate := httptest.NewRequest("GET", "/collections/"+name+"/manifest", nil)
-	revalidate.Header.Set("If-None-Match", etag)
-	w = httptest.NewRecorder()
-	h.ServeHTTP(w, revalidate)
-	if w.Code != 304 {
-		t.Fatalf("manifest revalidate = %d, want 304", w.Code)
+	w = call(h, "GET", "/collections/"+name+"/items?sortby=name", "", nil)
+	if w.Code != 400 {
+		t.Fatalf("sortby items = %d, want 400", w.Code)
 	}
 
 	w = call(h, "GET", "/stac/collections/"+name, "", nil)

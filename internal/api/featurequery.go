@@ -17,20 +17,15 @@ type featureQuery struct {
 	filter   cql.Expr
 	shapes   []geo.Shape
 	query    string
-	order    []string
 	offset   int
 	limit    int
 	overview *int
 	empty    bool
 }
 
-func (s *Server) parseFeatureQuery(ctx context.Context, r *http.Request, info store.CollectionInfo, limit, offset int) (featureQuery, error) {
+func (s *Server) parseFeatureQuery(r *http.Request, info store.CollectionInfo, limit, offset int) (featureQuery, error) {
 	q := featureQuery{limit: limit, offset: offset}
 	bbox, err := parseBBox(r)
-	if err != nil {
-		return q, err
-	}
-	bbox, err = s.inputBBox(r, bbox)
 	if err != nil {
 		return q, err
 	}
@@ -63,15 +58,10 @@ func (s *Server) parseFeatureQuery(ctx context.Context, r *http.Request, info st
 		q.empty = true
 		return q, nil
 	}
-	order, err := s.sortOrder(ctx, r, info)
-	if err != nil {
-		return q, err
-	}
 	q.bbox = bbox
 	q.tw = tw
 	q.filter = extracted
 	q.query = r.URL.Query().Get("q")
-	q.order = order
 	q.overview = overview
 	return q, nil
 }
@@ -118,17 +108,12 @@ func (s *Server) streamCollections(ctx context.Context, infos []store.Collection
 			}
 			filter = cql.And(filter, datetimeExpr(*info.TimeColumn, q.tw))
 		}
-		if filter == nil && q.query == "" && q.order == nil {
+		if filter == nil && q.query == "" {
 			tier := 0
 			if q.overview != nil && info.Kind != "view" {
 				tier = *q.overview
 			}
 			remaining -= s.streamBBox(ctx, sink, info, q.bbox, remaining, tier)
-			continue
-		}
-		if q.order != nil {
-			s.streamSorted(ctx, sink, info, q.bbox, q.query, filter, q.order, remaining)
-			remaining = 0
 			continue
 		}
 		skip := 0

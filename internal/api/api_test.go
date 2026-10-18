@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -77,8 +78,6 @@ func TestReadOnlyWorker(t *testing.T) {
 	}{
 		{"PUT", "/collections/demo"},
 		{"DELETE", "/collections/demo"},
-		{"GET", "/collections/demo/chunks/1"},
-		{"GET", "/collections/demo/manifest"},
 	}
 	for _, tc := range cases {
 		w := httptest.NewRecorder()
@@ -91,6 +90,41 @@ func TestReadOnlyWorker(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
 	if w.Code != 200 {
 		t.Fatalf("GET / = %d, want 200", w.Code)
+	}
+}
+
+func TestRemovedRoutes(t *testing.T) {
+	for _, h := range []http.Handler{NewWithConfig(Config{}), NewWithConfig(Config{ReadOnly: true})} {
+		for _, path := range []string{"/stats", "/collections/demo/manifest", "/collections/demo/chunks/1"} {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+			if w.Code != 404 {
+				t.Fatalf("GET %s = %d, want 404", path, w.Code)
+			}
+		}
+	}
+}
+
+func TestUnsupportedQuery(t *testing.T) {
+	gate := rejectUnsupportedQuery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	cases := []struct {
+		target string
+		want   int
+	}{
+		{"/collections/demo/items", 200},
+		{"/collections/demo/items?sortby=name", 400},
+		{"/collections/demo/items?sortby=", 400},
+		{"/collections/demo/items?crs=" + crs84, 200},
+		{"/collections/demo/items?crs=EPSG:3857", 400},
+		{"/collections/demo/items?bbox=1,2,3,4&bbox-crs=" + crs84, 200},
+		{"/collections/demo/items?bbox=1,2,3,4&bbox-crs=EPSG:3857", 400},
+	}
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		gate.ServeHTTP(w, httptest.NewRequest("GET", tc.target, nil))
+		if w.Code != tc.want {
+			t.Fatalf("%s = %d, want %d", tc.target, w.Code, tc.want)
+		}
 	}
 }
 

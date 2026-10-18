@@ -46,7 +46,7 @@ func serve(args []string) {
 	maxConns := fs.Int("max-conns", 0, "maximum PostgreSQL pool connections (0 keeps the driver default)")
 	minConns := fs.Int("min-conns", 0, "minimum idle PostgreSQL pool connections (0 keeps the driver default)")
 	maxChunkBytes := fs.Int("max-chunk-bytes", 32<<20, "per-request chunk fetch budget in bytes")
-	readonlyHelp := "serve the read-only surface: no ingest, no delete, no raw chunk or manifest access"
+	readonlyHelp := "serve the read-only surface: no ingest and no delete"
 	readonly := fs.Bool("readonly", envBool("POSTFGB_READONLY"), readonlyHelp)
 	runMigrations := fs.Bool("migrate", true, "run migrations at startup (skipped by default in --readonly)")
 	fs.Parse(args)

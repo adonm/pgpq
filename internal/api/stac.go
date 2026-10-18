@@ -310,7 +310,7 @@ func (s *Server) stacItems(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	q, err := s.parseFeatureQuery(ctx, r, info, limit, offset)
+	q, err := s.parseFeatureQuery(r, info, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

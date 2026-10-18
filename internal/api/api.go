@@ -85,7 +85,6 @@ func NewWithConfig(cfg Config) http.Handler {
 	if !s.ReadOnly {
 		mux.HandleFunc("PUT /collections/{id}", s.putCollection)
 		mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
-		mux.HandleFunc("GET /collections/{id}/chunks/{chunkID}", s.chunkBytes)
 	}
 	mux.HandleFunc("GET /stac", s.stacCatalog)
 	mux.HandleFunc("GET /stac/collections", s.stacCollections)
@@ -95,7 +94,6 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("POST /stac/search", s.stacSearch)
 	mux.HandleFunc("GET /viewer", s.viewer)
 	mux.HandleFunc("GET /viewer.rgis", s.viewerProject)
-	mux.HandleFunc("GET /stats", s.stats)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
 		if err != nil {
@@ -105,7 +103,24 @@ func NewWithConfig(cfg Config) http.Handler {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.0")
 		w.Write(body)
 	})
-	return corsMiddleware(compressionMiddleware(s.observe(mux)))
+	return corsMiddleware(compressionMiddleware(s.observe(rejectUnsupportedQuery(mux))))
+}
+
+func rejectUnsupportedQuery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Has("sortby") {
+			http.Error(w, "sortby is not supported", http.StatusBadRequest)
+			return
+		}
+		for _, name := range []string{"crs", "bbox-crs"} {
+			if value := query.Get(name); value != "" && value != crs84 {
+				http.Error(w, name+" must be "+crs84, http.StatusBadRequest)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) register(api huma.API) {
@@ -113,9 +128,6 @@ func (s *Server) register(api huma.API) {
 	huma.Register(api, huma.Operation{OperationID: "collections", Method: "GET", Path: "/collections", Summary: "Collections"}, s.collections)
 	huma.Register(api, huma.Operation{OperationID: "collection", Method: "GET", Path: "/collections/{id}", Summary: "Collection"}, s.collection)
 	huma.Register(api, huma.Operation{OperationID: "queryables", Method: "GET", Path: "/collections/{id}/queryables", Summary: "Queryables"}, s.queryables)
-	if !s.ReadOnly {
-		huma.Register(api, huma.Operation{OperationID: "manifest", Method: "GET", Path: "/collections/{id}/manifest", Summary: "Chunk manifest"}, s.manifest)
-	}
 }
 
 type landing struct {
@@ -273,7 +285,7 @@ var reservedParams = map[string]bool{
 	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
 	"filter": true, "filter-lang": true, "format": true,
 	"overview": true, "numberMatched": true,
-	"datetime": true, "sortby": true, "crs": true, "bbox-crs": true,
+	"datetime": true, "crs": true, "bbox-crs": true,
 	"z": true, "x": true, "y": true,
 }
 
@@ -301,11 +313,6 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	crsFn, contentCRS, err := s.outputCRS(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
 	flatgeobuf := r.URL.Query().Get("f") == "flatgeobuf" ||
 		strings.Contains(r.Header.Get("Accept"), "application/flatgeobuf")
 	defaultLimit := s.DefaultLimit
@@ -322,7 +329,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	q, err := s.parseFeatureQuery(ctx, r, info, limit, offset)
+	q, err := s.parseFeatureQuery(r, info, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -339,18 +346,15 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if flatgeobuf {
-		s.writeFGB(ctx, w, r, id, q.bbox, q.query, q.filter, q.order, q.shapes, q.offset, q.limit, 0)
+		s.writeFGB(ctx, w, r, id, q.bbox, q.query, q.filter, q.shapes, q.offset, q.limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
-	if contentCRS != "" {
-		w.Header().Set("Content-Crs", contentCRS)
+	if r.URL.Query().Get("crs") != "" {
+		w.Header().Set("Content-Crs", crs84)
 	}
 	fw := newFeatureWriter(w, limit, matched)
 	var sink featureSink = fw
-	if crsFn != nil {
-		sink = &crsWriter{base: sink, fn: crsFn}
-	}
 	if len(q.shapes) > 0 {
 		sink = &spatialWriter{base: sink, shapes: q.shapes}
 	}
@@ -675,8 +679,8 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
-func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit, tier int) {
-	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, order, shapes, offset, limit, tier)
+func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, id string, bbox *[4]float64, query string, filter cql.Expr, shapes []geo.Shape, offset, limit, tier int) {
+	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, shapes, offset, limit, tier)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -699,12 +703,9 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Re
 	w.Write(data)
 }
 
-func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, shapes []geo.Shape, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	if info, err := s.Store.Collection(ctx, id); err == nil && info.Kind == "view" {
-		return s.collectView(ctx, info, bbox, query, filter, order, shapes, offset, limit)
-	}
-	if len(order) > 0 {
-		return s.collectSorted(ctx, id, bbox, query, filter, order, shapes, offset, limit)
+		return s.collectView(ctx, info, bbox, query, filter, shapes, offset, limit)
 	}
 	if query != "" || filter != nil {
 		return s.collectMatches(ctx, id, bbox, query, filter, shapes, offset, limit)
@@ -813,40 +814,6 @@ func sameColumns(a, b *flattypes.Header) bool {
 	return true
 }
 
-func (s *Server) chunkBytes(w http.ResponseWriter, r *http.Request) {
-	chunkID, err := strconv.ParseInt(r.PathValue("chunkID"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid chunk id", http.StatusBadRequest)
-		return
-	}
-	row, err := s.Store.ChunkByID(r.Context(), r.PathValue("id"), chunkID)
-	if errors.Is(err, store.ErrNotFound) {
-		http.Error(w, "chunk not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if row.Checksum != nil {
-		etag := `"` + *row.Checksum + `"`
-		w.Header().Set("ETag", etag)
-		if r.Header.Get("If-None-Match") == etag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-	}
-	raw, err := chunk.Decompress(row.Data)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.metrics.add("postfgb_chunk_fetches_total", "", 1)
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	w.Header().Set("Content-Type", "application/flatgeobuf")
-	w.Write(raw)
-}
-
 const flatgeobufLimit = 100000
 
 func parseBBox(r *http.Request) (*[4]float64, error) {
@@ -893,10 +860,7 @@ func parseOffset(r *http.Request) (int, error) {
 	return n, nil
 }
 
-func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, order []string, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
-	if len(order) > 0 {
-		return nil, nil, errors.New("views cannot be sorted: read the file or query the members")
-	}
+func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	var features []*flattypes.Feature
 	var header *flattypes.Header
 	remaining := offset
@@ -904,7 +868,7 @@ func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbo
 		if len(features) >= limit {
 			break
 		}
-		collected, memberHeader, err := s.collectFeatures(ctx, member.Name, bbox, query, filter, order, shapes, remaining, limit-len(features), 0)
+		collected, memberHeader, err := s.collectFeatures(ctx, member.Name, bbox, query, filter, shapes, remaining, limit-len(features), 0)
 		if err != nil {
 			return nil, nil, err
 		}
