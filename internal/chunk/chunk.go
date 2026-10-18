@@ -1,10 +1,12 @@
 package chunk
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"math"
+	"strconv"
 
 	flatgeobuf "github.com/flatgeobuf/flatgeobuf/src/go"
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
@@ -117,6 +119,152 @@ func (c *Chunk) GeoJSON(f *flattypes.Feature) *Feature {
 
 func DecodeProperties(buf []byte, cols []Column) map[string]any {
 	return decodeProperties(buf, cols)
+}
+
+func DecodePropertyText(buf []byte, cols []Column) map[string]json.RawMessage {
+	if len(buf) == 0 || len(cols) == 0 {
+		return nil
+	}
+	props := make(map[string]json.RawMessage, len(cols))
+	off := 0
+	for off+2 <= len(buf) {
+		idx := int(binary.LittleEndian.Uint16(buf[off:]))
+		off += 2
+		if idx >= len(cols) {
+			break
+		}
+		col := cols[idx]
+		switch col.Type {
+		case flattypes.ColumnTypeBool:
+			if off+1 > len(buf) {
+				return props
+			}
+			props[col.Name] = boolText(buf[off] != 0)
+			off++
+		case flattypes.ColumnTypeByte:
+			if off+1 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatInt(int64(int8(buf[off])), 10))
+			off++
+		case flattypes.ColumnTypeUByte:
+			if off+1 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatUint(uint64(buf[off]), 10))
+			off++
+		case flattypes.ColumnTypeShort:
+			if off+2 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatInt(int64(int16(binary.LittleEndian.Uint16(buf[off:]))), 10))
+			off += 2
+		case flattypes.ColumnTypeUShort:
+			if off+2 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatUint(uint64(binary.LittleEndian.Uint16(buf[off:])), 10))
+			off += 2
+		case flattypes.ColumnTypeInt:
+			if off+4 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatInt(int64(int32(binary.LittleEndian.Uint32(buf[off:]))), 10))
+			off += 4
+		case flattypes.ColumnTypeUInt:
+			if off+4 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatUint(uint64(binary.LittleEndian.Uint32(buf[off:])), 10))
+			off += 4
+		case flattypes.ColumnTypeLong:
+			if off+8 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatInt(int64(binary.LittleEndian.Uint64(buf[off:])), 10))
+			off += 8
+		case flattypes.ColumnTypeULong:
+			if off+8 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatUint(binary.LittleEndian.Uint64(buf[off:]), 10))
+			off += 8
+		case flattypes.ColumnTypeFloat:
+			if off+4 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatFloat(float64(math.Float32frombits(binary.LittleEndian.Uint32(buf[off:]))), 'g', -1, 32))
+			off += 4
+		case flattypes.ColumnTypeDouble:
+			if off+8 > len(buf) {
+				return props
+			}
+			props[col.Name] = json.RawMessage(strconv.FormatFloat(math.Float64frombits(binary.LittleEndian.Uint64(buf[off:])), 'g', -1, 64))
+			off += 8
+		case flattypes.ColumnTypeString, flattypes.ColumnTypeDateTime:
+			s, n, ok := stringValue(buf, off)
+			if !ok {
+				return props
+			}
+			props[col.Name] = quoteText(s)
+			off += n
+		case flattypes.ColumnTypeJson:
+			s, n, ok := stringValue(buf, off)
+			if !ok {
+				return props
+			}
+			if json.Valid([]byte(s)) {
+				props[col.Name] = json.RawMessage(s)
+			} else {
+				props[col.Name] = quoteText(s)
+			}
+			off += n
+		case flattypes.ColumnTypeBinary:
+			if off+4 > len(buf) {
+				return props
+			}
+			l := int(binary.LittleEndian.Uint32(buf[off:]))
+			if off+4+l > len(buf) {
+				return props
+			}
+			props[col.Name] = quoteText(base64.StdEncoding.EncodeToString(buf[off+4 : off+4+l]))
+			off += 4 + l
+		default:
+			return props
+		}
+	}
+	return props
+}
+
+var (
+	boolTrue  = json.RawMessage("true")
+	boolFalse = json.RawMessage("false")
+)
+
+func boolText(v bool) json.RawMessage {
+	if v {
+		return boolTrue
+	}
+	return boolFalse
+}
+
+func quoteText(s string) json.RawMessage {
+	simple := true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 || c < 0x20 || c == '"' || c == '\\' || c == '<' || c == '>' || c == '&' {
+			simple = false
+			break
+		}
+	}
+	if !simple {
+		out, _ := json.Marshal(s)
+		return out
+	}
+	out := make([]byte, 0, len(s)+2)
+	out = append(out, '"')
+	out = append(out, s...)
+	return append(out, '"')
 }
 
 func decodeGeometry(g *flattypes.Geometry, fallback flattypes.GeometryType) *Geometry {

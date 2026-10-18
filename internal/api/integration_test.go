@@ -1181,8 +1181,8 @@ func mixedChunksFGB(t *testing.T) []byte {
 		{Name: "id", Type: flattypes.ColumnTypeLong},
 		{Name: "name", Type: flattypes.ColumnTypeString},
 	}
-	features := make([]chunk.InputFeature, 0, 24386+300)
-	for i := 0; i < 24386; i++ {
+	features := make([]chunk.InputFeature, 0, 22796+300)
+	for i := 0; i < 22796; i++ {
 		features = append(features, chunk.InputFeature{
 			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: json.RawMessage("[7.4,43.7]")},
 			Properties: map[string]json.RawMessage{
@@ -1244,16 +1244,16 @@ func TestPostgresCollectionMixedGeometry(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(counts, []int{24386, 300}) || !slices.Equal(kinds, []string{"Point", "Polygon"}) {
-		t.Fatalf("chunks hold %v features of types %v, want 24386 points then 300 polygons", counts, kinds)
+	if !slices.Equal(counts, []int{22796, 300}) || !slices.Equal(kinds, []string{"Point", "Polygon"}) {
+		t.Fatalf("chunks hold %v features of types %v, want 22796 points then 300 polygons", counts, kinds)
 	}
 	for _, path := range []string{"/collections/" + name + "/items.fgb", "/collections/" + name + "/items?f=flatgeobuf&limit=100000"} {
 		geometry, body := geometryAt(t, h, path)
 		if geometry != flattypes.GeometryTypeUnknown {
 			t.Fatalf("%s declares geometry %v, want Unknown", path, geometry)
 		}
-		if got := geometryCounts(t, body); !maps.Equal(got, map[string]int{"Point": 24386, "Polygon": 300}) {
-			t.Fatalf("%s features = %v, want 24386 points and 300 polygons", path, got)
+		if got := geometryCounts(t, body); !maps.Equal(got, map[string]int{"Point": 22796, "Polygon": 300}) {
+			t.Fatalf("%s features = %v, want 22796 points and 300 polygons", path, got)
 		}
 	}
 }

@@ -29,7 +29,7 @@ func sortWindow(features []chunk.InputFeature) {
 }
 
 func hilbertKey(f chunk.InputFeature) uint32 {
-	bounds, ok := chunk.Bounds(&f.Geometry)
+	bounds, ok := chunk.FeatureBounds(&f)
 	if !ok {
 		return 0
 	}

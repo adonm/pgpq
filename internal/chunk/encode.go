@@ -25,13 +25,14 @@ type RawGeometry struct {
 type InputFeature struct {
 	Geometry   RawGeometry
 	Properties map[string]json.RawMessage
+	Parsed     *ParsedGeometry
 }
 
-type parsedGeometry struct {
+type ParsedGeometry struct {
 	typ   flattypes.GeometryType
 	xy    []float64
 	ends  []uint32
-	parts []parsedGeometry
+	parts []ParsedGeometry
 }
 
 var geometryTypes = map[string]flattypes.GeometryType{
@@ -51,11 +52,15 @@ func EncodeCols(name string, cols []Column, features []InputFeature) ([]byte, er
 	if len(features) == 0 {
 		return nil, errors.New("chunk: no features to encode")
 	}
-	parsed := make([]*parsedGeometry, len(features))
+	parsed := make([]*ParsedGeometry, len(features))
 	for i := range features {
-		g, err := parseGeometry(&features[i].Geometry)
-		if err != nil {
-			return nil, err
+		g := features[i].Parsed
+		if g == nil {
+			var err error
+			g, err = parseGeometry(&features[i].Geometry)
+			if err != nil {
+				return nil, err
+			}
 		}
 		parsed[i] = g
 	}
@@ -84,7 +89,7 @@ func EncodeCols(name string, cols []Column, features []InputFeature) ([]byte, er
 
 type generator struct {
 	features []InputFeature
-	parsed   []*parsedGeometry
+	parsed   []*ParsedGeometry
 	cols     []Column
 	next     int
 }
@@ -101,7 +106,7 @@ func (g *generator) Generate() *writer.Feature {
 		SetGeometry(buildGeometry(builder, parsed)).SetProperties(encodeProperties(g.cols, f.Properties))
 }
 
-func buildGeometry(b *flatbuffers.Builder, g *parsedGeometry) *writer.Geometry {
+func buildGeometry(b *flatbuffers.Builder, g *ParsedGeometry) *writer.Geometry {
 	if g.parts == nil {
 		wg := writer.NewGeometry(b).SetType(g.typ)
 		if len(g.xy) > 0 {
@@ -120,14 +125,22 @@ func buildGeometry(b *flatbuffers.Builder, g *parsedGeometry) *writer.Geometry {
 }
 
 func geometryType(features []InputFeature) flattypes.GeometryType {
-	t, ok := geometryTypes[features[0].Geometry.Type]
-	if !ok {
-		return flattypes.GeometryTypeUnknown
-	}
+	t := featureType(features[0])
 	for _, f := range features[1:] {
-		if geometryTypes[f.Geometry.Type] != t {
+		if featureType(f) != t {
 			return flattypes.GeometryTypeUnknown
 		}
+	}
+	return t
+}
+
+func featureType(f InputFeature) flattypes.GeometryType {
+	if f.Parsed != nil {
+		return f.Parsed.typ
+	}
+	t, ok := geometryTypes[f.Geometry.Type]
+	if !ok {
+		return flattypes.GeometryTypeUnknown
 	}
 	return t
 }
@@ -262,13 +275,20 @@ func intValue(text string, bits int, signed bool) []byte {
 }
 
 func unquote(raw []byte) []byte {
-	if len(raw) > 1 && raw[0] == '"' {
-		var s string
-		if json.Unmarshal(raw, &s) == nil {
-			return []byte(s)
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return raw
+	}
+	body := raw[1 : len(raw)-1]
+	for i := 0; i < len(body); i++ {
+		if body[i] == '\\' {
+			var s string
+			if json.Unmarshal(raw, &s) == nil {
+				return []byte(s)
+			}
+			return raw
 		}
 	}
-	return raw
+	return body
 }
 
 func lengthPrefixed(b []byte) []byte {
@@ -276,64 +296,68 @@ func lengthPrefixed(b []byte) []byte {
 	return append(out, b...)
 }
 
-func parseGeometry(g *RawGeometry) (*parsedGeometry, error) {
+func parseGeometry(g *RawGeometry) (*ParsedGeometry, error) {
 	var coords any
 	if len(g.Coordinates) > 0 {
 		if err := json.Unmarshal(g.Coordinates, &coords); err != nil {
 			return nil, fmt.Errorf("chunk: %s coordinates: %w", g.Type, err)
 		}
 	}
-	switch g.Type {
+	return ParseShape(g.Type, coords)
+}
+
+func ParseShape(typ string, coords any) (*ParsedGeometry, error) {
+	switch typ {
 	case "Point":
 		xy, err := flatPosition(coords)
 		if err != nil {
 			return nil, err
 		}
-		return &parsedGeometry{typ: flattypes.GeometryTypePoint, xy: xy}, nil
+		return &ParsedGeometry{typ: flattypes.GeometryTypePoint, xy: xy}, nil
 	case "LineString":
 		xy, err := flatPositions(coords)
 		if err != nil {
 			return nil, err
 		}
-		return &parsedGeometry{typ: flattypes.GeometryTypeLineString, xy: xy}, nil
+		return &ParsedGeometry{typ: flattypes.GeometryTypeLineString, xy: xy}, nil
 	case "Polygon":
 		xy, ends, err := flatRings(coords)
 		if err != nil {
 			return nil, err
 		}
-		return &parsedGeometry{typ: flattypes.GeometryTypePolygon, xy: xy, ends: ends}, nil
+		return &ParsedGeometry{typ: flattypes.GeometryTypePolygon, xy: xy, ends: ends}, nil
 	case "MultiPoint":
 		xy, err := flatPositions(coords)
 		if err != nil {
 			return nil, err
 		}
-		return &parsedGeometry{typ: flattypes.GeometryTypeMultiPoint, xy: xy}, nil
+		return &ParsedGeometry{typ: flattypes.GeometryTypeMultiPoint, xy: xy}, nil
 	case "MultiLineString":
 		lines, err := flatMulti(coords)
 		if err != nil {
 			return nil, err
 		}
-		parts := make([]parsedGeometry, len(lines))
+		parts := make([]ParsedGeometry, len(lines))
 		for i, line := range lines {
-			parts[i] = parsedGeometry{xy: line}
+			parts[i] = ParsedGeometry{xy: line}
 		}
-		return &parsedGeometry{typ: flattypes.GeometryTypeMultiLineString, parts: parts}, nil
+		return &ParsedGeometry{typ: flattypes.GeometryTypeMultiLineString, parts: parts}, nil
 	case "MultiPolygon":
 		polys, ok := coords.([]any)
 		if !ok {
 			return nil, errors.New("chunk: multipolygon coordinates are not a polygon list")
 		}
-		parts := make([]parsedGeometry, len(polys))
+		parts := make([]ParsedGeometry, len(polys))
 		for i, poly := range polys {
 			xy, ends, err := flatRings(poly)
 			if err != nil {
 				return nil, err
 			}
-			parts[i] = parsedGeometry{xy: xy, ends: ends}
+			parts[i] = ParsedGeometry{xy: xy, ends: ends}
 		}
-		return &parsedGeometry{typ: flattypes.GeometryTypeMultiPolygon, parts: parts}, nil
+		return &ParsedGeometry{typ: flattypes.GeometryTypeMultiPolygon, parts: parts}, nil
 	default:
-		return nil, fmt.Errorf("chunk: unsupported geometry type %q", g.Type)
+		return nil, fmt.Errorf("chunk: unsupported geometry type %q", typ)
 	}
 }
 

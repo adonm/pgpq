@@ -5,13 +5,24 @@ func Bounds(g *RawGeometry) ([4]float64, bool) {
 	if err != nil {
 		return [4]float64{}, false
 	}
+	return parsed.Bound()
+}
+
+func FeatureBounds(f *InputFeature) ([4]float64, bool) {
+	if f.Parsed != nil {
+		return f.Parsed.Bound()
+	}
+	return Bounds(&f.Geometry)
+}
+
+func (p *ParsedGeometry) Bound() ([4]float64, bool) {
 	var b [4]float64
 	seen := false
-	expandBounds(parsed, &b, &seen)
+	expandBounds(p, &b, &seen)
 	return b, seen
 }
 
-func expandBounds(p *parsedGeometry, b *[4]float64, seen *bool) {
+func expandBounds(p *ParsedGeometry, b *[4]float64, seen *bool) {
 	for i := 0; i+1 < len(p.xy); i += 2 {
 		x, y := p.xy[i], p.xy[i+1]
 		if !*seen {

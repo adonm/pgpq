@@ -21,7 +21,6 @@ import (
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 	"github.com/paulmach/orb"
-	orbgeojson "github.com/paulmach/orb/geojson"
 	"github.com/paulmach/orb/simplify"
 	"github.com/wroge/wgs84/v2"
 
@@ -55,7 +54,12 @@ func (s *sizer) add(f chunk.InputFeature) {
 }
 
 func featureEstimate(f chunk.InputFeature) int {
-	n := 52 + len(f.Geometry.Coordinates)
+	n := 52
+	if f.Parsed != nil {
+		n += f.Parsed.Estimate()
+	} else {
+		n += len(f.Geometry.Coordinates)
+	}
 	for _, value := range f.Properties {
 		n += len(value) + 3
 	}
@@ -799,12 +803,8 @@ func tierFeature(c *chunk.Chunk, f *flattypes.Feature, spec *tierSpec) (chunk.In
 			}
 		}
 	}
-	body, err := json.Marshal(orbgeojson.NewGeometry(simp))
-	if err != nil {
-		return chunk.InputFeature{}, false
-	}
-	var raw chunk.RawGeometry
-	if err := json.Unmarshal(body, &raw); err != nil {
+	shape, ok := chunk.FromOrb(simp)
+	if !ok {
 		return chunk.InputFeature{}, false
 	}
 	props := make(map[string]json.RawMessage, len(g.Properties))
@@ -815,7 +815,7 @@ func tierFeature(c *chunk.Chunk, f *flattypes.Feature, spec *tierSpec) (chunk.In
 		}
 		props[name] = encoded
 	}
-	return chunk.InputFeature{Geometry: raw, Properties: props}, true
+	return chunk.InputFeature{Parsed: shape, Properties: props}, true
 }
 
 func pointFamily(g orb.Geometry) bool {
@@ -828,80 +828,22 @@ func pointFamily(g orb.Geometry) bool {
 }
 
 func toInput(header *flattypes.Header, f *flattypes.Feature, transform wgs84.Func) (chunk.InputFeature, error) {
-	g := chunk.GeoJSONFeature(header, f)
-	if g.Geometry == nil {
-		return chunk.InputFeature{}, errors.New("feature missing geometry")
-	}
-	if g.Geometry.Type == "GeometryCollection" {
-		return chunk.InputFeature{}, errors.New("geometry collections are not supported")
-	}
-	if transform != nil {
-		if err := TransformGeometry(g.Geometry, transform); err != nil {
-			return chunk.InputFeature{}, err
-		}
-	}
-	raw, err := json.Marshal(g.Geometry.Coordinates)
+	shape, err := chunk.ParseFlat(header, f)
 	if err != nil {
 		return chunk.InputFeature{}, err
 	}
-	props := make(map[string]json.RawMessage, len(g.Properties))
-	for name, value := range g.Properties {
-		encoded, err := json.Marshal(value)
-		if err != nil {
+	if shape == nil {
+		return chunk.InputFeature{}, errors.New("feature missing geometry")
+	}
+	if transform != nil {
+		if err := shape.Transform(transform); err != nil {
 			return chunk.InputFeature{}, err
 		}
-		props[name] = encoded
 	}
 	return chunk.InputFeature{
-		Geometry:   chunk.RawGeometry{Type: g.Geometry.Type, Coordinates: raw},
-		Properties: props,
+		Parsed:     shape,
+		Properties: chunk.DecodePropertyText(f.PropertiesBytes(), chunk.HeaderColumns(header)),
 	}, nil
-}
-
-func TransformGeometry(g *chunk.Geometry, fn wgs84.Func) error {
-	switch c := g.Coordinates.(type) {
-	case []float64:
-		return transformPoint(c, fn)
-	case [][]float64:
-		for _, p := range c {
-			if err := transformPoint(p, fn); err != nil {
-				return err
-			}
-		}
-	case [][][]float64:
-		for _, r := range c {
-			for _, p := range r {
-				if err := transformPoint(p, fn); err != nil {
-					return err
-				}
-			}
-		}
-	case [][][][]float64:
-		for _, poly := range c {
-			for _, r := range poly {
-				for _, p := range r {
-					if err := transformPoint(p, fn); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	default:
-		return fmt.Errorf("unsupported coordinates %T", g.Coordinates)
-	}
-	return nil
-}
-
-func transformPoint(p []float64, fn wgs84.Func) error {
-	if len(p) < 2 {
-		return errors.New("invalid coordinate")
-	}
-	x, y, _, err := fn(p[0], p[1], 0)
-	if err != nil {
-		return err
-	}
-	p[0], p[1] = x, y
-	return nil
 }
 
 var (
