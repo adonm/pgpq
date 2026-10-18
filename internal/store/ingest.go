@@ -70,6 +70,23 @@ var partitions = []partition{
 	primary key (collection, chunk_id, "column")
 )`,
 	},
+	{
+		parent: "attr_chunks",
+		table: `create table %[1]s (
+	id bigint not null,
+	collection text not null,
+	feature_base bigint not null default 0,
+	feature_count int not null,
+	size_bytes int not null,
+	checksum text,
+	columns jsonb not null default '[]',
+	data bytea storage external not null,
+	primary key (collection, id)
+)`,
+		indexes: []string{
+			`create index on %[1]s (feature_base)`,
+		},
+	},
 }
 
 func partitionName(parent, collection string) string {
@@ -415,6 +432,14 @@ func (i *Ingest) PutChunkStats(ctx context.Context, chunkID int64, rows []stats.
 		from unnest($3::text[], $4::float8[], $5::float8[], $6::bigint[], $7::bytea[])
 			as input(name, min, max, nulls, bloom)`,
 		i.collection, chunkID, names, mins, maxs, nulls, blooms)
+	return err
+}
+
+func (i *Ingest) PutAttrChunk(ctx context.Context, featureBase int64, payload Payload) error {
+	_, err := i.tx.Exec(ctx, `
+		insert into `+i.staged("attr_chunks")+` (id, collection, feature_base, feature_count, size_bytes, checksum, columns, data)
+		values (nextval(pg_get_serial_sequence('attr_chunks', 'id')), $1, $2, $3, $4, $5, $6::jsonb, $7)`,
+		i.collection, featureBase, payload.Count, payload.Size, payload.Checksum, payload.Columns, payload.Data)
 	return err
 }
 

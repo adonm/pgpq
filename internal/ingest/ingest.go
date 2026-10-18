@@ -35,6 +35,7 @@ var ErrInvalid = errors.New("invalid upload")
 const (
 	sortWindowBytes  = 8 << 20
 	targetChunkBytes = 2 << 20
+	targetAttrBytes  = 8 << 20
 	maxChunkFeatures = 50000
 	maxChunkBytes    = 8 << 20
 )
@@ -60,6 +61,14 @@ func featureEstimate(f chunk.InputFeature) int {
 	} else {
 		n += len(f.Geometry.Coordinates)
 	}
+	for _, value := range f.Properties {
+		n += len(value) + 3
+	}
+	return n
+}
+
+func attrSize(f chunk.InputFeature) int {
+	n := 0
 	for _, value := range f.Properties {
 		n += len(value) + 3
 	}
@@ -94,15 +103,24 @@ type Result struct {
 type prepResult struct {
 	payload  store.Payload
 	rows     []stats.Row
+	attrBase int64
+	attr     bool
 	prepare  time.Duration
 	stats    time.Duration
 	compress time.Duration
 	err      error
 }
 
+type attrRequest struct {
+	base int64
+	rows []map[string]json.RawMessage
+	cols []chunk.Column
+}
+
 type prepRequest struct {
 	raw  []byte
 	tier int
+	attr *attrRequest
 	out  chan prepResult
 }
 
@@ -125,6 +143,7 @@ type pipeline struct {
 	stats      atomic.Int64
 	compress   atomic.Int64
 	store      atomic.Int64
+	attr       atomic.Int64
 }
 
 func newPipeline(ctx context.Context, ing *store.Ingest, collection string) *pipeline {
@@ -139,6 +158,10 @@ func newPipeline(ctx context.Context, ing *store.Ingest, collection string) *pip
 		go func() {
 			defer p.workers.Done()
 			for req := range p.jobs {
+				if req.attr != nil {
+					req.out <- p.prepareAttrs(req.attr)
+					continue
+				}
 				req.out <- p.prepare(req.raw, req.tier)
 			}
 		}()
@@ -150,6 +173,16 @@ func (p *pipeline) submit(raw []byte, tier int) error {
 	req := &prepRequest{raw: raw, tier: tier, out: make(chan prepResult, 1)}
 	p.jobs <- req
 	p.futures = append(p.futures, &future{req: req, raw: raw})
+	if len(p.futures) >= p.limit {
+		return p.drain()
+	}
+	return nil
+}
+
+func (p *pipeline) submitAttrs(base int64, rows []map[string]json.RawMessage, cols []chunk.Column) error {
+	req := &prepRequest{attr: &attrRequest{base: base, rows: rows, cols: cols}, out: make(chan prepResult, 1)}
+	p.jobs <- req
+	p.futures = append(p.futures, &future{req: req})
 	if len(p.futures) >= p.limit {
 		return p.drain()
 	}
@@ -168,6 +201,14 @@ func (p *pipeline) drain() error {
 		p.stats.Add(int64(res.stats))
 		p.compress.Add(int64(res.compress))
 		start := time.Now()
+		if res.attr {
+			if err := p.ing.PutAttrChunk(p.ctx, res.attrBase, res.payload); err != nil {
+				return err
+			}
+			p.attr.Add(int64(res.prepare))
+			p.store.Add(int64(time.Since(start)))
+			continue
+		}
 		id, err := p.ing.PutChunk(p.ctx, res.payload)
 		if err != nil {
 			return err
@@ -188,6 +229,27 @@ func (p *pipeline) finish() error {
 		p.workers.Wait()
 	})
 	return err
+}
+
+func (p *pipeline) prepareAttrs(req *attrRequest) prepResult {
+	start := time.Now()
+	blob, err := chunk.EncodeAttrs(req.cols, req.rows)
+	if err != nil {
+		return prepResult{err: err}
+	}
+	sum := sha256.Sum256(blob)
+	columns, err := json.Marshal(columnList(req.cols))
+	if err != nil {
+		return prepResult{err: err}
+	}
+	return prepResult{
+		attr: true, attrBase: req.base,
+		payload: store.Payload{
+			Data: blob, Size: len(blob), Count: len(req.rows),
+			Checksum: hex.EncodeToString(sum[:]), Columns: string(columns),
+		},
+		prepare: time.Since(start),
+	}
 }
 
 func (p *pipeline) prepare(raw []byte, tier int) prepResult {
@@ -285,6 +347,21 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		{tier: 1, stride: 10, tol: 0.01, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
 		{tier: 2, stride: 100, tol: 0.05, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
 	}
+	var attrRows []map[string]json.RawMessage
+	attrBytes := 0
+	attrBase := int64(0)
+	attrFinish := func() error {
+		if len(attrRows) == 0 {
+			return nil
+		}
+		if err := p.submitAttrs(attrBase, attrRows, cols); err != nil {
+			return err
+		}
+		attrBase += int64(len(attrRows))
+		attrRows = nil
+		attrBytes = 0
+		return nil
+	}
 	flush := func() error {
 		data, err := p.putChunk(opts.Collection, cols, batch, 0)
 		if err != nil {
@@ -318,8 +395,15 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		for i := range window {
 			batch = append(batch, window[i])
 			sizer.add(window[i])
+			attrRows = append(attrRows, window[i].Properties)
+			attrBytes += attrSize(window[i])
 			if sizer.full(len(batch)) {
 				if err := flush(); err != nil {
+					return err
+				}
+			}
+			if attrBytes >= targetAttrBytes {
+				if err := attrFinish(); err != nil {
 					return err
 				}
 			}
@@ -369,6 +453,9 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 			return Result{}, err
 		}
 	}
+	if err := attrFinish(); err != nil {
+		return Result{}, err
+	}
 	if result.Features == 0 {
 		return Result{}, invalid(errors.New("upload contains no features"))
 	}
@@ -396,7 +483,7 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	slog.Info("ingest", "collection", opts.Collection, "features", result.Features, "chunks", result.Chunks,
 		"stream", stream, "encode", time.Duration(p.encode.Load()), "prepare_sum", time.Duration(p.prepared.Load()),
 		"stats_sum", time.Duration(p.stats.Load()), "compress_sum", time.Duration(p.compress.Load()),
-		"store", time.Duration(p.store.Load()), "tiers", tiers, "commit", commit, "total", time.Since(started))
+		"store", time.Duration(p.store.Load()), "attrs", time.Duration(p.attr.Load()), "tiers", tiers, "commit", commit, "total", time.Since(started))
 	return result, nil
 }
 

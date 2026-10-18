@@ -226,6 +226,17 @@ func BenchmarkAttrProjection(b *testing.B) {
 			}
 		}
 	})
+	b.Run("project-typed", func(b *testing.B) {
+		reader, ok := OpenAttrs(blob)
+		if !ok {
+			b.Fatal("header")
+		}
+		for i := 0; i < b.N; i++ {
+			if _, err := reader.Values("c_string"); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 	b.Run("decode-all-columns", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			if _, err := DecodeAttrs(blob); err != nil {

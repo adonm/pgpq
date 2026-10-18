@@ -21,11 +21,13 @@ const (
 	AttrText
 	AttrJSON
 	attrList AttrKind = 0x80
+	attrDict AttrKind = 0x40
 )
 
 func (k AttrKind) List() AttrKind { return k | attrList }
 func (k AttrKind) IsList() bool   { return k&attrList != 0 }
-func (k AttrKind) Base() AttrKind { return k &^ attrList }
+func (k AttrKind) Dict() bool     { return k&attrDict != 0 }
+func (k AttrKind) Base() AttrKind { return k &^ (attrList | attrDict) }
 func (k AttrKind) column() uint8  { return uint8(k) }
 
 type AttrColumn struct {
@@ -52,6 +54,117 @@ func (f AttrFile) Column(name string) (AttrColumn, bool) {
 		}
 	}
 	return AttrColumn{}, false
+}
+
+func (f AttrFile) ColumnTypes() map[string]flattypes.ColumnType {
+	types := make(map[string]flattypes.ColumnType, len(f.Columns))
+	for _, column := range f.Columns {
+		types[column.Name] = column.Kind.ColumnType()
+	}
+	return types
+}
+
+func (k AttrKind) ColumnType() flattypes.ColumnType {
+	switch k.Base() {
+	case AttrBool:
+		return flattypes.ColumnTypeBool
+	case AttrInt:
+		return flattypes.ColumnTypeLong
+	case AttrFloat:
+		return flattypes.ColumnTypeDouble
+	case AttrJSON:
+		return flattypes.ColumnTypeJson
+	}
+	return flattypes.ColumnTypeString
+}
+
+type AttrValues struct {
+	Kind    AttrKind
+	Rows    int
+	Present []bool
+	Bools   []bool
+	Ints    []int64
+	Floats  []float64
+	Texts   []string
+	Raw     [][]byte
+	Offsets []uint32
+	Child   *AttrValues
+}
+
+func (v AttrValues) Has(i int) bool {
+	return i >= 0 && i < len(v.Present) && v.Present[i]
+}
+
+func (v AttrValues) Value(i int) any {
+	if !v.Has(i) {
+		return nil
+	}
+	if v.Kind.IsList() {
+		return v.List(i)
+	}
+	switch v.Kind.Base() {
+	case AttrBool:
+		return v.Bools[i]
+	case AttrInt:
+		return v.Ints[i]
+	case AttrFloat:
+		return v.Floats[i]
+	case AttrText:
+		return v.Texts[i]
+	case AttrJSON:
+		var out any
+		if json.Unmarshal(v.Raw[i], &out) == nil {
+			return out
+		}
+		return string(v.Raw[i])
+	}
+	return nil
+}
+
+func (v AttrValues) List(i int) []any {
+	if !v.Has(i) || v.Child == nil {
+		return nil
+	}
+	lo, hi := int(v.Offsets[i]), int(v.Offsets[i+1])
+	out := make([]any, 0, hi-lo)
+	for j := lo; j < hi; j++ {
+		if value := v.Child.Value(j); value != nil {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+type AttrReader struct {
+	file AttrFile
+	data []byte
+}
+
+func OpenAttrs(data []byte) (*AttrReader, bool) {
+	file, ok := ReadAttrHeader(data)
+	if !ok {
+		return nil, false
+	}
+	return &AttrReader{file: file, data: data}, true
+}
+
+func (r *AttrReader) File() AttrFile {
+	return r.file
+}
+
+func (r *AttrReader) Values(name string) (AttrValues, error) {
+	column, ok := r.file.Column(name)
+	if !ok {
+		return AttrValues{}, fmt.Errorf("chunk: no attribute column %q", name)
+	}
+	if column.Offset < 0 || column.Offset+column.Length > len(r.data) {
+		return AttrValues{}, errors.New("chunk: attribute column out of range")
+	}
+	section, err := Decompress(r.data[column.Offset : column.Offset+column.Length])
+	if err != nil {
+		return AttrValues{}, err
+	}
+	return decodeAttrValues(column.Kind, section, r.file.Rows)
 }
 
 const attrMagic = "PFA1"
@@ -164,22 +277,19 @@ func DecodeAttrs(data []byte) ([]map[string]any, error) {
 }
 
 func DecodeAttrColumn(data []byte, name string) ([]any, error) {
-	file, ok := ReadAttrHeader(data)
+	reader, ok := OpenAttrs(data)
 	if !ok {
 		return nil, errors.New("chunk: attribute blob unreadable")
 	}
-	column, ok := file.Column(name)
-	if !ok {
-		return nil, fmt.Errorf("chunk: no attribute column %q", name)
-	}
-	if column.Offset < 0 || column.Offset+column.Length > len(data) {
-		return nil, errors.New("chunk: attribute column out of range")
-	}
-	section, err := Decompress(data[column.Offset : column.Offset+column.Length])
+	values, err := reader.Values(name)
 	if err != nil {
 		return nil, err
 	}
-	return decodeAttrValues(column.Kind, section, file.Rows)
+	out := make([]any, values.Rows)
+	for i := range out {
+		out[i] = values.Value(i)
+	}
+	return out, nil
 }
 
 func encodeAttrHeader(file AttrFile) []byte {
@@ -229,16 +339,51 @@ func attrKind(col Column, rows []map[string]json.RawMessage) AttrKind {
 	case flattypes.ColumnTypeFloat, flattypes.ColumnTypeDouble:
 		return AttrFloat
 	case flattypes.ColumnTypeString, flattypes.ColumnTypeDateTime, flattypes.ColumnTypeBinary:
+		if kind := attrTextKind(rows, col.Name); kind != 0 {
+			return kind
+		}
 		return AttrText
 	case flattypes.ColumnTypeJson:
+		list := false
 		for _, row := range rows {
-			if value, ok := attrValue(row[col.Name]); ok && len(value) > 0 && value[0] == '[' {
-				return AttrJSON.List()
+			value, ok := attrValue(row[col.Name])
+			if !ok {
+				continue
 			}
+			if len(value) == 0 || value[0] != '[' {
+				return AttrJSON
+			}
+			list = true
+		}
+		if list {
+			return AttrJSON.List()
 		}
 		return AttrJSON
 	}
 	return AttrText
+}
+
+const attrDictBudget = 128
+
+func attrTextKind(rows []map[string]json.RawMessage, name string) AttrKind {
+	if len(rows) < attrDictBudget {
+		return 0
+	}
+	distinct := map[string]struct{}{}
+	for _, row := range rows {
+		value, ok := attrValue(row[name])
+		if !ok {
+			continue
+		}
+		distinct[string(unquote(value))] = struct{}{}
+		if len(distinct) > attrDictBudget {
+			return 0
+		}
+	}
+	if len(distinct) == 0 {
+		return 0
+	}
+	return AttrText | attrDict
 }
 
 func attrValues(rows []map[string]json.RawMessage, name string) []json.RawMessage {
@@ -298,7 +443,7 @@ func encodeAttrValues(kind AttrKind, values []json.RawMessage) ([]byte, int, *fl
 		}
 		body.Write(child)
 	} else {
-		switch kind {
+		switch kind.Base() {
 		case AttrBool:
 			buf := make([]byte, rows)
 			for i, value := range values {
@@ -358,26 +503,37 @@ func encodeAttrValues(kind AttrKind, values []json.RawMessage) ([]byte, int, *fl
 				keep(f)
 			}
 			body.Write(buf)
-		case AttrText, AttrJSON:
-			offsets := make([]uint32, rows+1)
-			var blob []byte
+		case AttrText:
+			texts := make([][]byte, rows)
 			for i, value := range values {
 				text, ok := attrValue(value)
 				if !ok {
 					nulls++
-					offsets[i+1] = uint32(len(blob))
 					continue
 				}
-				if kind == AttrText {
-					blob = append(blob, unquote(text)...)
-				} else {
-					blob = append(blob, text...)
-				}
+				texts[i] = unquote(text)
 				set(i)
-				offsets[i+1] = uint32(len(blob))
 			}
-			body.Write(attrU32s(offsets))
-			body.Write(blob)
+			if kind.Dict() {
+				body.WriteByte(1)
+				body.Write(encodeTextDict(texts))
+			} else {
+				body.WriteByte(0)
+				body.Write(encodeByteOffsets(texts))
+			}
+		case AttrJSON:
+			raw := make([][]byte, rows)
+			for i, value := range values {
+				text, ok := attrValue(value)
+				if !ok {
+					nulls++
+					continue
+				}
+				raw[i] = text
+				set(i)
+			}
+			body.WriteByte(0)
+			body.Write(encodeByteOffsets(raw))
 		}
 	}
 	out := make([]byte, 0, len(valid)+body.Len())
@@ -386,78 +542,178 @@ func encodeAttrValues(kind AttrKind, values []json.RawMessage) ([]byte, int, *fl
 	return out, nulls, min, max, nil
 }
 
-func decodeAttrValues(kind AttrKind, section []byte, rows int) ([]any, error) {
+func encodeByteOffsets(values [][]byte) []byte {
+	offsets := make([]uint32, len(values)+1)
+	var blob []byte
+	for i, value := range values {
+		blob = append(blob, value...)
+		offsets[i+1] = uint32(len(blob))
+	}
+	out := attrU32s(offsets)
+	return append(out, blob...)
+}
+
+func encodeTextDict(texts [][]byte) []byte {
+	index := map[string]uint32{}
+	var order []string
+	for _, text := range texts {
+		if text == nil {
+			continue
+		}
+		if _, ok := index[string(text)]; !ok {
+			index[string(text)] = uint32(len(order))
+			order = append(order, string(text))
+		}
+	}
+	dictOffsets := make([]uint32, len(order)+1)
+	var dictBlob []byte
+	for i, text := range order {
+		dictBlob = append(dictBlob, text...)
+		dictOffsets[i+1] = uint32(len(dictBlob))
+	}
+	codes := make([]uint32, len(texts))
+	for i, text := range texts {
+		if text != nil {
+			codes[i] = index[string(text)]
+		}
+	}
+	var b bytes.Buffer
+	var tmp [4]byte
+	binary.LittleEndian.PutUint32(tmp[:], uint32(len(order)))
+	b.Write(tmp[:])
+	b.Write(attrU32s(dictOffsets))
+	b.Write(dictBlob)
+	b.Write(attrU32s(codes))
+	return b.Bytes()
+}
+
+func decodeAttrValues(kind AttrKind, section []byte, rows int) (AttrValues, error) {
+	values := AttrValues{Kind: kind, Rows: rows, Present: make([]bool, rows)}
 	validLen := (rows + 7) / 8
 	if len(section) < validLen {
-		return nil, errors.New("chunk: attribute section truncated")
+		return values, errors.New("chunk: attribute section truncated")
 	}
 	valid, body := section[:validLen], section[validLen:]
-	isValid := func(i int) bool { return valid[i/8]&(1<<(uint(i)%8)) != 0 }
-	out := make([]any, rows)
+	for i := 0; i < rows; i++ {
+		values.Present[i] = valid[i/8]&(1<<(uint(i)%8)) != 0
+	}
 	if kind.IsList() {
 		offsets, rest, ok := attrReadU32s(body, rows+1)
 		if !ok {
-			return nil, errors.New("chunk: attribute list offsets truncated")
+			return values, errors.New("chunk: attribute list offsets truncated")
 		}
+		values.Offsets = offsets
 		child, err := decodeAttrValues(kind.Base(), rest, int(offsets[rows]))
 		if err != nil {
-			return nil, err
+			return values, err
 		}
-		for i := 0; i < rows; i++ {
-			if !isValid(i) {
-				continue
-			}
-			out[i] = append([]any{}, child[int(offsets[i]):int(offsets[i+1])]...)
-		}
-		return out, nil
+		values.Child = &child
+		return values, nil
 	}
-	switch kind {
+	switch kind.Base() {
 	case AttrBool:
 		if len(body) < rows {
-			return nil, errors.New("chunk: attribute bools truncated")
+			return values, errors.New("chunk: attribute bools truncated")
 		}
+		values.Bools = make([]bool, rows)
 		for i := 0; i < rows; i++ {
-			if isValid(i) {
-				out[i] = body[i] != 0
+			if values.Present[i] {
+				values.Bools[i] = body[i] != 0
 			}
 		}
 	case AttrInt:
 		if len(body) < rows*8 {
-			return nil, errors.New("chunk: attribute ints truncated")
+			return values, errors.New("chunk: attribute ints truncated")
 		}
+		values.Ints = make([]int64, rows)
 		for i := 0; i < rows; i++ {
-			if isValid(i) {
-				out[i] = int64(binary.LittleEndian.Uint64(body[i*8:]))
+			if values.Present[i] {
+				values.Ints[i] = int64(binary.LittleEndian.Uint64(body[i*8:]))
 			}
 		}
 	case AttrFloat:
 		if len(body) < rows*8 {
-			return nil, errors.New("chunk: attribute floats truncated")
+			return values, errors.New("chunk: attribute floats truncated")
 		}
+		values.Floats = make([]float64, rows)
 		for i := 0; i < rows; i++ {
-			if isValid(i) {
-				out[i] = math.Float64frombits(binary.LittleEndian.Uint64(body[i*8:]))
+			if values.Present[i] {
+				values.Floats[i] = math.Float64frombits(binary.LittleEndian.Uint64(body[i*8:]))
 			}
 		}
-	case AttrText, AttrJSON:
-		offsets, blob, ok := attrReadU32s(body, rows+1)
-		if !ok {
-			return nil, errors.New("chunk: attribute offsets truncated")
+	case AttrText:
+		if len(body) < 1 {
+			return values, errors.New("chunk: attribute text truncated")
 		}
+		mode := body[0]
+		body = body[1:]
+		if mode == 1 {
+			return decodeTextDict(values, body)
+		}
+		raw, err := decodeByteOffsets(body, rows)
+		if err != nil {
+			return values, err
+		}
+		values.Texts = make([]string, rows)
 		for i := 0; i < rows; i++ {
-			if !isValid(i) {
-				continue
-			}
-			lo, hi := int(offsets[i]), int(offsets[i+1])
-			if hi > len(blob) {
-				return nil, errors.New("chunk: attribute blob truncated")
-			}
-			if kind == AttrText {
-				out[i] = string(blob[lo:hi])
-			} else if err := json.Unmarshal(blob[lo:hi], &out[i]); err != nil {
-				return nil, err
+			if values.Present[i] {
+				values.Texts[i] = string(raw[i])
 			}
 		}
+	case AttrJSON:
+		if len(body) < 1 {
+			return values, errors.New("chunk: attribute json truncated")
+		}
+		body = body[1:]
+		raw, err := decodeByteOffsets(body, rows)
+		if err != nil {
+			return values, err
+		}
+		values.Raw = raw
+	}
+	return values, nil
+}
+
+func decodeTextDict(values AttrValues, body []byte) (AttrValues, error) {
+	if len(body) < 4 {
+		return values, errors.New("chunk: attribute dictionary truncated")
+	}
+	count := int(binary.LittleEndian.Uint32(body))
+	rest := body[4:]
+	dictOffsets, rest, ok := attrReadU32s(rest, count+1)
+	if !ok {
+		return values, errors.New("chunk: attribute dictionary offsets truncated")
+	}
+	dictLen := int(dictOffsets[count])
+	if len(rest) < dictLen+values.Rows*4 {
+		return values, errors.New("chunk: attribute dictionary truncated")
+	}
+	dict := make([]string, count)
+	for i := 0; i < count; i++ {
+		dict[i] = string(rest[dictOffsets[i]:dictOffsets[i+1]])
+	}
+	codes := rest[dictLen:]
+	values.Texts = make([]string, values.Rows)
+	for i := 0; i < values.Rows; i++ {
+		if values.Present[i] {
+			values.Texts[i] = dict[binary.LittleEndian.Uint32(codes[i*4:])]
+		}
+	}
+	return values, nil
+}
+
+func decodeByteOffsets(body []byte, rows int) ([][]byte, error) {
+	offsets, blob, ok := attrReadU32s(body, rows+1)
+	if !ok {
+		return nil, errors.New("chunk: attribute offsets truncated")
+	}
+	out := make([][]byte, rows)
+	for i := 0; i < rows; i++ {
+		lo, hi := int(offsets[i]), int(offsets[i+1])
+		if hi > len(blob) {
+			return nil, errors.New("chunk: attribute blob truncated")
+		}
+		out[i] = blob[lo:hi]
 	}
 	return out, nil
 }

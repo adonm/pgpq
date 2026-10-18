@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -71,6 +72,40 @@ type IsNull struct {
 }
 
 func (*IsNull) node() {}
+
+func Properties(e Expr) []string {
+	set := map[string]bool{}
+	collectProperties(e, set)
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func collectProperties(e Expr, set map[string]bool) {
+	switch x := e.(type) {
+	case *Compare:
+		set[x.Prop] = true
+	case *Between:
+		set[x.Prop] = true
+	case *In:
+		set[x.Prop] = true
+	case *Like:
+		set[x.Prop] = true
+	case *IsNull:
+		set[x.Prop] = true
+	case andExpr:
+		collectProperties(x.left, set)
+		collectProperties(x.right, set)
+	case orExpr:
+		collectProperties(x.left, set)
+		collectProperties(x.right, set)
+	case notExpr:
+		collectProperties(x.inner, set)
+	}
+}
 
 func Number(text string) (any, bool) {
 	if n, err := strconv.ParseInt(text, 10, 64); err == nil {

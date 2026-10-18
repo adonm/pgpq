@@ -464,21 +464,49 @@ func (s *Server) walkCandidates(ctx context.Context, target store.CollectionInfo
 	if err != nil {
 		return offset, err
 	}
+	sidecar, err := s.Store.AttrReady(ctx, target.Name)
+	if err != nil {
+		return offset, err
+	}
 	for _, batch := range s.chunkBatches(ctx, target.Name, ids) {
-		rows, errs := s.fetchRows(ctx, target.Name, batch)
-		metas := make([]store.ChunkMeta, len(batch))
-		for j, id := range batch {
+		var precomputed map[int64][]int
+		if sidecar {
+			precomputed, sidecar, err = s.attrFilter(ctx, target, batch, filter)
+			if err != nil {
+				return offset, err
+			}
+		}
+		read := batch
+		if precomputed != nil {
+			read = make([]int64, 0, len(batch))
+			for _, id := range batch {
+				if len(precomputed[id]) > 0 {
+					read = append(read, id)
+				}
+			}
+			if len(read) == 0 {
+				start = nil
+				continue
+			}
+		}
+		rows, errs := s.fetchRows(ctx, target.Name, read)
+		metas := make([]store.ChunkMeta, len(read))
+		for j, id := range read {
 			metas[j] = store.ChunkMeta{ID: id}
 		}
 		chunks, features, errs := s.decodeChunks(ctx, target, metas, rows, errs)
-		for j, id := range batch {
+		for j, id := range read {
 			if out.remaining() == 0 {
 				return offset, nil
 			}
 			if errs[j] != nil {
 				return offset, fmt.Errorf("chunk %d: %w", id, errs[j])
 			}
-			if offset, err = emit(target, q.bbox, id, chunks[j], features[j], matchingOrds(chunks[j], features[j], filter), start, offset, last, out); err != nil {
+			ords := precomputed[id]
+			if precomputed == nil {
+				ords = matchingOrds(chunks[j], features[j], filter)
+			}
+			if offset, err = emit(target, q.bbox, id, chunks[j], features[j], ords, start, offset, last, out); err != nil {
 				return offset, err
 			}
 		}
@@ -491,6 +519,23 @@ func (s *Server) countCandidates(ctx context.Context, target store.CollectionInf
 	ids, err := s.Store.CandidateChunks(ctx, target, nil, filter, 0)
 	if err != nil {
 		return 0, err
+	}
+	sidecar, err := s.Store.AttrReady(ctx, target.Name)
+	if err != nil {
+		return 0, err
+	}
+	if sidecar {
+		precomputed, ok, err := s.attrFilter(ctx, target, ids, filter)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			var total int64
+			for _, id := range ids {
+				total += int64(len(precomputed[id]))
+			}
+			return total, nil
+		}
 	}
 	var total int64
 	for _, batch := range s.chunkBatches(ctx, target.Name, ids) {
