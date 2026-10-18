@@ -796,3 +796,92 @@ func TestPostgresRecreatedNameServesCurrentBytes(t *testing.T) {
 	}
 	assertCurrentFile(t, h, fresh, "/collections/"+view+"/items.fgb", 10, staleTag)
 }
+
+func extraColumnFGB(t *testing.T, count int) []byte {
+	t.Helper()
+	features := make([]chunk.InputFeature, 0, count)
+	for i := 0; i < count; i++ {
+		coords, err := json.Marshal([]float64{7.4 + float64(i%10)*0.002, 43.72 + float64(i/10)*0.002})
+		if err != nil {
+			t.Fatal(err)
+		}
+		features = append(features, chunk.InputFeature{
+			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords},
+			Properties: map[string]json.RawMessage{
+				"id":    json.RawMessage(strconv.Itoa(i)),
+				"name":  json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("feature-%d", i))),
+				"extra": json.RawMessage(`"x"`),
+			},
+		})
+	}
+	body, err := chunk.Encode("itest", features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestPostgresViewMemberSchemaReplace(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	view := "itest_schema_view"
+	members := []string{"itest_schema_a", "itest_schema_b"}
+	for _, name := range append(members, view) {
+		st.DropCollection(ctx, name)
+		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	}
+	h := New(st)
+	for _, name := range members {
+		if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 201 {
+			t.Fatalf("ingest %s = %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+	if w := call(h, "PUT", "/collections/"+view, "application/json", []byte(`{"members":["itest_schema_a","itest_schema_b"]}`)); w.Code != 201 {
+		t.Fatalf("view = %d: %s", w.Code, w.Body.String())
+	}
+	before := call(h, "GET", "/collections/"+view+"/items.fgb", "", nil)
+	if header := fgbHeader(before.Body.Bytes()); before.Code != 200 || header == nil || header.FeaturesCount() != 10 {
+		t.Fatalf("view items.fgb = %d: %s", before.Code, before.Body.String())
+	}
+	memberVersion := func() int64 {
+		info, err := st.Collection(ctx, members[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Version
+	}
+	version := memberVersion()
+
+	w := call(h, "PUT", "/collections/"+members[0], "application/flatgeobuf", extraColumnFGB(t, 5))
+	if w.Code != 422 || !bytes.Contains(w.Body.Bytes(), []byte("different schema")) {
+		t.Fatalf("replace with another schema = %d: %s", w.Code, w.Body.String())
+	}
+	if got := memberVersion(); got != version {
+		t.Fatalf("member version = %d after a rejected replace, want %d", got, version)
+	}
+	if got := featureCount(t, st, members[0]); got != 5 {
+		t.Fatalf("member feature count = %d after a rejected replace, want 5", got)
+	}
+	after := call(h, "GET", "/collections/"+view+"/items.fgb", "", nil)
+	if after.Code != 200 || after.Header().Get("ETag") != before.Header().Get("ETag") || !bytes.Equal(after.Body.Bytes(), before.Body.Bytes()) {
+		t.Fatalf("view changed after a rejected replace: %d, ETag %s, want %s", after.Code, after.Header().Get("ETag"), before.Header().Get("ETag"))
+	}
+	var leftovers int
+	if err := st.Pool.QueryRow(ctx, `select count(*) from pg_tables where schemaname = 'staging'`).Scan(&leftovers); err != nil {
+		t.Fatal(err)
+	}
+	if leftovers != 0 {
+		t.Fatalf("staging tables left behind: %d", leftovers)
+	}
+
+	if w := call(h, "PUT", "/collections/"+members[0], "application/flatgeobuf", fixtureFGB(t, 6)); w.Code != 200 {
+		t.Fatalf("same-schema replace = %d: %s", w.Code, w.Body.String())
+	}
+	var counted struct {
+		NumberMatched *int64 `json:"numberMatched"`
+	}
+	w = call(h, "GET", "/collections/"+view+"/items?limit=1&numberMatched=true", "", nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &counted); err != nil || counted.NumberMatched == nil || *counted.NumberMatched != 11 {
+		t.Fatalf("view after a same-schema replace = %s, want 11 matches", w.Body.String())
+	}
+}

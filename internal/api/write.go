@@ -37,7 +37,7 @@ func (s *Server) putCollectionData(w http.ResponseWriter, r *http.Request) {
 		TimeColumn: r.URL.Query().Get("time_column"),
 		Flatten:    flattenJSON(r),
 	})
-	if errors.Is(err, ingest.ErrInvalid) {
+	if errors.Is(err, ingest.ErrInvalid) || errors.Is(err, store.ErrInvalidView) {
 		s.metrics.recordIngest("invalid", 0, 0)
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return

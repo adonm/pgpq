@@ -169,6 +169,7 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 		lengths      []int64
 		names        []string
 		memberHeader []byte
+		schema       []byte
 		features     int64
 	)
 	for _, member := range members {
@@ -180,6 +181,14 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 		if err != nil {
 			return err
 		}
+		var columns []byte
+		if err := tx.QueryRow(ctx, `select columns from chunks where collection = $1 and tier = 0 order by id limit 1`, member.Name).Scan(&columns); err != nil {
+			return err
+		}
+		if schema != nil && !bytes.Equal(columns, schema) {
+			return fmt.Errorf("%w: member %q has a different schema from the other members of view %q", ErrInvalidView, member.Name, info.Name)
+		}
+		schema = columns
 		if memberHeader == nil {
 			if memberHeader, err = readVirtual(ctx, tx, member.Name, member.Version, 0, 0, 0, int64(layout.HeaderBytes)); err != nil {
 				return err
