@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
@@ -27,16 +26,13 @@ type VirtualRun struct {
 }
 
 type virtualTier struct {
-	header   []byte
-	geometry flattypes.GeometryType
-	leaves   [][]fgb.Leaf
-	lengths  []int64
-	count    uint64
-}
-
-type tierLayout struct {
-	header, index                  []byte
-	features, chunks, featureBytes int64
+	header       []byte
+	geometry     flattypes.GeometryType
+	features     uint64
+	featureBytes int64
+	chunks       int
+	base         int64
+	sink         *nodeSink
 }
 
 func (i *Ingest) buildVirtual(ctx context.Context) error {
@@ -44,59 +40,23 @@ func (i *Ingest) buildVirtual(ctx context.Context) error {
 	if err := i.tx.QueryRow(ctx, `select version from collections where name = $1`, i.collection).Scan(&version); err != nil {
 		return err
 	}
-	layouts := map[int]tierLayout{}
-	for tier, chunks := range i.virtual {
-		if len(chunks.leaves) == 0 {
-			continue
-		}
-		index, envelope, ok := fgb.Index(chunks.leaves, chunks.lengths, fgb.NodeSize)
-		if !ok {
-			continue
-		}
-		header, ok := fgb.Header(i.collection, chunks.header, chunks.count, envelope, chunks.geometry)
-		if !ok {
-			continue
-		}
-		layouts[tier] = tierLayout{
-			header: header, index: index, features: int64(chunks.count),
-			chunks: int64(len(chunks.lengths)), featureBytes: total(chunks.lengths),
-		}
-	}
-	return writeLayouts(ctx, i.tx, i.collection, version, layouts)
-}
-
-func writeLayouts(ctx context.Context, tx pgx.Tx, collection string, version int64, tiers map[int]tierLayout) error {
-	if _, err := tx.Exec(ctx, `delete from virtual_file where collection = $1 and version <> $2`, collection, version); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `delete from virtual_segment where collection = $1 and version <> $2`, collection, version); err != nil {
-		return err
-	}
-	for tier, layout := range tiers {
-		if _, err := tx.Exec(ctx, `
-			insert into virtual_file (collection, version, tier, header_bytes, index_bytes, feature_bytes, chunks, features)
-			values ($1, $2, $3, $4, $5, $6, $7, $8)
-			on conflict (collection, version, tier) do update set
-				header_bytes = excluded.header_bytes, index_bytes = excluded.index_bytes,
-				feature_bytes = excluded.feature_bytes, chunks = excluded.chunks, features = excluded.features`,
-			collection, version, tier, len(layout.header), len(layout.index), layout.featureBytes, layout.chunks, layout.features); err != nil {
+	fileTable := i.staged("virtual_file")
+	segmentTable := i.staged("virtual_segment")
+	nodeTable := i.staged("virtual_node")
+	for tier, virtual := range i.virtual {
+		if err := virtual.sink.close(ctx); err != nil {
 			return err
 		}
-		for kind, data := range [][]byte{layout.header, layout.index} {
-			for ordinal, at := 0, 0; at < len(data); ordinal++ {
-				end := min(at+int(fgb.SegmentBytes), len(data))
-				if _, err := tx.Exec(ctx, `
-					insert into virtual_segment (collection, version, tier, kind, ordinal, data)
-					values ($1, $2, $3, $4, $5, $6)
-					on conflict (collection, version, tier, kind, ordinal) do update set data = excluded.data`,
-					collection, version, tier, kind, ordinal, data[at:end]); err != nil {
-					return err
-				}
-				at = end
-			}
+		if virtual.features == 0 {
+			continue
+		}
+		if err := buildTree(ctx, i.tx, nodeTable, fileTable, segmentTable, i.collection, version, tier,
+			virtual.header, virtual.geometry, virtual.features, virtual.featureBytes, virtual.chunks); err != nil {
+			return err
 		}
 	}
-	return nil
+	_, err := i.tx.Exec(ctx, `drop table if exists `+nodeTable)
+	return err
 }
 
 func (s *Store) VirtualLayout(ctx context.Context, collection string, version int64, tier int) (VirtualLayout, error) {
@@ -162,21 +122,6 @@ func storedFeatures(ctx context.Context, conn db, collection string, layout Virt
 	err := conn.QueryRow(ctx,
 		`select coalesce(sum(feature_count), 0) from chunks where collection = $1 and tier = 0`, collection).Scan(&count)
 	return count, err
-}
-
-func readLeaves(ctx context.Context, conn db, collection string, version int64, layout VirtualLayout, count int64) ([]fgb.Leaf, error) {
-	index, err := readVirtual(ctx, conn, collection, version, 0, 1, 0, layout.IndexBytes)
-	if err != nil {
-		return nil, err
-	}
-	leaves, ok := fgb.Leaves(index, uint64(count), fgb.NodeSize)
-	if !ok {
-		return nil, errors.New("virtual: unreadable leaves")
-	}
-	if int64(len(leaves)) != count {
-		return nil, fmt.Errorf("virtual: read %d leaves of %d", len(leaves), count)
-	}
-	return leaves, nil
 }
 
 func (s *Store) VirtualRuns(ctx context.Context, info CollectionInfo, tier int) ([]VirtualRun, error) {

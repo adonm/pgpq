@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
+	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -14,6 +17,8 @@ import (
 	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/stats"
 )
+
+var maintenanceWorkers = strconv.Itoa(min(runtime.NumCPU(), 8))
 
 type Ingest struct {
 	store      *Store
@@ -72,10 +77,82 @@ func partitionName(parent, collection string) string {
 	return parent + "_" + hex.EncodeToString(sum[:16])
 }
 
+var virtualPartitions = []partition{
+	{
+		parent: "virtual_file",
+		table: `create table %[1]s (
+	collection text not null,
+	version bigint not null,
+	tier smallint not null,
+	header_bytes int not null,
+	index_bytes bigint not null,
+	feature_bytes bigint not null,
+	chunks int not null,
+	features bigint not null default 0,
+	primary key (collection, version, tier)
+)`,
+	},
+	{
+		parent: "virtual_segment",
+		table: `create table %[1]s (
+	collection text not null,
+	version bigint not null,
+	tier smallint not null,
+	kind smallint not null,
+	ordinal int not null,
+	data bytea storage external not null,
+	primary key (collection, version, tier, kind, ordinal)
+)`,
+	},
+}
+
+const nodeTableDDL = `create table %[1]s (
+	tier smallint not null,
+	level int not null,
+	ordinal bigint not null,
+	data bytea storage external not null,
+	primary key (tier, level, ordinal)
+)`
+
+func stagedName(parent, collection string) string {
+	return pgx.Identifier{"staging", partitionName(parent, collection)}.Sanitize()
+}
+
+func stageVirtual(ctx context.Context, conn db, collection string) error {
+	for _, p := range virtualPartitions {
+		if _, err := conn.Exec(ctx, fmt.Sprintf(p.table, stagedName(p.parent, collection))); err != nil {
+			return err
+		}
+	}
+	_, err := conn.Exec(ctx, fmt.Sprintf(nodeTableDDL, stagedName("virtual_node", collection)))
+	return err
+}
+
+func swapVirtual(ctx context.Context, tx pgx.Tx, collection string) error {
+	for _, p := range virtualPartitions {
+		final := ident(partitionName(p.parent, collection))
+		if _, err := tx.Exec(ctx, `drop table if exists `+final); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `delete from `+ident(p.parent)+` where collection = $1`, collection); err != nil {
+			return err
+		}
+		for _, stmt := range []string{
+			`alter table ` + stagedName(p.parent, collection) + ` set schema public`,
+			`alter table ` + ident(p.parent) + ` attach partition ` + final + ` for values in ('` + collection + `')`,
+		} {
+			if _, err := tx.Exec(ctx, stmt); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 const partitionLockKey int64 = 0x50464c4b
 
 func (i *Ingest) staged(parent string) string {
-	return pgx.Identifier{"staging", partitionName(parent, i.collection)}.Sanitize()
+	return stagedName(parent, i.collection)
 }
 
 func (s *Store) BeginIngest(ctx context.Context, name string) (*Ingest, error) {
@@ -103,7 +180,7 @@ func (i *Ingest) stage(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return stageVirtual(ctx, i.tx, i.collection)
 }
 
 func (i *Ingest) createIndexes(ctx context.Context) error {
@@ -136,6 +213,9 @@ func (i *Ingest) swap(ctx context.Context) error {
 			}
 		}
 	}
+	if err := swapVirtual(ctx, i.tx, i.collection); err != nil {
+		return err
+	}
 	_, err := i.tx.Exec(ctx, `update collections set stats_version = version where name = $1`, i.collection)
 	return err
 }
@@ -146,10 +226,18 @@ func dropPartitions(ctx context.Context, conn db, collection string) error {
 			return err
 		}
 	}
+	for _, p := range virtualPartitions {
+		if _, err := conn.Exec(ctx, `drop table if exists `+ident(partitionName(p.parent, collection))); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func deleteCollectionRows(ctx context.Context, conn db, name string) error {
+	if err := dropPartitions(ctx, conn, name); err != nil {
+		return err
+	}
 	for _, query := range []string{
 		`delete from collections where name = $1`,
 		`delete from virtual_file where collection = $1`,
@@ -216,21 +304,36 @@ func (i *Ingest) Commit(ctx context.Context) error {
 	if _, err := i.tx.Exec(ctx, `set local lock_timeout = '30s'`); err != nil {
 		return err
 	}
+	if _, err := i.tx.Exec(ctx, `select set_config('max_parallel_maintenance_workers', $1, true)`, maintenanceWorkers); err != nil {
+		return err
+	}
+	start := time.Now()
 	if err := i.createIndexes(ctx); err != nil {
 		return err
 	}
-	if err := i.swap(ctx); err != nil {
-		return err
-	}
-	if err := refreshStats(ctx, i.tx, i.collection); err != nil {
-		return err
-	}
+	indexes := time.Since(start)
+	start = time.Now()
 	if err := i.buildVirtual(ctx); err != nil {
 		return err
 	}
+	tree := time.Since(start)
+	start = time.Now()
+	if err := i.swap(ctx); err != nil {
+		return err
+	}
+	swapped := time.Since(start)
+	start = time.Now()
+	if err := refreshStats(ctx, i.tx, i.collection); err != nil {
+		return err
+	}
+	stats := time.Since(start)
+	start = time.Now()
 	if err := i.store.rebuildMemberViews(ctx, i.tx, i.collection); err != nil {
 		return err
 	}
+	views := time.Since(start)
+	slog.Info("ingest commit", "collection", i.collection, "indexes", indexes,
+		"tree", tree, "swap", swapped, "stats", stats, "views", views)
 	return i.tx.Commit(ctx)
 }
 
@@ -253,14 +356,26 @@ func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
 	geometry := fgb.GeometryOf(payload.HeaderBlob)
 	tier := i.virtual[payload.Tier]
 	if tier == nil {
-		tier = &virtualTier{header: payload.HeaderBlob, geometry: geometry}
+		tier = &virtualTier{
+			header:   payload.HeaderBlob,
+			geometry: geometry,
+			sink:     newNodeSink(i.tx, i.staged("virtual_node"), payload.Tier, 0),
+		}
 		i.virtual[payload.Tier] = tier
 	} else if geometry != tier.geometry {
 		tier.geometry = flattypes.GeometryTypeUnknown
 	}
-	tier.leaves = append(tier.leaves, payload.Leaves)
-	tier.lengths = append(tier.lengths, int64(payload.FeatureBytes))
-	tier.count += uint64(payload.Count)
+	nodes := make([]byte, 0, len(payload.Leaves)*fgb.NodeBytes)
+	for _, leaf := range payload.Leaves {
+		nodes = fgb.AppendNode(nodes, leaf.BBox, uint64(tier.base)+leaf.Offset)
+	}
+	if err := tier.sink.write(ctx, nodes); err != nil {
+		return id, err
+	}
+	tier.features += uint64(payload.Count)
+	tier.featureBytes += int64(payload.FeatureBytes)
+	tier.chunks++
+	tier.base += int64(payload.FeatureBytes)
 	return id, nil
 }
 
@@ -287,10 +402,6 @@ func (i *Ingest) PutChunkStats(ctx context.Context, chunkID int64, rows []stats.
 			as input(name, min, max, nulls, bloom)`,
 		i.collection, chunkID, names, mins, maxs, nulls, blooms)
 	return err
-}
-
-func (i *Ingest) BaseChunks(ctx context.Context) ([][]byte, error) {
-	return queryAll(ctx, i.tx, pgx.RowTo[[]byte], `select data from `+i.staged("chunks")+` where tier = 0 order by id`)
 }
 
 func (i *Ingest) SetCatalog(ctx context.Context, idColumn, timeColumn string, timeMin, timeMax *time.Time) error {

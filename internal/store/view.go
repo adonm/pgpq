@@ -158,6 +158,8 @@ func (s *Store) rebuildMemberViews(ctx context.Context, tx pgx.Tx, member string
 	return nil
 }
 
+const leafWindow = int(fgb.NodeBytes) * 8192
+
 func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) error {
 	members, err := viewMembers(ctx, tx, info.Members)
 	if err != nil {
@@ -167,9 +169,10 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 		return deleteCollectionRows(ctx, tx, info.Name)
 	}
 	var (
-		leafGroups   [][]fgb.Leaf
-		lengths      []int64
 		names        []string
+		layouts      []VirtualLayout
+		counts       []int64
+		lengths      []int64
 		memberHeader []byte
 		geometry     flattypes.GeometryType
 		schema       []byte
@@ -205,21 +208,10 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 		if err != nil {
 			return err
 		}
-		leaves, err := readLeaves(ctx, tx, member.Name, member.Version, layout, count)
-		if err != nil {
-			return err
-		}
-		leafGroups = append(leafGroups, leaves)
+		layouts = append(layouts, layout)
+		counts = append(counts, count)
 		lengths = append(lengths, layout.FeatureBytes)
 		features += count
-	}
-	index, extent, ok := fgb.Index(leafGroups, lengths, fgb.NodeSize)
-	if !ok {
-		return errors.New("view: empty index")
-	}
-	header, ok := fgb.Header(info.Name, memberHeader, uint64(features), extent, geometry)
-	if !ok {
-		return errors.New("view: unreadable member header")
 	}
 	if _, err := tx.Exec(ctx, `
 		update collections set version = version + 1, updated_at = now(), chunk_count = $2, feature_count = $3,
@@ -232,8 +224,38 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 	if err := tx.QueryRow(ctx, `select version from collections where name = $1`, info.Name).Scan(&version); err != nil {
 		return err
 	}
-	return writeLayouts(ctx, tx, info.Name, version, map[int]tierLayout{0: {
-		header: header, index: index, features: features,
-		chunks: int64(len(lengths)), featureBytes: total(lengths),
-	}})
+	if err := stageVirtual(ctx, tx, info.Name); err != nil {
+		return err
+	}
+	nodeTable := stagedName("virtual_node", info.Name)
+	sink := newNodeSink(tx, nodeTable, 0, 0)
+	var base int64
+	for i, member := range members {
+		from := layouts[i].IndexBytes - counts[i]*fgb.NodeBytes
+		for at := from; at < layouts[i].IndexBytes; at += int64(leafWindow) {
+			end := min(at+int64(leafWindow), layouts[i].IndexBytes)
+			data, err := readVirtual(ctx, tx, member.Name, member.Version, 0, 1, at, end)
+			if err != nil {
+				return err
+			}
+			for p := 0; p+fgb.NodeBytes <= len(data); p += fgb.NodeBytes {
+				fgb.SetNodeOffset(data[p:], fgb.NodeOffset(data[p:])+uint64(base))
+			}
+			if err := sink.write(ctx, data); err != nil {
+				return err
+			}
+		}
+		base += layouts[i].FeatureBytes
+	}
+	if err := sink.close(ctx); err != nil {
+		return err
+	}
+	if err := buildTree(ctx, tx, nodeTable, stagedName("virtual_file", info.Name), stagedName("virtual_segment", info.Name),
+		info.Name, version, 0, memberHeader, geometry, uint64(features), total(lengths), len(lengths)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `drop table if exists `+nodeTable); err != nil {
+		return err
+	}
+	return swapVirtual(ctx, tx, info.Name)
 }
