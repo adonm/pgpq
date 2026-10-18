@@ -331,7 +331,7 @@ func decodeProperties(buf []byte, cols []Column) map[string]any {
 			if off+4+l > len(buf) {
 				return props
 			}
-			props[col.Name] = append([]byte(nil), buf[off+4:off+4+l]...)
+			props[col.Name] = append([]byte{}, buf[off+4:off+4+l]...)
 			off += 4 + l
 		default:
 			return props

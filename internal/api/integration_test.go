@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
@@ -879,6 +882,101 @@ func TestPostgresFlattenedAcrossWindows(t *testing.T) {
 	}
 	if err := json.Unmarshal(matched.Body.Bytes(), &counted); err != nil || counted.NumberMatched == nil || *counted.NumberMatched != count/4 {
 		t.Fatalf("tags_kind = 'k1' matched %s, want %d", matched.Body.String(), count/4)
+	}
+}
+
+func typedFGB(t *testing.T) []byte {
+	t.Helper()
+	cols := []chunk.Column{
+		{Name: "id", Type: flattypes.ColumnTypeInt},
+		{Name: "c_byte", Type: flattypes.ColumnTypeByte},
+		{Name: "c_ubyte", Type: flattypes.ColumnTypeUByte},
+		{Name: "c_bool", Type: flattypes.ColumnTypeBool},
+		{Name: "c_short", Type: flattypes.ColumnTypeShort},
+		{Name: "c_ushort", Type: flattypes.ColumnTypeUShort},
+		{Name: "c_uint", Type: flattypes.ColumnTypeUInt},
+		{Name: "c_long", Type: flattypes.ColumnTypeLong},
+		{Name: "c_ulong", Type: flattypes.ColumnTypeULong},
+		{Name: "c_float", Type: flattypes.ColumnTypeFloat},
+		{Name: "c_double", Type: flattypes.ColumnTypeDouble},
+		{Name: "c_string", Type: flattypes.ColumnTypeString},
+		{Name: "c_datetime", Type: flattypes.ColumnTypeDateTime},
+		{Name: "c_binary", Type: flattypes.ColumnTypeBinary},
+	}
+	rows := []map[string]string{
+		{"id": "1", "c_byte": "-7", "c_ubyte": "200", "c_bool": "true", "c_short": "-30000", "c_ushort": "60000",
+			"c_uint": "4000000000", "c_long": "-9000000000000000000", "c_ulong": "18000000000000000000", "c_float": "0.1",
+			"c_double": "2.718281828459045", "c_string": `"hello"`, "c_datetime": `"2026-10-18T06:00:00Z"`, "c_binary": `"AAEC/w=="`},
+		{"id": "2", "c_byte": "127", "c_ubyte": "0", "c_bool": "false", "c_short": "32767", "c_ushort": "0",
+			"c_uint": "1", "c_long": "0", "c_ulong": "1", "c_float": "-0.25",
+			"c_double": "0.5", "c_string": `""`, "c_datetime": `"2026-10-18T06:01:00Z"`, "c_binary": `""`},
+	}
+	features := make([]chunk.InputFeature, 0, len(rows))
+	for i, row := range rows {
+		coords, err := json.Marshal([]float64{7.4 + float64(i)*0.01, 43.7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		props := make(map[string]json.RawMessage, len(row))
+		for name, value := range row {
+			props[name] = json.RawMessage(value)
+		}
+		features = append(features, chunk.InputFeature{
+			Geometry:   chunk.RawGeometry{Type: "Point", Coordinates: coords},
+			Properties: props,
+		})
+	}
+	body, err := chunk.EncodeCols("itest", cols, features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestPostgresTypedColumns(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name := "itest_typed"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	h := New(st)
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", typedFGB(t)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	feature := func(id string) map[string]string {
+		t.Helper()
+		w := call(h, "GET", "/collections/"+name+"/items/"+id, "", nil)
+		var doc struct {
+			ID         json.RawMessage            `json:"id"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil || w.Code != 200 {
+			t.Fatalf("feature %s = %d: %s", id, w.Code, w.Body.String())
+		}
+		if string(doc.ID) != id {
+			t.Fatalf("feature %s has id %s", id, doc.ID)
+		}
+		out := make(map[string]string, len(doc.Properties))
+		for column, value := range doc.Properties {
+			out[column] = string(value)
+		}
+		return out
+	}
+	want := map[string]string{
+		"id": "1", "c_byte": "-7", "c_ubyte": "200", "c_bool": "true", "c_short": "-30000", "c_ushort": "60000",
+		"c_uint": "4000000000", "c_long": "-9000000000000000000", "c_ulong": "18000000000000000000", "c_float": "0.1",
+		"c_double": "2.718281828459045", "c_string": `"hello"`, "c_datetime": `"2026-10-18T06:00:00Z"`, "c_binary": `"AAEC/w=="`,
+	}
+	if got := feature("1"); !maps.Equal(got, want) {
+		t.Fatalf("feature 1 properties = %v, want %v", got, want)
+	}
+	want = map[string]string{
+		"id": "2", "c_byte": "127", "c_ubyte": "0", "c_bool": "false", "c_short": "32767", "c_ushort": "0",
+		"c_uint": "1", "c_long": "0", "c_ulong": "1", "c_float": "-0.25",
+		"c_double": "0.5", "c_string": `""`, "c_datetime": `"2026-10-18T06:01:00Z"`, "c_binary": `""`,
+	}
+	if got := feature("2"); !maps.Equal(got, want) {
+		t.Fatalf("feature 2 properties = %v, want %v", got, want)
 	}
 }
 

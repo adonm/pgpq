@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -197,26 +198,67 @@ func propertyValue(t flattypes.ColumnType, raw json.RawMessage) []byte {
 		return lengthPrefixed(unquote(raw))
 	case flattypes.ColumnTypeJson:
 		return lengthPrefixed(raw)
+	case flattypes.ColumnTypeBinary:
+		data, err := base64.StdEncoding.DecodeString(string(unquote(raw)))
+		if err != nil {
+			return nil
+		}
+		return lengthPrefixed(data)
+	}
+	return scalarValue(t, string(unquote(raw)))
+}
+
+func scalarValue(t flattypes.ColumnType, text string) []byte {
+	switch t {
 	case flattypes.ColumnTypeBool:
-		if raw[0] == 't' {
+		switch text {
+		case "true":
 			return []byte{1}
+		case "false":
+			return []byte{0}
 		}
-		return []byte{0}
+	case flattypes.ColumnTypeByte:
+		return intValue(text, 8, true)
+	case flattypes.ColumnTypeUByte:
+		return intValue(text, 8, false)
+	case flattypes.ColumnTypeShort:
+		return intValue(text, 16, true)
+	case flattypes.ColumnTypeUShort:
+		return intValue(text, 16, false)
+	case flattypes.ColumnTypeInt:
+		return intValue(text, 32, true)
+	case flattypes.ColumnTypeUInt:
+		return intValue(text, 32, false)
 	case flattypes.ColumnTypeLong:
-		n, err := strconv.ParseInt(string(unquote(raw)), 10, 64)
-		if err != nil {
-			return nil
+		return intValue(text, 64, true)
+	case flattypes.ColumnTypeULong:
+		return intValue(text, 64, false)
+	case flattypes.ColumnTypeFloat:
+		if f, err := strconv.ParseFloat(text, 32); err == nil {
+			return binary.LittleEndian.AppendUint32(nil, math.Float32bits(float32(f)))
 		}
-		return binary.LittleEndian.AppendUint64(nil, uint64(n))
 	case flattypes.ColumnTypeDouble:
-		f, err := strconv.ParseFloat(string(unquote(raw)), 64)
-		if err != nil {
-			return nil
+		if f, err := strconv.ParseFloat(text, 64); err == nil {
+			return binary.LittleEndian.AppendUint64(nil, math.Float64bits(f))
 		}
-		return binary.LittleEndian.AppendUint64(nil, math.Float64bits(f))
-	default:
+	}
+	return nil
+}
+
+func intValue(text string, bits int, signed bool) []byte {
+	var n uint64
+	var err error
+	if signed {
+		var v int64
+		v, err = strconv.ParseInt(text, 10, bits)
+		n = uint64(v)
+	} else {
+		n, err = strconv.ParseUint(text, 10, bits)
+	}
+	if err != nil {
 		return nil
 	}
+	return binary.LittleEndian.AppendUint64(nil, n)[:bits/8]
 }
 
 func unquote(raw []byte) []byte {
