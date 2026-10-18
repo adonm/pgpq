@@ -30,6 +30,9 @@ test:
 test-integration:
     POSTFGB_TEST_DSN="{{dsn}}" go test -count=1 -timeout 300s ./...
 
+smoke:
+    POSTFGB_SMOKE_URL="{{url}}" go test -count=1 -timeout 300s -run Smoke -v ./internal/api
+
 viewer-test:
     RUSTGIS_CLI={{rustgis_cli}} scripts/viewer-test.sh {{url}}
 
