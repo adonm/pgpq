@@ -21,10 +21,11 @@ const (
 	minMatchWindow    = 256
 )
 
-func (s *Server) fetchRows(ctx context.Context, collection string, ids []int64) []store.ChunkRow {
+func (s *Server) fetchRows(ctx context.Context, collection string, ids []int64) ([]store.ChunkRow, []error) {
 	rows := make([]store.ChunkRow, len(ids))
+	errs := make([]error, len(ids))
 	if len(ids) == 0 {
-		return rows
+		return rows, errs
 	}
 	sem := make(chan struct{}, chunkFetchWorkers)
 	var wg sync.WaitGroup
@@ -34,16 +35,11 @@ func (s *Server) fetchRows(ctx context.Context, collection string, ids []int64) 
 		go func(i int, id int64) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			row, err := s.Store.ChunkByID(ctx, collection, id)
-			if err != nil {
-				slog.Error("chunk load failed", "chunk", id, "error", err)
-				return
-			}
-			rows[i] = row
+			rows[i], errs[i] = s.Store.ChunkByID(ctx, collection, id)
 		}(i, id)
 	}
 	wg.Wait()
-	return rows
+	return rows, errs
 }
 
 func (s *Server) chunkBatches(ctx context.Context, collection string, ids []int64) [][]int64 {

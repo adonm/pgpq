@@ -1191,6 +1191,76 @@ func TestPostgresCollectionMixedGeometry(t *testing.T) {
 	}
 }
 
+func TestPostgresChunkFailureAnswers500(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name := "itest_broken"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	if w := call(New(st), "PUT", "/collections/"+name, "application/flatgeobuf", sizedFixtureFGB(t, 25000, 200)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	rows, err := st.Pool.Query(ctx, `select id, data from chunks where collection = $1 and tier = 0 order by id`, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	var data [][]byte
+	for rows.Next() {
+		var id int64
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+		data = append(data, raw)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) < 3 {
+		t.Fatalf("want several chunks, got %d", len(ids))
+	}
+	victim, original := ids[1], data[1]
+	read := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		return call(New(st), "GET", path, "", nil)
+	}
+	all := "/collections/" + name + "/items?limit=100000"
+	matched := "/collections/" + name + "/items?limit=100000&numberMatched=true&filter=" + url.QueryEscape("name LIKE 'feature-%'")
+	first := "/collections/" + name + "/items?limit=10"
+	setRow := func(raw []byte) {
+		t.Helper()
+		if _, err := st.Pool.Exec(ctx, `update chunks set data = $3 where collection = $1 and id = $2`, name, victim, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setRow([]byte("not a chunk"))
+	for _, path := range []string{all, matched} {
+		if w := read(path); w.Code != 500 {
+			t.Fatalf("%s with a corrupt chunk = %d, want 500: %s", path, w.Code, w.Body.String())
+		}
+	}
+	if w := read(first); w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte(`"numberReturned":10`)) {
+		t.Fatalf("first page with a corrupt later chunk = %d: %s", w.Code, w.Body.String())
+	}
+	setRow(original)
+	if w := read(all); w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte(`"numberReturned":25000`)) {
+		t.Fatalf("restored chunk: items = %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := st.Pool.Exec(ctx, `delete from chunks where collection = $1 and id = $2`, name, victim); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{all, matched} {
+		if w := read(path); w.Code != 500 {
+			t.Fatalf("%s with a missing chunk = %d, want 500: %s", path, w.Code, w.Body.String())
+		}
+	}
+	if w := read(first); w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte(`"numberReturned":10`)) {
+		t.Fatalf("first page with a missing later chunk = %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func extraColumnFGB(t *testing.T, count int) []byte {
 	t.Helper()
 	features := make([]chunk.InputFeature, 0, count)

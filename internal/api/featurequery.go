@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -161,25 +160,23 @@ func typedLiteral(value string) any {
 	return value
 }
 
-func (s *Server) targets(ctx context.Context, info store.CollectionInfo) []store.CollectionInfo {
+func (s *Server) targets(ctx context.Context, info store.CollectionInfo) ([]store.CollectionInfo, error) {
 	if info.Kind != "view" {
-		return []store.CollectionInfo{info}
+		return []store.CollectionInfo{info}, nil
 	}
 	names, err := s.Store.ViewMemberNames(ctx, info)
 	if err != nil {
-		slog.Error("view members unreadable", "view", info.Name, "error", err)
-		return nil
+		return nil, fmt.Errorf("view %s members: %w", info.Name, err)
 	}
 	targets := make([]store.CollectionInfo, 0, len(names))
 	for _, name := range names {
 		member, err := s.Store.Collection(ctx, name)
 		if err != nil {
-			slog.Error("view member missing", "view", info.Name, "member", name, "error", err)
-			continue
+			return nil, fmt.Errorf("view %s member %s: %w", info.Name, name, err)
 		}
 		targets = append(targets, member)
 	}
-	return targets
+	return targets, nil
 }
 
 func targetFilter(target store.CollectionInfo, q featureQuery) (cql.Expr, bool) {
@@ -198,7 +195,11 @@ func (s *Server) walkFeatures(ctx context.Context, info store.CollectionInfo, q 
 		tier = *q.overview
 	}
 	offset := q.offset
-	for _, target := range s.targets(ctx, info) {
+	targets, err := s.targets(ctx, info)
+	if err != nil {
+		return err
+	}
+	for _, target := range targets {
 		if out.remaining() == 0 {
 			return nil
 		}
@@ -225,6 +226,7 @@ func (s *Server) walkFeatures(ctx context.Context, info store.CollectionInfo, q 
 
 func (s *Server) walkChunks(ctx context.Context, target store.CollectionInfo, q featureQuery, tier, offset int, out sink) (int, error) {
 	after := int64(0)
+	listedChunks, listedFeatures := 0, int64(0)
 	for out.remaining() > 0 {
 		metas, err := s.Store.ChunkMetas(ctx, target.Name, q.bbox, s.MaxChunks, tier, after)
 		if err != nil {
@@ -235,9 +237,13 @@ func (s *Server) walkChunks(ctx context.Context, target store.CollectionInfo, q 
 			continue
 		}
 		if len(metas) == 0 {
-			return offset, nil
+			return offset, checkListing(target, q, tier, out, listedChunks, listedFeatures)
 		}
 		window, trimmed := budgetMetas(metas, s.MaxBytes)
+		for _, meta := range window {
+			listedChunks++
+			listedFeatures += int64(meta.FeatureCount)
+		}
 		read, starts := window, make([]int, len(window))
 		if q.bbox == nil {
 			read, starts, offset = skipChunks(window, offset)
@@ -246,26 +252,36 @@ func (s *Server) walkChunks(ctx context.Context, target store.CollectionInfo, q 
 		for j, meta := range read {
 			ids[j] = meta.ID
 		}
-		rows := s.fetchRows(ctx, target.Name, ids)
+		rows, errs := s.fetchRows(ctx, target.Name, ids)
 		for j, meta := range read {
 			if out.remaining() == 0 {
 				return offset, nil
 			}
+			if errs[j] != nil {
+				return offset, fmt.Errorf("chunk %d: %w", meta.ID, errs[j])
+			}
 			c, features, err := s.openFeatures(ctx, target, meta.ID, rows[j])
 			if err != nil {
-				slog.Error("chunk read failed", "chunk", meta.ID, "error", err)
-				continue
+				return offset, fmt.Errorf("chunk %d: %w", meta.ID, err)
 			}
 			if offset, err = emit(target, q.bbox, meta.ID, c, features, ordinals(starts[j], len(features)), offset, out); err != nil {
 				return offset, err
 			}
 		}
 		if len(window) < s.MaxChunks && !trimmed {
-			return offset, nil
+			return offset, checkListing(target, q, tier, out, listedChunks, listedFeatures)
 		}
 		after = window[len(window)-1].ID
 	}
 	return offset, nil
+}
+
+func checkListing(target store.CollectionInfo, q featureQuery, tier int, out sink, chunks int, features int64) error {
+	if out.remaining() == 0 || q.bbox != nil || tier != 0 || (int64(chunks) == target.ChunkCount && features == target.FeatureCount) {
+		return nil
+	}
+	return fmt.Errorf("collection %s: its chunks list %d features in %d chunks, the catalog has %d in %d",
+		target.Name, features, chunks, target.FeatureCount, target.ChunkCount)
 }
 
 func skipChunks(metas []store.ChunkMeta, offset int) ([]store.ChunkMeta, []int, int) {
@@ -326,15 +342,14 @@ func (s *Server) emitMatches(ctx context.Context, target store.CollectionInfo, b
 		picked[m.ChunkID] = append(picked[m.ChunkID], m.Ord)
 	}
 	for _, batch := range s.chunkBatches(ctx, target.Name, ids) {
-		rows := s.fetchRows(ctx, target.Name, batch)
+		rows, errs := s.fetchRows(ctx, target.Name, batch)
 		for j, row := range rows {
-			if row.Data == nil {
-				continue
+			if errs[j] != nil {
+				return offset, fmt.Errorf("chunk %d: %w", batch[j], errs[j])
 			}
 			c, features, err := s.openFeatures(ctx, target, batch[j], row)
 			if err != nil {
-				slog.Error("chunk read failed", "chunk", batch[j], "error", err)
-				continue
+				return offset, fmt.Errorf("chunk %d: %w", batch[j], err)
 			}
 			ords := picked[batch[j]]
 			n, _ := slices.BinarySearch(ords, len(features))
@@ -381,7 +396,11 @@ func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, q 
 		return 0, false, nil
 	}
 	var total int64
-	for _, target := range s.targets(ctx, info) {
+	targets, err := s.targets(ctx, info)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, target := range targets {
 		filter, ok := targetFilter(target, q)
 		if !ok {
 			return 0, false, nil

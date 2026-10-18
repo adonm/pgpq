@@ -40,7 +40,11 @@ func (s *Server) feature(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) lookupFeature(ctx context.Context, info store.CollectionInfo, fid string) (*chunk.Feature, bool, error) {
 	if info.Kind == "view" {
-		for _, member := range s.targets(ctx, info) {
+		targets, err := s.targets(ctx, info)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, member := range targets {
 			if feature, ok, err := s.lookupFeature(ctx, member, fid); err != nil || ok {
 				return feature, ok, err
 			}

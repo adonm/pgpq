@@ -2,9 +2,11 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -320,15 +322,19 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			matched = &count
 		}
 	}
+	var body bytes.Buffer
+	page := newPageWriter(&body, limit, matched)
+	if err := s.walkFeatures(ctx, info, q, page); err != nil {
+		slog.Error("items walk failed", "collection", id, "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	page.close(pageLink(r, limit, offset, page.count))
 	w.Header().Set("Content-Type", "application/geo+json")
 	if r.URL.Query().Get("crs") != "" {
 		w.Header().Set("Content-Crs", crs84)
 	}
-	page := newPageWriter(w, limit, matched)
-	if err := s.walkFeatures(ctx, info, q, page); err != nil {
-		slog.Error("items walk failed", "collection", id, "error", err)
-	}
-	page.close(pageLink(r, limit, offset, page.count))
+	w.Write(body.Bytes())
 }
 
 func (s *Server) writeFGB(w http.ResponseWriter, r *http.Request, info store.CollectionInfo, q featureQuery, limit int) {
@@ -360,7 +366,7 @@ type pageWriter struct {
 	limit int
 }
 
-func newPageWriter(w http.ResponseWriter, limit int, matched *int64) *pageWriter {
+func newPageWriter(w io.Writer, limit int, matched *int64) *pageWriter {
 	p := &pageWriter{out: bufio.NewWriter(w), limit: limit}
 	p.out.WriteString(`{"type":"FeatureCollection"`)
 	if matched != nil {
@@ -374,7 +380,7 @@ func newPageWriter(w http.ResponseWriter, limit int, matched *int64) *pageWriter
 func (p *pageWriter) add(h hit) error {
 	body, err := json.Marshal(h.geo)
 	if err != nil {
-		return nil
+		return err
 	}
 	if p.count > 0 {
 		p.out.WriteByte(',')
