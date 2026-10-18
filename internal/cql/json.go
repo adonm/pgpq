@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/adonm/postfgb/internal/geo"
 )
 
 func ParseJSON(body []byte) (Expr, error) {
@@ -69,22 +67,6 @@ func jsonExpr(v any) (Expr, error) {
 			return nil, err
 		}
 		return &Compare{Prop: prop, Op: op, Value: value}, nil
-	case "s_intersects", "intersects":
-		if len(args) != 2 {
-			return nil, errors.New("cql2-json: s_intersects needs two arguments")
-		}
-		if _, err := jsonProperty(args[0]); err != nil {
-			return nil, err
-		}
-		body, err := json.Marshal(args[1])
-		if err != nil {
-			return nil, err
-		}
-		shape, err := geo.ParseGeoJSON(body)
-		if err != nil {
-			return nil, fmt.Errorf("cql2-json: %w", err)
-		}
-		return &Spatial{Fn: "s_intersects", Shape: shape}, nil
 	case "!=":
 		if len(args) != 2 {
 			return nil, errors.New("cql2-json: != needs two arguments")

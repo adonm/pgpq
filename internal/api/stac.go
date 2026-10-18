@@ -13,7 +13,6 @@ import (
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
-	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -122,7 +121,7 @@ func (sw *stacWriter) close(next string) {
 }
 
 func featureBounds(g *chunk.Feature) []float64 {
-	geom := geo.ToOrb(g.Geometry)
+	geom := chunk.ToOrb(g.Geometry)
 	if geom == nil {
 		return nil
 	}
@@ -147,13 +146,9 @@ func (m *stacMember) remaining() int {
 	return m.w.limit - m.w.count
 }
 
-func (s *Server) stacSinkFor(sw *stacWriter, shapes []geo.Shape, info store.CollectionInfo) func() featureSink {
+func (s *Server) stacSinkFor(sw *stacWriter, info store.CollectionInfo) func() featureSink {
 	return func() featureSink {
-		var sink featureSink = &stacMember{w: sw, info: info}
-		if len(shapes) > 0 {
-			sink = &spatialWriter{base: sink, shapes: shapes}
-		}
-		return sink
+		return &stacMember{w: sw, info: info}
 	}
 }
 
@@ -318,14 +313,12 @@ func (s *Server) stacItems(w http.ResponseWriter, r *http.Request) {
 	zero := 0
 	q.overview = &zero
 	var matched *int64
-	if len(q.shapes) == 0 {
-		if count, ok, err := s.countMatches(ctx, info, q.bbox, q.filter, q.tw); err == nil && ok {
-			matched = &count
-		}
+	if count, ok, err := s.countMatches(ctx, info, q.bbox, q.filter, q.tw); err == nil && ok {
+		matched = &count
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
 	sw := newStacWriter(w, matched, baseURL(r), limit)
-	s.streamCollection(ctx, s.stacSinkFor(sw, q.shapes, info)(), info, q)
+	s.streamCollection(ctx, s.stacSinkFor(sw, info)(), info, q)
 	sw.close(pageLink(r, limit, offset, sw.count))
 }
 
@@ -428,21 +421,6 @@ func (s *Server) stacSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	extracted, spatials, err := cql.ExtractSpatial(filter)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	filter = extracted
-	shapes := spatialShapes(spatials)
-	merged, ok := mergeBBox(bbox, shapes)
-	if !ok {
-		w.Header().Set("Content-Type", "application/geo+json")
-		sw := newStacWriter(w, nil, baseURL(r), limit)
-		sw.close("")
-		return
-	}
-	bbox = merged
 	names := body.Collections
 	if !post {
 		if value := r.URL.Query().Get("collections"); value != "" {
@@ -450,6 +428,7 @@ func (s *Server) stacSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var infos []store.CollectionInfo
+	var err error
 	if len(names) == 0 {
 		if infos, err = s.Store.Collections(ctx); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -470,7 +449,7 @@ func (s *Server) stacSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var matched *int64
-	if bbox == nil && len(shapes) == 0 && filter == nil && !tw.set {
+	if bbox == nil && filter == nil && !tw.set {
 		var total int64
 		for _, info := range infos {
 			if count, ok, err := s.countMatches(ctx, info, nil, nil, timeWindow{}); err == nil && ok {
@@ -479,12 +458,12 @@ func (s *Server) stacSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		matched = &total
 	}
-	q := featureQuery{bbox: bbox, tw: tw, filter: filter, shapes: shapes, offset: offset, limit: limit}
+	q := featureQuery{bbox: bbox, tw: tw, filter: filter, offset: offset, limit: limit}
 	zero := 0
 	q.overview = &zero
 	w.Header().Set("Content-Type", "application/geo+json")
 	sw := newStacWriter(w, matched, baseURL(r), limit)
-	s.streamCollections(ctx, infos, s.stacSinkFor(sw, shapes, store.CollectionInfo{}), q)
+	s.streamCollections(ctx, infos, s.stacSinkFor(sw, store.CollectionInfo{}), q)
 	sw.close(stacNextLink(r, post, body, limit, offset, sw.count))
 }
 

@@ -140,6 +140,10 @@ func TestPostgresIngestQuery(t *testing.T) {
 	if w.Code != 400 {
 		t.Fatalf("sortby items = %d, want 400", w.Code)
 	}
+	w = call(h, "GET", "/collections/"+name+"/items?filter=S_INTERSECTS(geometry,POINT(1%202))", "", nil)
+	if w.Code != 400 || !bytes.Contains(w.Body.Bytes(), []byte("spatial functions are not supported")) {
+		t.Fatalf("spatial filter items = %d: %s", w.Code, w.Body.String())
+	}
 
 	w = call(h, "GET", "/stac/collections/"+name, "", nil)
 	if w.Code != 200 {

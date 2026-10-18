@@ -20,7 +20,6 @@ import (
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
-	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -337,7 +336,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var matched *int64
-	if r.URL.Query().Get("numberMatched") == "true" && len(q.shapes) == 0 {
+	if r.URL.Query().Get("numberMatched") == "true" {
 		count, ok, err := s.countMatches(ctx, info, q.bbox, q.filter, q.tw)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -348,7 +347,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if flatgeobuf {
-		s.writeFGB(ctx, w, r, id, q.bbox, q.filter, q.shapes, q.offset, q.limit, 0)
+		s.writeFGB(ctx, w, r, id, q.bbox, q.filter, q.offset, q.limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
@@ -356,11 +355,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Crs", crs84)
 	}
 	fw := newFeatureWriter(w, limit, matched)
-	var sink featureSink = fw
-	if len(q.shapes) > 0 {
-		sink = &spatialWriter{base: sink, shapes: q.shapes}
-	}
-	s.streamCollection(ctx, sink, info, q)
+	s.streamCollection(ctx, fw, info, q)
 	fw.close(pageLink(r, limit, offset, fw.count))
 }
 
@@ -672,7 +667,7 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 	if bbox == nil {
 		return true
 	}
-	geom := geo.ToOrb(f.Geometry)
+	geom := chunk.ToOrb(f.Geometry)
 	if geom == nil {
 		return false
 	}
@@ -681,8 +676,8 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
-func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, id string, bbox *[4]float64, filter cql.Expr, shapes []geo.Shape, offset, limit, tier int) {
-	features, header, err := s.collectFeatures(ctx, id, bbox, filter, shapes, offset, limit, tier)
+func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, id string, bbox *[4]float64, filter cql.Expr, offset, limit, tier int) {
+	features, header, err := s.collectFeatures(ctx, id, bbox, filter, offset, limit, tier)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -705,12 +700,12 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Re
 	w.Write(data)
 }
 
-func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, filter cql.Expr, shapes []geo.Shape, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, filter cql.Expr, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	if info, err := s.Store.Collection(ctx, id); err == nil && info.Kind == "view" {
-		return s.collectView(ctx, info, bbox, filter, shapes, offset, limit)
+		return s.collectView(ctx, info, bbox, filter, offset, limit)
 	}
 	if filter != nil {
-		return s.collectMatches(ctx, id, bbox, filter, shapes, offset, limit)
+		return s.collectMatches(ctx, id, bbox, filter, offset, limit)
 	}
 	var features []*flattypes.Feature
 	var header *flattypes.Header
@@ -729,9 +724,6 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 			if !inBounds(g, bbox) {
 				continue
 			}
-			if len(shapes) > 0 && !intersectsShapes(shapes, geo.ToOrb(g.Geometry)) {
-				continue
-			}
 			features = append(features, feats[i])
 		}
 		return len(features) < limit
@@ -739,15 +731,15 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 	return features, header, nil
 }
 
-func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64, filter cql.Expr, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64, filter cql.Expr, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	matches, err := s.Store.Matches(ctx, id, bbox, filter, limit, offset)
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.collectMatchRows(ctx, id, bbox, shapes, matches)
+	return s.collectMatchRows(ctx, id, bbox, matches)
 }
 
-func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float64, shapes []geo.Shape, matches []store.FeatureMatch) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float64, matches []store.FeatureMatch) ([]*flattypes.Feature, *flattypes.Header, error) {
 	ords := map[int64]map[int]bool{}
 	var ids []int64
 	for _, m := range matches {
@@ -788,9 +780,6 @@ func (s *Server) collectMatchRows(ctx context.Context, id string, bbox *[4]float
 				}
 				g := c.GeoJSON(f)
 				if !inBounds(g, bbox) {
-					continue
-				}
-				if len(shapes) > 0 && !intersectsShapes(shapes, geo.ToOrb(g.Geometry)) {
 					continue
 				}
 				features = append(features, f)
@@ -862,7 +851,7 @@ func parseOffset(r *http.Request) (int, error) {
 	return n, nil
 }
 
-func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, filter cql.Expr, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, filter cql.Expr, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	var features []*flattypes.Feature
 	var header *flattypes.Header
 	remaining := offset
@@ -870,7 +859,7 @@ func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbo
 		if len(features) >= limit {
 			break
 		}
-		collected, memberHeader, err := s.collectFeatures(ctx, member.Name, bbox, filter, shapes, remaining, limit-len(features), 0)
+		collected, memberHeader, err := s.collectFeatures(ctx, member.Name, bbox, filter, remaining, limit-len(features), 0)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -137,6 +137,16 @@ func TestErrors(t *testing.T) {
 	}
 }
 
+func TestSpatialFunctionsAreRejected(t *testing.T) {
+	_, err := Parse(`name = 'x' and S_INTERSECTS(geometry, POINT(1 2))`)
+	if err == nil || !strings.Contains(err.Error(), "spatial functions are not supported") {
+		t.Fatalf("text spatial function: %v", err)
+	}
+	if _, err := ParseJSON([]byte(`{"op":"s_intersects","args":[{"property":"geometry"},{"type":"Point","coordinates":[1,2]}]}`)); err == nil {
+		t.Fatal("json spatial operator should be rejected")
+	}
+}
+
 func TestTypedColumnsUseTheIndexedExpression(t *testing.T) {
 	text, err := Parse("diets_vegan >= 'yes'")
 	if err != nil {

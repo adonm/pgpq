@@ -24,7 +24,6 @@ import (
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
-	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -628,7 +627,7 @@ type tierSpec struct {
 
 func tierFeature(c *chunk.Chunk, f *flattypes.Feature, spec *tierSpec) (chunk.InputFeature, bool) {
 	g := c.GeoJSON(f)
-	geom := geo.ToOrb(g.Geometry)
+	geom := chunk.ToOrb(g.Geometry)
 	if geom == nil {
 		return chunk.InputFeature{}, false
 	}

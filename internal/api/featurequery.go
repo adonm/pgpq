@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/adonm/postfgb/internal/cql"
-	"github.com/adonm/postfgb/internal/geo"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -15,11 +14,9 @@ type featureQuery struct {
 	bbox     *[4]float64
 	tw       timeWindow
 	filter   cql.Expr
-	shapes   []geo.Shape
 	offset   int
 	limit    int
 	overview *int
-	empty    bool
 }
 
 func (s *Server) parseFeatureQuery(r *http.Request, info store.CollectionInfo, limit, offset int) (featureQuery, error) {
@@ -47,27 +44,14 @@ func (s *Server) parseFeatureQuery(r *http.Request, info store.CollectionInfo, l
 		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, tw))
 		tw = timeWindow{}
 	}
-	extracted, spatials, err := cql.ExtractSpatial(filter)
-	if err != nil {
-		return q, err
-	}
-	q.shapes = spatialShapes(spatials)
-	bbox, ok := mergeBBox(bbox, q.shapes)
-	if !ok {
-		q.empty = true
-		return q, nil
-	}
 	q.bbox = bbox
 	q.tw = tw
-	q.filter = extracted
+	q.filter = filter
 	q.overview = overview
 	return q, nil
 }
 
 func (s *Server) streamCollection(ctx context.Context, sink featureSink, info store.CollectionInfo, q featureQuery) {
-	if q.empty {
-		return
-	}
 	s.streamCollections(ctx, s.streamTargets(ctx, info), func() featureSink { return sink }, q)
 }
 

@@ -475,11 +475,6 @@ func (p *parser) parsePrimary() (Expr, error) {
 }
 
 func (p *parser) parsePredicate() (Expr, error) {
-	if t := p.peek(); t != nil && t.kind == "ident" && spatialFunction(t.text) {
-		if next := p.peekAt(1); next != nil && next.kind == "lparen" {
-			return p.parseSpatial()
-		}
-	}
 	t := p.next()
 	if t == nil {
 		return nil, errors.New("cql: unexpected end of input")
@@ -493,6 +488,8 @@ func (p *parser) parsePredicate() (Expr, error) {
 		return nil, errors.New("cql: unexpected end of input")
 	}
 	switch {
+	case t.kind == "lparen":
+		return nil, errors.New("cql: spatial functions are not supported")
 	case t.kind == "op":
 		value, err := p.parseValue()
 		if err != nil {
