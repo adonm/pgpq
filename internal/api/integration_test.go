@@ -381,6 +381,108 @@ func TestPostgresViewOverview(t *testing.T) {
 	}
 }
 
+func TestPostgresViewMemberDrop(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	view := "itest_drop_view"
+	members := []string{"itest_drop_a", "itest_drop_b"}
+	for _, name := range append(members, view) {
+		st.DropCollection(ctx, name)
+		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	}
+	h := New(st)
+	for _, name := range members {
+		if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 201 {
+			t.Fatalf("ingest %s = %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+	if w := call(h, "PUT", "/collections/"+view, "application/json", []byte(`{"members":["itest_drop_a","itest_drop_b"]}`)); w.Code != 201 {
+		t.Fatalf("view = %d: %s", w.Code, w.Body.String())
+	}
+	checkView := func(want int) {
+		t.Helper()
+		w := call(h, "GET", "/collections/"+view+"/items?limit=1&numberMatched=true", "", nil)
+		var counted struct {
+			NumberMatched *int64 `json:"numberMatched"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &counted); err != nil || counted.NumberMatched == nil || *counted.NumberMatched != int64(want) {
+			t.Fatalf("numberMatched = %s, want %d", w.Body.String(), want)
+		}
+		file := call(h, "GET", "/collections/"+view+"/items.fgb", "", nil)
+		if file.Code != 200 {
+			t.Fatalf("items.fgb = %d: %s", file.Code, file.Body.String())
+		}
+		if got := fgbHeader(file.Body.Bytes()).FeaturesCount(); got != uint64(want) {
+			t.Fatalf("items.fgb declares %d features, want %d", got, want)
+		}
+		c, err := chunk.Open(file.Body.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if features, err := c.SearchAll(); err != nil || len(features) != want {
+			t.Fatalf("items.fgb holds %d features (%v), want %d", len(features), err, want)
+		}
+	}
+	checkView(10)
+	if w := call(h, "DELETE", "/collections/"+members[0], "", nil); w.Code != 204 {
+		t.Fatalf("delete = %d: %s", w.Code, w.Body.String())
+	}
+	checkView(5)
+
+	var raw []byte
+	if err := st.Pool.QueryRow(ctx, `select members from collections where name = $1`, view).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var listed []string
+	if err := json.Unmarshal(raw, &listed); err != nil || !slices.Equal(listed, members[1:]) {
+		t.Fatalf("view members after drop = %s, want %v", raw, members[1:])
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	w := call(h, "GET", "/collections/"+view+"/queryables", "", nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &schema); err != nil || schema.Properties["name"] == nil {
+		t.Fatalf("queryables after drop = %s", w.Body.String())
+	}
+}
+
+func TestPostgresViewDroppedWithLastMember(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	view := "itest_gone_view"
+	members := []string{"itest_gone_a", "itest_gone_b"}
+	for _, name := range append(members, view) {
+		st.DropCollection(ctx, name)
+		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	}
+	h := New(st)
+	for _, name := range members {
+		if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 201 {
+			t.Fatalf("ingest %s = %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+	if w := call(h, "PUT", "/collections/"+view, "application/json", []byte(`{"members":["itest_gone_a","itest_gone_b"]}`)); w.Code != 201 {
+		t.Fatalf("view = %d: %s", w.Code, w.Body.String())
+	}
+	for _, name := range members {
+		if w := call(h, "DELETE", "/collections/"+name, "", nil); w.Code != 204 {
+			t.Fatalf("delete %s = %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+	if w := call(h, "GET", "/collections/"+view, "", nil); w.Code != 404 {
+		t.Fatalf("view after its last member = %d, want 404", w.Code)
+	}
+	var rows int
+	if err := st.Pool.QueryRow(ctx, `
+		select (select count(*) from virtual_file where collection = $1) + (select count(*) from virtual_segment where collection = $1)`,
+		view).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("view layout rows left behind: %d", rows)
+	}
+}
+
 func chunkStarts(t *testing.T, st *store.Store, name string) []int {
 	t.Helper()
 	rows, err := st.Pool.Query(context.Background(),

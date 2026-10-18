@@ -162,8 +162,7 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 		return err
 	}
 	if len(members) == 0 {
-		_, err := tx.Exec(ctx, `delete from collections where name = $1`, info.Name)
-		return err
+		return deleteCollectionRows(ctx, tx, info.Name)
 	}
 	var (
 		leafGroups   [][]fgb.Leaf
@@ -208,7 +207,7 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 	}
 	if _, err := tx.Exec(ctx, `
 		update collections set version = version + 1, updated_at = now(), chunk_count = $2, feature_count = $3,
-			minx = s.minx, miny = s.miny, maxx = s.maxx, maxy = s.maxy
+			minx = s.minx, miny = s.miny, maxx = s.maxx, maxy = s.maxy, members = to_jsonb($4::text[])
 		from (select min(minx) minx, min(miny) miny, max(maxx) maxx, max(maxy) maxy from collections where name = any($4::text[])) s
 		where collections.name = $1`, info.Name, len(lengths), features, names); err != nil {
 		return err

@@ -136,6 +136,19 @@ func dropPartitions(ctx context.Context, conn db, collection string) error {
 	return nil
 }
 
+func deleteCollectionRows(ctx context.Context, conn db, name string) error {
+	for _, query := range []string{
+		`delete from collections where name = $1`,
+		`delete from virtual_file where collection = $1`,
+		`delete from virtual_segment where collection = $1`,
+	} {
+		if _, err := conn.Exec(ctx, query, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) DropCollection(ctx context.Context, name string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("invalid collection name %q", name)
@@ -151,14 +164,11 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	if err := dropPartitions(ctx, tx, name); err != nil {
 		return err
 	}
-	for _, query := range []string{
-		`delete from collections where name = $1`,
-		`delete from virtual_file where collection = $1`,
-		`delete from virtual_segment where collection = $1`,
-	} {
-		if _, err := tx.Exec(ctx, query, name); err != nil {
-			return err
-		}
+	if err := deleteCollectionRows(ctx, tx, name); err != nil {
+		return err
+	}
+	if err := s.rebuildMemberViews(ctx, tx, name); err != nil {
+		return err
 	}
 	s.forgetCasts(name)
 	return tx.Commit(ctx)
