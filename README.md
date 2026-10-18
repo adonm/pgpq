@@ -73,6 +73,8 @@ curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "
 | `/readyz` | readiness probe: PostgreSQL ping plus migration check |
 | `/metrics` | Prometheus text metrics: requests, durations, bytes, ingest counters (features and chunks) and pool gauges |
 
+Collection ids are 1 to 48 characters: a letter or digit, then letters, digits, `_`, `-` or `.`. Other ids answer 422 on PUT and DELETE.
+
 ## Real data (OSM Layer Cake)
 
 [Layercake](https://layercake.openstreetmap.us) publishes OpenStreetMap as planet-wide GeoParquet layers with HTTP range access. GDAL (sidecar container) reads them with row-group pruning, converts to FlatGeobuf and streams it straight into a PUT — no temporary files on the host:

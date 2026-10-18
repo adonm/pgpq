@@ -106,6 +106,10 @@ func (s *Server) putCollectionDoc(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteCollection(w http.ResponseWriter, r *http.Request) {
+	if !store.ValidName(r.PathValue("id")) {
+		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
+		return
+	}
 	err := s.Store.DropCollection(r.Context(), r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "collection not found", http.StatusNotFound)

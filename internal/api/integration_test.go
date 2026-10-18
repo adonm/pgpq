@@ -502,6 +502,14 @@ func TestPostgresGeneratedNames(t *testing.T) {
 			t.Fatalf("%s range filter = %s, want 2 matches", name, w.Body.String())
 		}
 	}
+	for _, bad := range []string{"itest_" + strings.Repeat("n", 43), "itest%20space", "itest%27quote", ".hidden", "-dash"} {
+		if w := call(h, "PUT", "/collections/"+bad, "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 422 {
+			t.Fatalf("PUT %s = %d, want 422", bad, w.Code)
+		}
+		if w := call(h, "DELETE", "/collections/"+bad, "", nil); w.Code != 422 {
+			t.Fatalf("DELETE %s = %d, want 422", bad, w.Code)
+		}
+	}
 }
 
 func chunkStarts(t *testing.T, st *store.Store, name string) []int {
