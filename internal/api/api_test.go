@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/adonm/postfgb/internal/store"
@@ -120,12 +121,29 @@ func TestUnsupportedQuery(t *testing.T) {
 		{"/collections/demo/items?crs=EPSG:3857", 400},
 		{"/collections/demo/items?bbox=1,2,3,4&bbox-crs=" + crs84, 200},
 		{"/collections/demo/items?bbox=1,2,3,4&bbox-crs=EPSG:3857", 400},
+		{"/collections/demo/items?filter=i%3E1", 200},
+		{"/collections/demo/items?filter=i%3E1&filter-lang=cql2-text", 200},
+		{"/collections/demo/items?filter-lang=cql2-json", 400},
 	}
 	for _, tc := range cases {
 		w := httptest.NewRecorder()
 		gate.ServeHTTP(w, httptest.NewRequest("GET", tc.target, nil))
 		if w.Code != tc.want {
 			t.Fatalf("%s = %d, want %d", tc.target, w.Code, tc.want)
+		}
+	}
+}
+
+func TestStacSearchRejectsJSONFilter(t *testing.T) {
+	h := NewWithConfig(Config{})
+	for _, body := range []string{
+		`{"filter":{"op":"=","args":[{"property":"amenity"},"bench"]}}`,
+		`{"filter-lang":"cql2-json","filter":"amenity = 'bench'"}`,
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("POST", "/stac/search", strings.NewReader(body)))
+		if w.Code != 400 {
+			t.Fatalf("%s = %d, want 400", body, w.Code)
 		}
 	}
 }

@@ -323,13 +323,13 @@ func (s *Server) stacItems(w http.ResponseWriter, r *http.Request) {
 }
 
 type stacSearchBody struct {
-	BBox        []float64       `json:"bbox"`
-	Datetime    string          `json:"datetime"`
-	Collections []string        `json:"collections"`
-	Limit       int             `json:"limit"`
-	Offset      int             `json:"offset"`
-	FilterLang  string          `json:"filter-lang"`
-	Filter      json.RawMessage `json:"filter"`
+	BBox        []float64 `json:"bbox"`
+	Datetime    string    `json:"datetime"`
+	Collections []string  `json:"collections"`
+	Limit       int       `json:"limit"`
+	Offset      int       `json:"offset"`
+	FilterLang  string    `json:"filter-lang"`
+	Filter      string    `json:"filter"`
 }
 
 func (s *Server) stacSearch(w http.ResponseWriter, r *http.Request) {
@@ -393,22 +393,17 @@ func (s *Server) stacSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	var filter cql.Expr
 	if post {
-		if len(body.Filter) > 0 {
-			var err error
-			if body.FilterLang == "cql2-text" {
-				var text string
-				if err := json.Unmarshal(body.Filter, &text); err != nil {
-					http.Error(w, "filter must be a string for cql2-text", http.StatusBadRequest)
-					return
-				}
-				filter, err = cql.Parse(text)
-			} else {
-				filter, err = cql.ParseJSON(body.Filter)
-			}
+		if body.FilterLang != "" && body.FilterLang != "cql2-text" {
+			http.Error(w, "filter-lang must be cql2-text", http.StatusBadRequest)
+			return
+		}
+		if body.Filter != "" {
+			parsed, err := cql.Parse(body.Filter)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			filter = parsed
 		}
 	} else {
 		cloned := r.Clone(ctx)
@@ -489,8 +484,8 @@ func stacNextLink(r *http.Request, post bool, body stacSearchBody, limit, offset
 	if len(body.Collections) > 0 {
 		values.Set("collections", strings.Join(body.Collections, ","))
 	}
-	if len(body.Filter) > 0 {
-		values.Set("filter", string(body.Filter))
+	if body.Filter != "" {
+		values.Set("filter", body.Filter)
 		if body.FilterLang != "" {
 			values.Set("filter-lang", body.FilterLang)
 		}

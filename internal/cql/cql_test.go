@@ -40,53 +40,6 @@ func TestEqualityUsesContainment(t *testing.T) {
 	}
 }
 
-func TestJSONParity(t *testing.T) {
-	cases := []struct{ text, json string }{
-		{`i > 42`, `{"op":">","args":[{"property":"i"},42]}`},
-		{`name = 'x'`, `{"op":"=","args":[{"property":"name"},"x"]}`},
-		{`name like 'a%' and i between 1 and 5`, `{"op":"and","args":[{"op":"like","args":[{"property":"name"},"a%"]},{"op":"between","args":[{"property":"i"},1,5]}]}`},
-		{`i in (1, 2, 3)`, `{"op":"in","args":[{"property":"i"},[1,2,3]]}`},
-		{`x is null`, `{"op":"isNull","args":[{"property":"x"}]}`},
-		{`not (a = 'b' or c > 1)`, `{"op":"not","args":[{"op":"or","args":[{"op":"=","args":[{"property":"a"},"b"]},{"op":">","args":[{"property":"c"},1]}]}]}`},
-		{`i <> 3`, `{"op":"<>","args":[{"property":"i"},3]}`},
-		{`i != 3`, `{"op":"!=","args":[{"property":"i"},3]}`},
-	}
-	for _, tc := range cases {
-		textExpr, err := Parse(tc.text)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.text, err)
-		}
-		jsonParsed, err := ParseJSON([]byte(tc.json))
-		if err != nil {
-			t.Fatalf("%s: %v", tc.json, err)
-		}
-		var textArgs, jsonArgs []any
-		textSQL, textArgs := sqlOf(textExpr, nil)
-		jsonSQL, jsonArgs := sqlOf(jsonParsed, nil)
-		if textSQL != jsonSQL {
-			t.Fatalf("%s: sql %q != %q", tc.text, textSQL, jsonSQL)
-		}
-		if !reflect.DeepEqual(textArgs, jsonArgs) {
-			t.Fatalf("%s: args %v != %v", tc.text, textArgs, jsonArgs)
-		}
-	}
-}
-
-func TestJSONErrors(t *testing.T) {
-	bad := []string{
-		`{"op":"frobnicate","args":[]}`,
-		`{"args":[]}`,
-		`{"op":"like","args":[{"property":"x"},5]}`,
-		`{"op":"=","args":["a","b"]}`,
-		`{`,
-	}
-	for _, in := range bad {
-		if _, err := ParseJSON([]byte(in)); err == nil {
-			t.Fatalf("%s: expected error", in)
-		}
-	}
-}
-
 func TestClauses(t *testing.T) {
 	cases := []struct {
 		in       string
@@ -141,9 +94,6 @@ func TestSpatialFunctionsAreRejected(t *testing.T) {
 	_, err := Parse(`name = 'x' and S_INTERSECTS(geometry, POINT(1 2))`)
 	if err == nil || !strings.Contains(err.Error(), "spatial functions are not supported") {
 		t.Fatalf("text spatial function: %v", err)
-	}
-	if _, err := ParseJSON([]byte(`{"op":"s_intersects","args":[{"property":"geometry"},{"type":"Point","coordinates":[1,2]}]}`)); err == nil {
-		t.Fatal("json spatial operator should be rejected")
 	}
 }
 
