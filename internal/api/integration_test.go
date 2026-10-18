@@ -1068,3 +1068,67 @@ func TestPostgresViewMemberSchemaReplace(t *testing.T) {
 		t.Fatalf("view after a same-schema replace = %s, want 11 matches", w.Body.String())
 	}
 }
+
+func idFixtureFGB(t *testing.T, count int, id func(i int) json.RawMessage) []byte {
+	t.Helper()
+	features := make([]chunk.InputFeature, 0, count)
+	for i := 0; i < count; i++ {
+		coords, err := json.Marshal([]float64{7.4 + float64(i)*0.001, 43.7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		features = append(features, chunk.InputFeature{
+			Geometry:   chunk.RawGeometry{Type: "Point", Coordinates: coords},
+			Properties: map[string]json.RawMessage{"id": id(i)},
+		})
+	}
+	body, err := chunk.Encode("itest", features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestPostgresReadonlyWorkerKeepsCurrentCasts(t *testing.T) {
+	writer := integrationStore(t)
+	ctx := context.Background()
+	reader, err := store.Open(ctx, os.Getenv("POSTFGB_TEST_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reader.Close)
+	name := "itest_casts"
+	writer.DropCollection(ctx, name)
+	t.Cleanup(func() { writer.DropCollection(context.Background(), name) })
+	h := New(writer)
+	ro := NewWithConfig(Config{Store: reader, ReadOnly: true})
+	count := func(handler http.Handler, filter string) int64 {
+		t.Helper()
+		w := call(handler, "GET", "/collections/"+name+"/items?limit=1&numberMatched=true&filter="+url.QueryEscape(filter), "", nil)
+		var doc struct {
+			NumberMatched *int64 `json:"numberMatched"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil || w.Code != 200 || doc.NumberMatched == nil {
+			t.Fatalf("%s = %d: %s", filter, w.Code, w.Body.String())
+		}
+		return *doc.NumberMatched
+	}
+	numeric := idFixtureFGB(t, 40, func(i int) json.RawMessage { return json.RawMessage(strconv.Itoa(3000000000 + i)) })
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", numeric); w.Code != 201 {
+		t.Fatalf("ingest numeric ids = %d: %s", w.Code, w.Body.String())
+	}
+	if got := count(ro, "id >= 3000000035"); got != 5 {
+		t.Fatalf("numeric ids: readonly matched %d, want 5", got)
+	}
+	text := idFixtureFGB(t, 10, func(i int) json.RawMessage { return json.RawMessage(strconv.Quote(strconv.Itoa(10 + i))) })
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", text); w.Code != 200 {
+		t.Fatalf("replace with string ids = %d: %s", w.Code, w.Body.String())
+	}
+	want := count(h, "id >= '15'")
+	if want != 5 {
+		t.Fatalf("writer matched %d string ids, want 5", want)
+	}
+	if got := count(ro, "id >= '15'"); got != want {
+		t.Fatalf("readonly worker matched %d after the replace, the writer %d", got, want)
+	}
+}

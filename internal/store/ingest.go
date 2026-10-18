@@ -173,7 +173,6 @@ func (s *Store) DropCollection(ctx context.Context, name string) error {
 	if err := s.rebuildMemberViews(ctx, tx, name); err != nil {
 		return err
 	}
-	s.forgetCasts(name)
 	return tx.Commit(ctx)
 }
 
@@ -222,7 +221,6 @@ func (i *Ingest) Commit(ctx context.Context) error {
 	if err := i.store.rebuildMemberViews(ctx, i.tx, i.collection); err != nil {
 		return err
 	}
-	i.store.forgetCasts(i.collection)
 	return i.tx.Commit(ctx)
 }
 

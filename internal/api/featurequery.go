@@ -296,7 +296,7 @@ func ordinals(start, count int) []int {
 func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q featureQuery, filter cql.Expr, offset int, out sink) (int, error) {
 	pos := 0
 	if q.bbox == nil && offset > 0 {
-		count, err := s.Store.CountMatches(ctx, target.Name, filter)
+		count, err := s.Store.CountMatches(ctx, target, filter)
 		if err != nil {
 			return offset, err
 		}
@@ -304,7 +304,7 @@ func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q
 		offset -= pos
 	}
 	for limit := max(offset+out.remaining(), minMatchWindow); out.remaining() > 0; limit *= 2 {
-		matches, err := s.Store.Matches(ctx, target.Name, q.bbox, filter, limit, pos)
+		matches, err := s.Store.Matches(ctx, target, q.bbox, filter, limit, pos)
 		if err != nil {
 			return offset, err
 		}
@@ -393,7 +393,7 @@ func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, q 
 			total += target.FeatureCount
 			continue
 		}
-		count, err := s.Store.CountMatches(ctx, target.Name, filter)
+		count, err := s.Store.CountMatches(ctx, target, filter)
 		if err != nil {
 			return 0, false, err
 		}

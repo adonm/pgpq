@@ -54,15 +54,15 @@ func (s *Store) ChunkSizes(ctx context.Context, collection string, ids []int64) 
 	return sizes, rows.Err()
 }
 
-func (s *Store) ColumnCasts(ctx context.Context, collection string) (cql.Casts, error) {
+func (s *Store) ColumnCasts(ctx context.Context, info CollectionInfo) (cql.Casts, error) {
 	s.castsMu.Lock()
-	cached, ok := s.casts[collection]
+	cached, ok := s.casts[info.UID]
 	s.castsMu.Unlock()
-	if ok {
-		return cached, nil
+	if ok && cached.version == info.Version {
+		return cached.casts, nil
 	}
 	casts := cql.Casts{}
-	metas, err := s.ChunkMetas(ctx, collection, nil, 1, 0, 0)
+	metas, err := s.ChunkMetas(ctx, info.Name, nil, 1, 0, 0)
 	if err != nil || len(metas) == 0 || len(metas[0].Columns) == 0 {
 		return casts, err
 	}
@@ -77,7 +77,7 @@ func (s *Store) ColumnCasts(ctx context.Context, collection string) (cql.Casts, 
 		casts[col.Name] = CastOf(col.Type)
 	}
 	s.castsMu.Lock()
-	s.casts[collection] = casts
+	s.casts[info.UID] = castEntry{version: info.Version, casts: casts}
 	s.castsMu.Unlock()
 	return casts, nil
 }
@@ -94,12 +94,12 @@ func CastOf(columnType string) cql.Cast {
 	return cql.CastNone
 }
 
-func (s *Store) matchQuery(ctx context.Context, collection string, bbox *[4]float64, filter cql.Expr) (*cql.Builder, string, error) {
-	casts, err := s.ColumnCasts(ctx, collection)
+func (s *Store) matchQuery(ctx context.Context, info CollectionInfo, bbox *[4]float64, filter cql.Expr) (*cql.Builder, string, error) {
+	casts, err := s.ColumnCasts(ctx, info)
 	if err != nil {
 		return nil, "", err
 	}
-	b := cql.NewBuilder("m.props", casts, collection)
+	b := cql.NewBuilder("m.props", casts, info.Name)
 	from, where := `chunk_props m`, `m.collection = $1`
 	if filter != nil {
 		where += ` and ` + filter.SQL(b)
@@ -111,11 +111,11 @@ func (s *Store) matchQuery(ctx context.Context, collection string, bbox *[4]floa
 	return b, `from ` + from + ` where ` + where, nil
 }
 
-func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+func (s *Store) Matches(ctx context.Context, info CollectionInfo, bbox *[4]float64, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
 	if filter == nil {
 		return nil, nil
 	}
-	b, from, err := s.matchQuery(ctx, collection, bbox, filter)
+	b, from, err := s.matchQuery(ctx, info, bbox, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -129,8 +129,8 @@ func scanMatch(row pgx.CollectableRow) (FeatureMatch, error) {
 	return match, err
 }
 
-func (s *Store) FindFeature(ctx context.Context, collection string, filter cql.Expr) (FeatureMatch, bool, error) {
-	b, from, err := s.matchQuery(ctx, collection, nil, filter)
+func (s *Store) FindFeature(ctx context.Context, info CollectionInfo, filter cql.Expr) (FeatureMatch, bool, error) {
+	b, from, err := s.matchQuery(ctx, info, nil, filter)
 	if err != nil {
 		return FeatureMatch{}, false, err
 	}
@@ -146,8 +146,8 @@ func (s *Store) FindFeature(ctx context.Context, collection string, filter cql.E
 	return match, true, nil
 }
 
-func (s *Store) CountMatches(ctx context.Context, collection string, filter cql.Expr) (int64, error) {
-	b, from, err := s.matchQuery(ctx, collection, nil, filter)
+func (s *Store) CountMatches(ctx context.Context, info CollectionInfo, filter cql.Expr) (int64, error) {
+	b, from, err := s.matchQuery(ctx, info, nil, filter)
 	if err != nil {
 		return 0, err
 	}

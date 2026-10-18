@@ -70,7 +70,7 @@ func (s *Server) lookupFeature(ctx context.Context, info store.CollectionInfo, f
 }
 
 func (s *Server) featureByProperty(ctx context.Context, info store.CollectionInfo, column string, value any) (*chunk.Feature, bool, error) {
-	match, ok, err := s.Store.FindFeature(ctx, info.Name, &cql.Compare{Prop: column, Op: "=", Value: value})
+	match, ok, err := s.Store.FindFeature(ctx, info, &cql.Compare{Prop: column, Op: "=", Value: value})
 	if err != nil || !ok {
 		return nil, false, err
 	}

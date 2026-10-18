@@ -28,7 +28,12 @@ var ErrConflict = errors.New("store: conflict")
 type Store struct {
 	Pool    *pgxpool.Pool
 	castsMu sync.Mutex
-	casts   map[string]cql.Casts
+	casts   map[int64]castEntry
+}
+
+type castEntry struct {
+	version int64
+	casts   cql.Casts
 }
 
 type Payload struct {
@@ -129,17 +134,11 @@ func OpenWithPool(ctx context.Context, dsn string, opts PoolOptions) (*Store, er
 		pool.Close()
 		return nil, err
 	}
-	return &Store{Pool: pool, casts: map[string]cql.Casts{}}, nil
+	return &Store{Pool: pool, casts: map[int64]castEntry{}}, nil
 }
 
 func (s *Store) Close() {
 	s.Pool.Close()
-}
-
-func (s *Store) forgetCasts(collection string) {
-	s.castsMu.Lock()
-	delete(s.casts, collection)
-	s.castsMu.Unlock()
 }
 
 func (s *Store) Ready(ctx context.Context) error {
