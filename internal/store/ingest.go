@@ -5,14 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
-	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/stats"
 )
@@ -55,17 +53,6 @@ var partitions = []partition{
 		},
 	},
 	{
-		parent: "chunk_props",
-		table: `create table %[1]s (
-	collection text not null,
-	chunk_id bigint not null,
-	feature_ord int not null,
-	props jsonb not null,
-	primary key (collection, chunk_id, feature_ord)
-)`,
-		indexes: []string{`create index on %[1]s using gin (props jsonb_path_ops)`},
-	},
-	{
 		parent: "chunk_stats",
 		table: `create table %[1]s (
 	collection text not null,
@@ -84,6 +71,8 @@ func partitionName(parent, collection string) string {
 	sum := sha256.Sum256([]byte(collection))
 	return parent + "_" + hex.EncodeToString(sum[:16])
 }
+
+const partitionLockKey int64 = 0x50464c4b
 
 func (i *Ingest) staged(parent string) string {
 	return pgx.Identifier{"staging", partitionName(parent, i.collection)}.Sanitize()
@@ -129,6 +118,9 @@ func (i *Ingest) createIndexes(ctx context.Context) error {
 }
 
 func (i *Ingest) swap(ctx context.Context) error {
+	if _, err := i.tx.Exec(ctx, `select pg_advisory_xact_lock($1)`, partitionLockKey); err != nil {
+		return err
+	}
 	if err := dropPartitions(ctx, i.tx, i.collection); err != nil {
 		return err
 	}
@@ -272,18 +264,6 @@ func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
 	return id, nil
 }
 
-func (i *Ingest) PutChunkProps(ctx context.Context, chunkID int64, docs []string) error {
-	if len(docs) == 0 {
-		return nil
-	}
-	_, err := i.tx.Exec(ctx, `
-		insert into `+i.staged("chunk_props")+` (collection, chunk_id, feature_ord, props)
-		select $1, $2, input.ord - 1, input.doc::jsonb
-		from unnest($3::text[]) with ordinality as input(doc, ord)
-		where input.doc <> '' and input.doc <> '{}' and input.doc <> 'null'`, i.collection, chunkID, docs)
-	return err
-}
-
 func (i *Ingest) PutChunkStats(ctx context.Context, chunkID int64, rows []stats.Row) error {
 	if len(rows) == 0 {
 		return nil
@@ -319,30 +299,6 @@ func (i *Ingest) SetCatalog(ctx context.Context, idColumn, timeColumn string, ti
 			id_column = $2, time_column = $3, time_min = $4, time_max = $5
 		where name = $1`, i.collection, nullable(idColumn), nullable(timeColumn), timeMin, timeMax)
 	return err
-}
-
-func sortExpr(name string, cast cql.Cast) string {
-	switch cast {
-	case cql.CastNumeric, cql.CastBoolean, cql.CastTimestamp:
-		return cql.ColumnExpr("props", name, cast)
-	case cql.CastText:
-		return `props->>'` + strings.ReplaceAll(name, "'", "''") + `'`
-	}
-	return ""
-}
-
-func (i *Ingest) CreateSortIndexes(ctx context.Context, cols []SortColumn) error {
-	for idx, col := range cols {
-		expr := sortExpr(col.Name, col.Cast)
-		if expr == "" {
-			return fmt.Errorf("sortable: unsupported cast %q", col.Cast)
-		}
-		name := ident(fmt.Sprintf("%s_sort_%d_idx", partitionName("chunk_props", i.collection), idx))
-		if _, err := i.tx.Exec(ctx, `create index `+name+` on `+i.staged("chunk_props")+` ((`+expr+`))`); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func nullable(s string) any {

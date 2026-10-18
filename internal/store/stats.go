@@ -22,8 +22,37 @@ type chunkData struct {
 	Data []byte
 }
 
+const statsBackfillLockKey int64 = 0x5342464b
+
 func (s *Store) BackfillStats(ctx context.Context, collection string) ([]BackfillResult, error) {
 	names, err := s.statsCollections(ctx, collection)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]BackfillResult, 0, len(names))
+	for _, name := range names {
+		result, err := s.backfillStats(ctx, name)
+		if err != nil {
+			return results, fmt.Errorf("%s: %w", name, err)
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func (s *Store) BackfillStaleStats(ctx context.Context) ([]BackfillResult, error) {
+	conn, err := s.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `select pg_advisory_unlock($1)`, statsBackfillLockKey)
+		conn.Release()
+	}()
+	if _, err := conn.Exec(ctx, `select pg_advisory_lock($1)`, statsBackfillLockKey); err != nil {
+		return nil, err
+	}
+	names, err := queryAll(ctx, conn, pgx.RowTo[string], `select name from collections where stats_version <> version order by name`)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +87,9 @@ func (s *Store) backfillStats(ctx context.Context, collection string) (BackfillR
 		return result, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock($1)`, partitionLockKey); err != nil {
+		return result, err
+	}
 	if _, err := tx.Exec(ctx, `create table if not exists `+ident(partitionName("chunk_stats", collection))+
 		` partition of chunk_stats for values in ('`+collection+`')`); err != nil {
 		return result, err

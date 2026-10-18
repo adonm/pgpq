@@ -66,6 +66,13 @@ func serve(args []string) {
 	}
 	if *readonly {
 		slog.Info("read-only worker")
+	} else {
+		start := time.Now()
+		results, err := st.BackfillStaleStats(ctx)
+		if err != nil {
+			fatal(err)
+		}
+		slog.Info("statistics ready", "collections", len(results), "elapsed", time.Since(start).Round(time.Millisecond).String())
 	}
 	srv := &http.Server{
 		Addr:              *addr,

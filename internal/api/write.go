@@ -24,15 +24,13 @@ func (s *Server) putCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putCollectionData(w http.ResponseWriter, r *http.Request) {
-	sortable := parseList(r.URL.Query().Get("sortable"))
-	if len(sortable) > 4 {
-		http.Error(w, "at most 4 sortable columns", http.StatusBadRequest)
+	if r.URL.Query().Has("sortable") {
+		http.Error(w, "sortable is no longer supported: attribute statistics are built automatically", http.StatusBadRequest)
 		return
 	}
 	id := r.PathValue("id")
 	result, err := ingest.Run(r.Context(), s.Store, r.Body, ingest.Options{
 		Collection: id,
-		Sortable:   sortable,
 		IDColumn:   r.URL.Query().Get("id_column"),
 		TimeColumn: r.URL.Query().Get("time_column"),
 		Flatten:    flattenJSON(r),
@@ -120,20 +118,6 @@ func (s *Server) deleteCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func parseList(value string) []string {
-	if value == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part = strings.TrimSpace(part); part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }
 
 func flattenJSON(r *http.Request) bool {

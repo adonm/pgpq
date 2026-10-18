@@ -540,7 +540,7 @@ func (s *smoke) speeds(id string, box [4]float64, page smokePage, property, valu
 	measure("single-feature", items+"/"+url.PathEscape(smokeFeatureID(page.Features[0])), nil, smokeBudget{0.2, "one chunk fetch and one feature decode over loopback"})
 	measure("items-fgb-1mb-range", "/collections/"+url.PathEscape(id)+"/items.fgb", map[string]string{"Range": "bytes=0-1048575"}, smokeBudget{0.2, "one virtual segment and a 1 MB slice from the local worker"})
 	if property != "" {
-		measure("filtered-page", items+"?"+url.Values{property: {value}, "limit": {"100"}}.Encode(), nil, smokeBudget{0.3, "one jsonb containment match over a warmed local worker"})
+		measure("filtered-page", items+"?"+url.Values{property: {value}, "limit": {"100"}}.Encode(), nil, smokeBudget{0.3, "one attribute filter pruned by the per-chunk statistics over a warmed local worker"})
 	}
 	measure("viewer-rgis", "/viewer.rgis", nil, smokeBudget{0.4, "a project built from the catalog on one warmed local worker"})
 }

@@ -9,56 +9,53 @@ import (
 	"github.com/adonm/postfgb/internal/stats"
 )
 
-func ChunkSQL(e Expr, b *Builder) string {
+func ChunkSQL(e Expr, bind func(any) string) string {
 	switch x := e.(type) {
 	case *Compare:
-		value := coerce(x.Value, b.Casts[x.Prop])
 		if x.Op == "=" {
-			return equalityChunk(b, x.Prop, value)
+			return equalityChunk(bind, x.Prop, x.Value)
 		}
-		return orderedChunk(b, x.Prop, x.Op, value)
+		return orderedChunk(bind, x.Prop, x.Op, x.Value)
 	case *Between:
 		if x.Not {
 			return "true"
 		}
-		lo := coerce(x.Lo, b.Casts[x.Prop])
-		hi := coerce(x.Hi, b.Casts[x.Prop])
-		return "(" + orderedChunk(b, x.Prop, ">=", lo) + " and " + orderedChunk(b, x.Prop, "<=", hi) + ")"
+		return "(" + orderedChunk(bind, x.Prop, ">=", x.Lo) + " and " + orderedChunk(bind, x.Prop, "<=", x.Hi) + ")"
 	case *In:
 		if x.Not {
 			return "true"
 		}
 		parts := make([]string, len(x.Values))
 		for i, v := range x.Values {
-			parts[i] = equalityChunk(b, x.Prop, coerce(v, b.Casts[x.Prop]))
+			parts[i] = equalityChunk(bind, x.Prop, v)
 		}
 		return "(" + strings.Join(parts, " or ") + ")"
 	case *IsNull:
 		if x.Not {
 			return "true"
 		}
-		return chunkLeaf(b.Bind(x.Prop), "s.nulls > 0")
+		return chunkLeaf(bind(x.Prop), "s.nulls > 0")
 	case andExpr:
-		return "(" + ChunkSQL(x.left, b) + " and " + ChunkSQL(x.right, b) + ")"
+		return "(" + ChunkSQL(x.left, bind) + " and " + ChunkSQL(x.right, bind) + ")"
 	case orExpr:
-		return "(" + ChunkSQL(x.left, b) + " or " + ChunkSQL(x.right, b) + ")"
+		return "(" + ChunkSQL(x.left, bind) + " or " + ChunkSQL(x.right, bind) + ")"
 	}
 	return "true"
 }
 
-func equalityChunk(b *Builder, prop string, value any) string {
-	key := b.Bind(prop)
+func equalityChunk(bind func(any) string, prop string, value any) string {
+	key := bind(prop)
 	var parts []string
 	if texts := probeTexts(value); len(texts) > 0 {
 		or := make([]string, 0, len(texts))
 		for _, text := range texts {
 			h1, h2 := stats.Hashes(text)
-			or = append(or, "bloom_has(s.bloom, "+b.Bind(h1)+", "+b.Bind(h2)+")")
+			or = append(or, "bloom_has(s.bloom, "+bind(h1)+", "+bind(h2)+")")
 		}
 		parts = append(parts, "(s.bloom is null or "+strings.Join(or, " or ")+")")
 	}
 	if number, ok := asNumber(value); ok {
-		v := b.Bind(number)
+		v := bind(number)
 		parts = append(parts, "(s.min is null or s.max is null or (s.min <= "+v+" and "+v+" <= s.max))")
 	}
 	if len(parts) == 0 {
@@ -67,19 +64,19 @@ func equalityChunk(b *Builder, prop string, value any) string {
 	return chunkLeaf(key, strings.Join(parts, " and "))
 }
 
-func orderedChunk(b *Builder, prop, op string, value any) string {
+func orderedChunk(bind func(any) string, prop, op string, value any) string {
 	if op == "<>" {
 		return "true"
 	}
-	if number, ok := asNumber(value); ok {
-		return chunkLeaf(b.Bind(prop), rangeTest(op, b.Bind(number)))
+	if number, ok := numericValue(value); ok {
+		return chunkLeaf(bind(prop), rangeTest(op, bind(number)))
 	}
 	if t, ok := value.(time.Time); ok {
-		return chunkLeaf(b.Bind(prop), rangeTest(op, b.Bind(epochSeconds(t))))
+		return chunkLeaf(bind(prop), rangeTest(op, bind(epochSeconds(t))))
 	}
 	if text, ok := value.(string); ok {
 		if t, ok := ParseTime(text); ok {
-			return chunkLeaf(b.Bind(prop), rangeTest(op, b.Bind(epochSeconds(t))))
+			return chunkLeaf(bind(prop), rangeTest(op, bind(epochSeconds(t))))
 		}
 	}
 	return "true"
@@ -112,7 +109,11 @@ func probeTexts(value any) []string {
 	case bool:
 		return []string{fmt.Sprint(x)}
 	case string:
-		return []string{x}
+		texts := []string{x}
+		if text, ok := stats.Number(x); ok && !slices.Contains(texts, text) {
+			texts = append(texts, text)
+		}
+		return texts
 	}
 	if !isNumber(value) {
 		return nil
@@ -128,6 +129,17 @@ func probeTexts(value any) []string {
 }
 
 func asNumber(value any) (float64, bool) {
+	if text, ok := value.(string); ok {
+		n, ok := Number(text)
+		if !ok {
+			return 0, false
+		}
+		return floatValue(n)
+	}
+	return numericValue(value)
+}
+
+func numericValue(value any) (float64, bool) {
 	if !isNumber(value) {
 		return 0, false
 	}

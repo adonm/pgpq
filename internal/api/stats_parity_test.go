@@ -63,37 +63,29 @@ func parityFeatureFGB(t *testing.T, count int) []byte {
 	return body
 }
 
-func TestPostgresStatsParity(t *testing.T) {
+func TestPostgresMissingStatisticsFail(t *testing.T) {
 	st := integrationStore(t)
 	ctx := context.Background()
-	backed, plain := "itest_stats_backed", "itest_stats_plain"
-	for _, name := range []string{backed, plain} {
-		st.DropCollection(ctx, name)
-		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
-	}
+	name := "itest_stats_missing"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
 	h := New(st)
-	body := parityFeatureFGB(t, 500)
-	for _, name := range []string{backed, plain} {
-		if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", body); w.Code != 201 {
-			t.Fatalf("ingest %s = %d: %s", name, w.Code, w.Body.String())
-		}
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", parityFeatureFGB(t, 200)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
 	}
-	if _, err := st.Pool.Exec(ctx, `update collections set stats_version = 0 where name = $1`, plain); err != nil {
+	if _, err := st.Pool.Exec(ctx, `update collections set stats_version = 0 where name = $1`, name); err != nil {
 		t.Fatal(err)
 	}
-	filters := []string{
-		"n = 7", "n > 50", "n <= 3", "n BETWEEN 10 AND 20", "n IN (1, 2, 3)",
-		"s = 'cat_01'", "s LIKE 'cat_%'", "s IS NULL", "s IS NOT NULL", "s <> 'cat_00'",
-		"b = true", "b = 'false'", "NOT (n = 7)", "n > 10 AND s = 'cat_01'",
-		"d >= '2026-01-05T00:00:00Z'", "d < '2026-01-03T12:00:00Z'", "unknown = 'x'",
+	query := url.Values{"filter": {"n = 7"}, "limit": {"10"}, "numberMatched": {"true"}}
+	w := call(h, "GET", "/collections/"+name+"/items?"+query.Encode(), "", nil)
+	if w.Code != 500 {
+		t.Fatalf("filter without statistics = %d, want 500: %s", w.Code, w.Body.String())
 	}
-	for _, filter := range filters {
-		query := url.Values{"filter": {filter}, "limit": {"1000000"}, "numberMatched": {"true"}}
-		backedBody := itemsBody(t, h, backed, query)
-		plainBody := itemsBody(t, h, plain, query)
-		if backedBody != plainBody {
-			t.Fatalf("filter %q: backfilled and unbackfilled differ:\n%s\n%s", filter, backedBody, plainBody)
-		}
+	if !strings.Contains(w.Body.String(), name) {
+		t.Fatalf("error should name the collection: %s", w.Body.String())
+	}
+	if w := call(h, "GET", "/collections/"+name+"/items/0", "", nil); w.Code != 500 || !strings.Contains(w.Body.String(), name) {
+		t.Fatalf("feature lookup without statistics = %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -210,16 +202,6 @@ func TestCorpusParity(t *testing.T) {
 		} else if matched != strconv.FormatInt(want, 10) {
 			t.Fatalf("%s: numberMatched = %s, want %d", filter.name, matched, want)
 		}
-		if _, err := st.Pool.Exec(ctx, `update collections set stats_version = 0 where name = $1`, name); err != nil {
-			t.Fatal(err)
-		}
-		sidecar := itemsBody(t, h, name, query)
-		if got != sidecar {
-			t.Fatalf("%s: statistics path and sidecar path differ:\n%s\n%s", filter.name, got, sidecar)
-		}
-		if _, err := st.Pool.Exec(ctx, `update collections set stats_version = version where name = $1`, name); err != nil {
-			t.Fatal(err)
-		}
 	}
 
 	corpusOracle(t, st, info)
@@ -232,7 +214,7 @@ type oracleFeature struct {
 	props map[string]any
 }
 
-func loadCorpusFeatures(t *testing.T, st *store.Store, name string) []oracleFeature {
+func loadCorpusFeatures(t *testing.T, st *store.Store, name string) ([]oracleFeature, map[string]flattypes.ColumnType) {
 	t.Helper()
 	rows, err := st.Pool.Query(context.Background(), `select id, data from chunks where collection = $1 and tier = 0 order by id`, name)
 	if err != nil {
@@ -240,6 +222,7 @@ func loadCorpusFeatures(t *testing.T, st *store.Store, name string) []oracleFeat
 	}
 	defer rows.Close()
 	var out []oracleFeature
+	var columns map[string]flattypes.ColumnType
 	for rows.Next() {
 		var chunkID int64
 		var data []byte
@@ -255,6 +238,9 @@ func loadCorpusFeatures(t *testing.T, st *store.Store, name string) []oracleFeat
 			t.Fatal(err)
 		}
 		cols := c.Columns()
+		if columns == nil {
+			columns = chunk.ColumnTypes(cols)
+		}
 		for i, f := range features {
 			props := chunk.DecodeProperties(f.PropertiesBytes(), cols)
 			out = append(out, oracleFeature{chunk: chunkID, ord: i, id: fmt.Sprint(props["id"]), props: props})
@@ -263,7 +249,7 @@ func loadCorpusFeatures(t *testing.T, st *store.Store, name string) []oracleFeat
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	return out
+	return out, columns
 }
 
 type oracleNode struct {
@@ -357,11 +343,7 @@ func oracleLiteral(value any) string {
 }
 
 func corpusOracle(t *testing.T, st *store.Store, info store.CollectionInfo) {
-	casts, err := st.ColumnCasts(context.Background(), info)
-	if err != nil {
-		t.Fatal(err)
-	}
-	features := loadCorpusFeatures(t, st, info.Name)
+	features, columns := loadCorpusFeatures(t, st, info.Name)
 	trees := 300
 	if raw := os.Getenv("POSTFGB_ORACLE_TREES"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil {
@@ -378,7 +360,7 @@ func corpusOracle(t *testing.T, st *store.Store, info store.CollectionInfo) {
 		}
 		var reference, pruned []string
 		for _, f := range features {
-			if cql.Match(expr, f.props, casts) {
+			if cql.Match(expr, f.props, columns) {
 				reference = append(reference, f.id)
 			}
 		}
@@ -391,7 +373,7 @@ func corpusOracle(t *testing.T, st *store.Store, info store.CollectionInfo) {
 			keep[id] = true
 		}
 		for _, f := range features {
-			if keep[f.chunk] && cql.Match(expr, f.props, casts) {
+			if keep[f.chunk] && cql.Match(expr, f.props, columns) {
 				pruned = append(pruned, f.id)
 			}
 		}

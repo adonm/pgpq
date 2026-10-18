@@ -22,7 +22,6 @@ import (
 	"github.com/wroge/wgs84/v2"
 
 	"github.com/adonm/postfgb/internal/chunk"
-	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/stats"
 	"github.com/adonm/postfgb/internal/store"
@@ -72,7 +71,6 @@ func (s *sizer) reset(encoded int, features int) {
 
 type Options struct {
 	Collection string
-	Sortable   []string
 	IDColumn   string
 	TimeColumn string
 	Flatten    bool
@@ -140,11 +138,6 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 			if opts.Flatten {
 				cols, flat = flattenJSONColumns(cols, window)
 			}
-			for _, name := range opts.Sortable {
-				if !hasColumn(cols, name) {
-					return invalid(fmt.Errorf("sortable column %q is not in the schema", name))
-				}
-			}
 			jsonDecided = true
 		} else {
 			rewriteJSONValues(cols, window)
@@ -206,9 +199,6 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		return Result{}, invalid(errors.New("upload contains no features"))
 	}
 	if err := overviews(ctx, ing, opts.Collection, cols); err != nil {
-		return Result{}, err
-	}
-	if err := ing.CreateSortIndexes(ctx, sortColumns(cols, opts.Sortable)); err != nil {
 		return Result{}, err
 	}
 	if err := ing.SetCatalog(ctx, idColumn, timeColumn, timeMin, timeMax); err != nil {
@@ -548,20 +538,6 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 	if err := ing.PutChunkStats(ctx, id, rows); err != nil {
 		return 0, err
 	}
-	if tier > 0 {
-		return len(data), nil
-	}
-	props := make([]string, len(batch))
-	for i := range batch {
-		body, err := json.Marshal(batch[i].Properties)
-		if err != nil {
-			return 0, err
-		}
-		props[i] = string(body)
-	}
-	if err := ing.PutChunkProps(ctx, id, props); err != nil {
-		return 0, err
-	}
 	return len(data), nil
 }
 
@@ -863,19 +839,4 @@ func hasColumn(cols []chunk.Column, name string) bool {
 		}
 	}
 	return false
-}
-
-func sortColumns(cols []chunk.Column, sortable []string) []store.SortColumn {
-	out := make([]store.SortColumn, 0, len(sortable))
-	for _, name := range sortable {
-		cast := cql.CastNone
-		for _, col := range cols {
-			if col.Name == name {
-				cast = store.CastOf(col.Type.String())
-				break
-			}
-		}
-		out = append(out, store.SortColumn{Name: name, Cast: cast})
-	}
-	return out
 }

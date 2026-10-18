@@ -21,6 +21,14 @@ type Column struct {
 	Type flattypes.ColumnType
 }
 
+func ColumnTypes(cols []Column) map[string]flattypes.ColumnType {
+	types := make(map[string]flattypes.ColumnType, len(cols))
+	for _, col := range cols {
+		types[col.Name] = col.Type
+	}
+	return types
+}
+
 type Geometry struct {
 	Type        string     `json:"type"`
 	Coordinates any        `json:"coordinates,omitempty"`

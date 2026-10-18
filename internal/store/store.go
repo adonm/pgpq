@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
 )
 
@@ -26,14 +24,7 @@ var ErrNotFound = errors.New("store: not found")
 var ErrConflict = errors.New("store: conflict")
 
 type Store struct {
-	Pool    *pgxpool.Pool
-	castsMu sync.Mutex
-	casts   map[int64]castEntry
-}
-
-type castEntry struct {
-	version int64
-	casts   cql.Casts
+	Pool *pgxpool.Pool
 }
 
 type Payload struct {
@@ -96,11 +87,6 @@ type FeatureMatch struct {
 	Ord     int
 }
 
-type SortColumn struct {
-	Name string
-	Cast cql.Cast
-}
-
 type db interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -135,7 +121,7 @@ func OpenWithPool(ctx context.Context, dsn string, opts PoolOptions) (*Store, er
 		pool.Close()
 		return nil, err
 	}
-	return &Store{Pool: pool, casts: map[int64]castEntry{}}, nil
+	return &Store{Pool: pool}, nil
 }
 
 func (s *Store) Close() {

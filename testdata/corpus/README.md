@@ -1,10 +1,9 @@
 # Filter parity corpus
 
 `mixed.fgb` is a self-contained FlatGeobuf collection used to compare attribute-filter
-results feature by feature while the filter path moves from the PostgreSQL `chunk_props`
-sidecar to per-chunk statistics plus exact evaluation in Go. Every FlatGeobuf scalar
-column type appears, together with the filter edge cases (nulls, missing keys, arrays,
-LIKE, ranges, datetime, bbox).
+results feature by feature while the filter path moves to per-chunk statistics plus exact
+evaluation in Go. Every FlatGeobuf scalar column type appears, together with the filter
+edge cases (nulls, missing keys, arrays, LIKE, ranges, datetime, bbox).
 
 ## Regenerating
 
@@ -97,10 +96,10 @@ missing/unknown keys; null values; bbox-only; bbox with a filter; and datetime w
 `20261018`), rendered as CQL2 text.
 
 Counts were computed from the file itself: `mixed.fgb` was decoded with the flatbuffers
-reference reader and every predicate evaluated in Python, modelling the current filter
-semantics (equality is `jsonb` containment, so a missing key yields no match; ordered
-comparisons, `LIKE` and `IS NULL` use the guarded expression, so a missing key yields
-NULL). All 100 counts agree with `numberMatched` on the running server today. GDAL
+reference reader and every predicate evaluated in Python, modelling the filter
+semantics (a missing key yields no match for equality; ordered comparisons, `LIKE` and
+`IS NULL` over a missing key yield unknown, which is not a match). All 100 counts agree
+with `numberMatched` on the running server today. GDAL
 (`ogrinfo -so`) reports the same column list, 30,000 features and extent. The expected
 counts are an anchor, not part of a parity check: `parity.sh` compares two runs against
 each other.

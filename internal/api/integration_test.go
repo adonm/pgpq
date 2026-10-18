@@ -494,8 +494,11 @@ func TestPostgresGeneratedNames(t *testing.T) {
 		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
 	}
 	h := New(st)
+	if w := call(h, "PUT", "/collections/itest_gen?sortable=id,name", "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 400 || !strings.Contains(w.Body.String(), "statistics") {
+		t.Fatalf("PUT with sortable = %d: %s", w.Code, w.Body.String())
+	}
 	for _, name := range names {
-		if w := call(h, "PUT", "/collections/"+name+"?sortable=id,name", "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 201 {
+		if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 201 {
 			t.Fatalf("ingest %s = %d: %s", name, w.Code, w.Body.String())
 		}
 		w := call(h, "GET", "/collections/"+name+"/items?limit=10&numberMatched=true&filter="+url.QueryEscape("id >= 3"), "", nil)
@@ -838,13 +841,6 @@ func TestPostgresFlattenedAcrossWindows(t *testing.T) {
 	}
 	if chunks := len(chunkStarts(t, st, name)); chunks < 4 {
 		t.Fatalf("want the upload in several chunks across sort windows, got %d", chunks)
-	}
-	var withKeys int
-	if err := st.Pool.QueryRow(ctx, `select count(*) from chunk_props where collection = $1 and props ? 'tags_kind'`, name).Scan(&withKeys); err != nil {
-		t.Fatal(err)
-	}
-	if withKeys != count {
-		t.Fatalf("chunk_props carry tags_kind for %d of %d features", withKeys, count)
 	}
 	rows, err := st.Pool.Query(ctx, `select data from chunks where collection = $1 and tier = 0 order by id`, name)
 	if err != nil {

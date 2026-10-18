@@ -2,7 +2,7 @@
 
 ## Goal
 
-The smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pushing filtering into index sidecars.
+The smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pushing filtering into per-chunk statistics.
 
 Design decisions live in [DESIGN.md](DESIGN.md); the agent guide is [AGENTS.md](AGENTS.md).
 

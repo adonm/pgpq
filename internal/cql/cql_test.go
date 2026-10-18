@@ -6,68 +6,48 @@ import (
 	"testing"
 )
 
-func TestSQL(t *testing.T) {
+func TestParseBuildsTheTree(t *testing.T) {
 	expr, err := Parse(`i >= 42 and name = 'x''y'`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var args []any
-	sql, args := sqlOf(expr, nil)
-	want := "((case when jsonb_typeof(props -> $1) = 'number' then (props ->> $1)::numeric end) >= $2" +
-		" and (props @> jsonb_build_object($3::text, $4::text) or props @> jsonb_build_object($3::text, jsonb_build_array($4::text))))"
-	if sql != want {
-		t.Fatalf("sql = %s, want %s", sql, want)
+	want := andExpr{
+		left:  &Compare{Prop: "i", Op: ">=", Value: int64(42)},
+		right: &Compare{Prop: "name", Op: "=", Value: "x'y"},
 	}
-	wantArgs := []any{"i", int64(42), "name", "x'y"}
-	if !reflect.DeepEqual(args, wantArgs) {
-		t.Fatalf("args = %v, want %v", args, wantArgs)
+	if !reflect.DeepEqual(expr, want) {
+		t.Fatalf("tree = %#v, want %#v", expr, want)
 	}
 }
 
-func TestEqualityUsesContainment(t *testing.T) {
-	expr, err := Parse(`name = 'x' and i in (1,2)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var args []any
-	sql, args := sqlOf(expr, nil)
-	want := "((props @> jsonb_build_object($1::text, $2::text) or props @> jsonb_build_object($1::text, jsonb_build_array($2::text))) and (((props @> jsonb_build_object($3::text, $4::numeric) or props @> jsonb_build_object($3::text, jsonb_build_array($4::numeric))) or (props @> jsonb_build_object($3::text, $5::text) or props @> jsonb_build_object($3::text, jsonb_build_array($5::text)))) or ((props @> jsonb_build_object($6::text, $7::numeric) or props @> jsonb_build_object($6::text, jsonb_build_array($7::numeric))) or (props @> jsonb_build_object($6::text, $8::text) or props @> jsonb_build_object($6::text, jsonb_build_array($8::text))))))"
-	if sql != want {
-		t.Fatalf("sql = %s, want %s", sql, want)
-	}
-	if len(args) != 8 {
-		t.Fatalf("args = %v", args)
-	}
-}
-
-func TestClauses(t *testing.T) {
+func TestParseClauses(t *testing.T) {
 	cases := []struct {
-		in       string
-		argCount int
-		contains string
+		in   string
+		want Expr
 	}{
-		{`name like 'a%'`, 2, "like $2"},
-		{`i in (1, 2)`, 6, " or "},
-		{`i not between 1 and 5`, 3, "between $2 and $3"},
-		{`x is null`, 1, "is null or jsonb_typeof"},
-		{`x is not null`, 1, "not ("},
-		{`not (a = 'b' or c > 1)`, 4, "not ("},
-		{`flag = true`, 3, "jsonb_build_object"},
-		{`i <> 3`, 2, "<>"},
-		{`i != 3`, 2, "<>"},
+		{`name like 'a%'`, &Like{Prop: "name", Pattern: "a%"}},
+		{`name not like 'a%'`, &Like{Prop: "name", Pattern: "a%", Not: true}},
+		{`i in (1, 2)`, &In{Prop: "i", Values: []any{int64(1), int64(2)}}},
+		{`i not in (1)`, &In{Prop: "i", Values: []any{int64(1)}, Not: true}},
+		{`i between 1 and 5`, &Between{Prop: "i", Lo: int64(1), Hi: int64(5)}},
+		{`i not between 1 and 5`, &Between{Prop: "i", Lo: int64(1), Hi: int64(5), Not: true}},
+		{`x is null`, &IsNull{Prop: "x"}},
+		{`x is not null`, &IsNull{Prop: "x", Not: true}},
+		{`flag = true`, &Compare{Prop: "flag", Op: "=", Value: true}},
+		{`i <> 3`, &Compare{Prop: "i", Op: "<>", Value: int64(3)}},
+		{`i != 3`, &Compare{Prop: "i", Op: "<>", Value: int64(3)}},
+		{`not (a = 'b' or c > 1)`, notExpr{orExpr{
+			left:  &Compare{Prop: "a", Op: "=", Value: "b"},
+			right: &Compare{Prop: "c", Op: ">", Value: int64(1)},
+		}}},
 	}
 	for _, tc := range cases {
 		expr, err := Parse(tc.in)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.in, err)
 		}
-		var args []any
-		sql, args := sqlOf(expr, nil)
-		if len(args) != tc.argCount {
-			t.Fatalf("%s: %d args, want %d", tc.in, len(args), tc.argCount)
-		}
-		if !strings.Contains(sql, tc.contains) {
-			t.Fatalf("%s: sql %s missing %q", tc.in, sql, tc.contains)
+		if !reflect.DeepEqual(expr, tc.want) {
+			t.Fatalf("%s: tree = %#v, want %#v", tc.in, expr, tc.want)
 		}
 	}
 }
@@ -95,77 +75,4 @@ func TestSpatialFunctionsAreRejected(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "spatial functions are not supported") {
 		t.Fatalf("text spatial function: %v", err)
 	}
-}
-
-func TestTypedColumnsUseTheIndexedExpression(t *testing.T) {
-	text, err := Parse("diets_vegan >= 'yes'")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql, args := sqlOf(text, Casts{"diets_vegan": CastText})
-	if want := ColumnExpr("props", "diets_vegan", CastText) + " >= $1"; sql != want {
-		t.Fatalf("text column = %s, want %s", sql, want)
-	}
-	if value, ok := args[0].(string); !ok || value != "yes" {
-		t.Fatalf("bound value = %#v", args[0])
-	}
-
-	number, err := Parse("population > '10'")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql, numberArgs := sqlOf(number, Casts{"population": CastNumeric})
-	if want := ColumnExpr("props", "population", CastNumeric) + " > $1"; sql != want {
-		t.Fatalf("numeric column = %s, want %s", sql, want)
-	}
-	if value, ok := numberArgs[0].(int64); !ok || value != 10 {
-		t.Fatalf("bound value = %#v", numberArgs[0])
-	}
-
-	unknown, err := Parse("population > '10'")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sql, unknownArgs := sqlOf(unknown, nil); !strings.Contains(sql, "jsonb_typeof(props -> $1)") {
-		t.Fatalf("unknown property should keep its key as a parameter: %s", sql)
-	} else if len(unknownArgs) != 2 {
-		t.Fatalf("unknown property bound %d args", len(unknownArgs))
-	}
-}
-
-func TestEqualityFollowsColumnCast(t *testing.T) {
-	casts := Casts{"id": CastNumeric, "flag": CastBoolean, "name": CastText}
-	build := func(in string) (string, []any) {
-		t.Helper()
-		expr, err := Parse(in)
-		if err != nil {
-			t.Fatalf("%s: %v", in, err)
-		}
-		return sqlOf(expr, casts)
-	}
-	for _, pair := range [][2]string{
-		{`id = '393226'`, `id = 393226`},
-		{`id IN ('1', '2')`, `id IN (1, 2)`},
-		{`flag = 'true'`, `flag = true`},
-		{`flag = 'false'`, `flag = false`},
-	} {
-		sqlA, argsA := build(pair[0])
-		sqlB, argsB := build(pair[1])
-		if sqlA != sqlB || !reflect.DeepEqual(argsA, argsB) {
-			t.Fatalf("%s and %s differ:\n%s %v\n%s %v", pair[0], pair[1], sqlA, argsA, sqlB, argsB)
-		}
-	}
-	for _, tc := range []struct{ in, value string }{
-		{`id = 'abc'`, "abc"}, {`id = 'Inf'`, "Inf"}, {`id = 'NaN'`, "NaN"}, {`flag = 'yes'`, "yes"},
-	} {
-		sql, args := build(tc.in)
-		if len(args) != 2 || args[1] != tc.value || !strings.Contains(sql, "$2::text") {
-			t.Fatalf("%s should stay on the text path: %s %v", tc.in, sql, args)
-		}
-	}
-}
-
-func sqlOf(e Expr, casts Casts) (string, []any) {
-	b := NewBuilder("props", casts)
-	return e.SQL(b), b.Args()
 }
