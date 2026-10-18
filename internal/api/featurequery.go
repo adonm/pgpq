@@ -217,18 +217,11 @@ func (s *Server) walkFeatures(ctx context.Context, info store.CollectionInfo, q 
 			offset = remaining
 			continue
 		}
-		skip := 0
-		if offset > 0 {
-			count, err := s.Store.CountMatches(ctx, target.Name, q.bbox, filter)
-			if err != nil {
-				return err
-			}
-			skip = min(offset, int(count))
-		}
-		offset -= skip
-		if err := s.walkMatches(ctx, target, q, filter, skip, out); err != nil {
+		remaining, err := s.walkMatches(ctx, target, q, filter, offset, out)
+		if err != nil {
 			return err
 		}
+		offset = remaining
 	}
 	return nil
 }
@@ -300,11 +293,33 @@ func ordinals(start, count int) []int {
 	return ords
 }
 
-func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q featureQuery, filter cql.Expr, skip int, out sink) error {
-	matches, err := s.Store.Matches(ctx, target.Name, q.bbox, filter, out.remaining(), skip)
-	if err != nil {
-		return err
+func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q featureQuery, filter cql.Expr, offset int, out sink) (int, error) {
+	pos := 0
+	if q.bbox == nil && offset > 0 {
+		count, err := s.Store.CountMatches(ctx, target.Name, filter)
+		if err != nil {
+			return offset, err
+		}
+		pos = min(offset, int(count))
+		offset -= pos
 	}
+	for limit := max(offset+out.remaining(), minMatchWindow); out.remaining() > 0; limit *= 2 {
+		matches, err := s.Store.Matches(ctx, target.Name, q.bbox, filter, limit, pos)
+		if err != nil {
+			return offset, err
+		}
+		if offset, err = s.emitMatches(ctx, target, q.bbox, matches, offset, out); err != nil {
+			return offset, err
+		}
+		pos += len(matches)
+		if len(matches) < limit {
+			break
+		}
+	}
+	return offset, nil
+}
+
+func (s *Server) emitMatches(ctx context.Context, target store.CollectionInfo, bbox *[4]float64, matches []store.FeatureMatch, offset int, out sink) (int, error) {
 	var ids []int64
 	picked := map[int64][]int{}
 	for _, m := range matches {
@@ -326,15 +341,15 @@ func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q
 			}
 			ords := picked[batch[j]]
 			n, _ := slices.BinarySearch(ords, len(features))
-			if _, err := emit(target, q.bbox, batch[j], c, features, ords[:n], 0, out); err != nil {
-				return err
+			if offset, err = emit(target, bbox, batch[j], c, features, ords[:n], offset, out); err != nil {
+				return offset, err
 			}
 			if out.remaining() == 0 {
-				return nil
+				return offset, nil
 			}
 		}
 	}
-	return nil
+	return offset, nil
 }
 
 func emit(target store.CollectionInfo, bbox *[4]float64, chunkID int64, c *chunk.Chunk, features []*flattypes.Feature, ords []int, offset int, out sink) (int, error) {
@@ -365,26 +380,26 @@ func emit(target store.CollectionInfo, bbox *[4]float64, chunkID int64, c *chunk
 }
 
 func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, q featureQuery) (int64, bool, error) {
+	if q.bbox != nil {
+		return 0, false, nil
+	}
 	var total int64
-	exact := true
 	for _, target := range s.targets(ctx, info) {
 		filter, ok := targetFilter(target, q)
-		switch {
-		case !ok:
-			exact = false
-		case filter != nil:
-			count, err := s.Store.CountMatches(ctx, target.Name, q.bbox, filter)
-			if err != nil {
-				return 0, false, err
-			}
-			total += count
-		case q.bbox == nil:
-			total += target.FeatureCount
-		default:
-			exact = false
+		if !ok {
+			return 0, false, nil
 		}
+		if filter == nil {
+			total += target.FeatureCount
+			continue
+		}
+		count, err := s.Store.CountMatches(ctx, target.Name, filter)
+		if err != nil {
+			return 0, false, err
+		}
+		total += count
 	}
-	return total, exact, nil
+	return total, true, nil
 }
 
 func featureID(info store.CollectionInfo, chunkID int64, ord int, props map[string]any) any {

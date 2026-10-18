@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -325,6 +327,105 @@ func walkIDs(t *testing.T, s *Server, info store.CollectionInfo, q featureQuery,
 		ids = append(ids, fmt.Sprint(h.geo.ID))
 	}
 	return ids
+}
+
+func TestPostgresFilteredPaging(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name := "itest_filtered"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	h := New(st)
+	const count = 25000
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", sizedFixtureFGB(t, count, 200)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	info, err := st.Collection(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := walkIDs(t, &Server{Store: st, MaxChunks: 64, MaxBytes: 32 << 20, virtuals: newVirtualCache(), chunks: newChunkByteCache()}, info, featureQuery{}, count)
+	expr, err := cql.Parse("name LIKE 'feature-1%'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	box := [4]float64{7.4, 43.72, 7.405, 45}
+	var want []string
+	var prefixed int
+	for _, id := range full {
+		i, _ := strconv.Atoi(id)
+		x, y := 7.4+float64(i%10)*0.002, 43.72+float64(i/10)*0.002
+		if !strings.HasPrefix(id, "1") {
+			continue
+		}
+		prefixed++
+		if x >= box[0] && x <= box[2] && y >= box[1] && y <= box[3] {
+			want = append(want, id)
+		}
+	}
+	if len(want) < 100 {
+		t.Fatalf("fixture leaves %d matches in the box, want a set spanning several pages", len(want))
+	}
+	rng := rand.New(rand.NewPCG(9, 9))
+	offsets := []int{0}
+	for range 20 {
+		offsets = append(offsets, rng.IntN(len(want)-5))
+	}
+	for _, batch := range []struct{ chunks, bytes int }{{1, 32 << 20}, {64, 32 << 20}, {64, 1 << 20}} {
+		s := &Server{Store: st, MaxChunks: batch.chunks, MaxBytes: batch.bytes, virtuals: newVirtualCache(), chunks: newChunkByteCache()}
+		for _, k := range offsets {
+			got := walkIDs(t, s, info, featureQuery{bbox: &box, filter: expr, offset: k}, 5)
+			if wantPage := want[k:min(k+5, len(want))]; !slices.Equal(got, wantPage) {
+				t.Fatalf("batch %+v offset %d: got %v, want %v", batch, k, got, wantPage)
+			}
+		}
+	}
+
+	query := url.Values{"bbox": {"7.4,43.72,7.405,45"}, "filter": {"name LIKE 'feature-1%'"}, "limit": {"7"}}
+	next := fmt.Sprintf("/collections/%s/items?%s", name, query.Encode())
+	var got []string
+	for next != "" {
+		w := call(h, "GET", next, "", nil)
+		var doc struct {
+			Features []struct {
+				ID any `json:"id"`
+			} `json:"features"`
+			NumberMatched *int64 `json:"numberMatched"`
+			Links         []struct {
+				Rel  string `json:"rel"`
+				Href string `json:"href"`
+			} `json:"links"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil || w.Code != 200 {
+			t.Fatalf("items %s = %d: %s", next, w.Code, w.Body.String())
+		}
+		if doc.NumberMatched != nil {
+			t.Fatalf("numberMatched %d with a bbox, want it omitted", *doc.NumberMatched)
+		}
+		next = ""
+		for _, link := range doc.Links {
+			if link.Rel == "next" {
+				next = link.Href
+			}
+		}
+		if next != "" && len(doc.Features) != 7 {
+			t.Fatalf("page %s has %d features but links to more", next, len(doc.Features))
+		}
+		for _, f := range doc.Features {
+			got = append(got, fmt.Sprint(f.ID))
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("bbox+filter pages walked %d features, want %d", len(got), len(want))
+	}
+
+	w := call(h, "GET", "/collections/"+name+"/items?limit=1&numberMatched=true&filter="+url.QueryEscape("name LIKE 'feature-1%'"), "", nil)
+	var counted struct {
+		NumberMatched *int64 `json:"numberMatched"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &counted); err != nil || counted.NumberMatched == nil || *counted.NumberMatched != int64(prefixed) {
+		t.Fatalf("filter-only numberMatched = %s, want %d", w.Body.String(), prefixed)
+	}
 }
 
 func TestPostgresChunkOffsets(t *testing.T) {

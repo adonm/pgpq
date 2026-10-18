@@ -242,12 +242,12 @@ func (s *Store) FindFeature(ctx context.Context, collection string, filter cql.E
 	return match, true, nil
 }
 
-func (s *Store) CountMatches(ctx context.Context, collection string, bbox *[4]float64, filter cql.Expr) (int64, error) {
+func (s *Store) CountMatches(ctx context.Context, collection string, filter cql.Expr) (int64, error) {
 	casts, err := s.ColumnCasts(ctx, collection)
 	if err != nil {
 		return 0, err
 	}
-	from, where, args := matchesWhere(collection, casts, bbox, filter)
+	from, where, args := matchesWhere(collection, casts, nil, filter)
 	var count int64
 	err = s.Pool.QueryRow(ctx, fmt.Sprintf(`select count(*) from %s where %s`, from, where), args...).Scan(&count)
 	return count, err
