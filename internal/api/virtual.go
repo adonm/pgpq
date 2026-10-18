@@ -33,7 +33,7 @@ type virtualSegment struct {
 }
 
 type virtualFile struct {
-	name     string
+	etag     string
 	version  int64
 	segments []virtualSegment
 	features int64
@@ -132,7 +132,7 @@ func fgbHeader(data []byte) *flattypes.Header {
 }
 
 func (s *Server) virtualFile(ctx context.Context, info store.CollectionInfo, tier int) (*virtualFile, error) {
-	key := fmt.Sprintf("%s|%d|%d", info.Name, tier, info.Version)
+	key := virtualETag(info, tier)
 	if cached := s.virtuals.get(key); cached != nil {
 		return cached, nil
 	}
@@ -159,7 +159,7 @@ func (s *Server) storedVirtual(ctx context.Context, info store.CollectionInfo, t
 	}
 	name, version := info.Name, info.Version
 	vf := &virtualFile{
-		name:    name,
+		etag:    virtualETag(info, tier),
 		version: version,
 		segments: []virtualSegment{
 			{length: int64(layout.HeaderBytes), read: func(ctx context.Context, from, to int64) ([]byte, error) {
@@ -213,13 +213,13 @@ func (s *Server) virtualRunBytes(ctx context.Context, collection string, version
 }
 
 func (s *Server) serveVirtual(w http.ResponseWriter, r *http.Request, vf *virtualFile) {
-	s.serveRanges(w, r, vf.total(), virtualETag(vf.name, vf.version), func(out io.Writer, from, to int64) error {
+	s.serveRanges(w, r, vf.total(), vf.etag, func(out io.Writer, from, to int64) error {
 		return s.writeVirtual(r.Context(), out, vf, from, to)
 	})
 }
 
-func virtualETag(name string, version int64) string {
-	return fmt.Sprintf("\"%s-%d\"", name, version)
+func virtualETag(info store.CollectionInfo, tier int) string {
+	return fmt.Sprintf("\"%d-%d-%d\"", info.UID, tier, info.Version)
 }
 
 func (s *Server) serveRanges(w http.ResponseWriter, r *http.Request, total int64, etag string, write func(io.Writer, int64, int64) error) {

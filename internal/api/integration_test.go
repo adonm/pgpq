@@ -728,3 +728,71 @@ func TestPostgresChunkOffsets(t *testing.T) {
 		t.Fatalf("handler offset %d: got %v, want %v", starts[1]-1, got, want)
 	}
 }
+
+func assertCurrentFile(t *testing.T, h, fresh http.Handler, path string, features uint64, staleTag string) {
+	t.Helper()
+	truth := call(fresh, "GET", path, "", nil)
+	if header := fgbHeader(truth.Body.Bytes()); truth.Code != 200 || header == nil || header.FeaturesCount() != features {
+		t.Fatalf("fresh worker %s = %d: %s", path, truth.Code, truth.Body.String())
+	}
+	for _, worker := range []http.Handler{h, fresh} {
+		w := call(worker, "GET", path, "", nil)
+		if w.Code != 200 || w.Header().Get("ETag") == staleTag || !bytes.Equal(w.Body.Bytes(), truth.Body.Bytes()) {
+			t.Fatalf("%s = %d, ETag %s (stale %s), %d bytes, want the current %d bytes", path, w.Code, w.Header().Get("ETag"), staleTag, w.Body.Len(), truth.Body.Len())
+		}
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("If-None-Match", staleTag)
+		conditional := httptest.NewRecorder()
+		worker.ServeHTTP(conditional, req)
+		if conditional.Code != 200 {
+			t.Fatalf("%s with the stale ETag = %d, want 200", path, conditional.Code)
+		}
+	}
+}
+
+func TestPostgresRecreatedNameServesCurrentBytes(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name, view := "itest_recreated", "itest_recreated_view"
+	members := []string{"itest_recreated_a", "itest_recreated_b"}
+	for _, n := range append([]string{name, view}, members...) {
+		st.DropCollection(ctx, n)
+		t.Cleanup(func() { st.DropCollection(context.Background(), n) })
+	}
+	h := New(st)
+	fresh := NewWithConfig(Config{Store: st, ReadOnly: true})
+
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 40)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	staleTag := call(h, "GET", "/collections/"+name+"/items.fgb", "", nil).Header().Get("ETag")
+	if w := call(h, "DELETE", "/collections/"+name, "", nil); w.Code != 204 {
+		t.Fatalf("delete = %d: %s", w.Code, w.Body.String())
+	}
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 41)); w.Code != 201 {
+		t.Fatalf("re-ingest = %d: %s", w.Code, w.Body.String())
+	}
+	assertCurrentFile(t, h, fresh, "/collections/"+name+"/items.fgb", 41, staleTag)
+	tier0 := call(h, "GET", "/collections/"+name+"/items.fgb", "", nil)
+	tier1 := call(h, "GET", "/collections/"+name+"/items.fgb?overview=1", "", nil)
+	if tier0.Code != 200 || tier1.Code != 200 || tier0.Header().Get("ETag") == tier1.Header().Get("ETag") {
+		t.Fatalf("tier 0 and tier 1 share ETag %q", tier0.Header().Get("ETag"))
+	}
+
+	for _, member := range members {
+		if w := call(h, "PUT", "/collections/"+member, "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 201 {
+			t.Fatalf("ingest %s = %d: %s", member, w.Code, w.Body.String())
+		}
+	}
+	if w := call(h, "PUT", "/collections/"+view, "application/json", []byte(`{"members":["itest_recreated_a"]}`)); w.Code != 201 {
+		t.Fatalf("view = %d: %s", w.Code, w.Body.String())
+	}
+	staleTag = call(h, "GET", "/collections/"+view+"/items.fgb", "", nil).Header().Get("ETag")
+	if w := call(h, "DELETE", "/collections/"+view, "", nil); w.Code != 204 {
+		t.Fatalf("delete view = %d: %s", w.Code, w.Body.String())
+	}
+	if w := call(h, "PUT", "/collections/"+view, "application/json", []byte(`{"members":["itest_recreated_a","itest_recreated_b"]}`)); w.Code != 201 {
+		t.Fatalf("re-create view = %d: %s", w.Code, w.Body.String())
+	}
+	assertCurrentFile(t, h, fresh, "/collections/"+view+"/items.fgb", 10, staleTag)
+}
