@@ -187,10 +187,7 @@ func TestPostgresIngestQuery(t *testing.T) {
 		t.Fatalf("feature count after replace = %d, want 7", got)
 	}
 	var leftovers int
-	if err := st.Pool.QueryRow(ctx, `
-		select count(*) from pg_tables
-		where schemaname = 'staging' and tablename in ($1, $2)`,
-		"chunks_"+name, "chunk_props_"+name).Scan(&leftovers); err != nil {
+	if err := st.Pool.QueryRow(ctx, `select count(*) from pg_tables where schemaname = 'staging'`).Scan(&leftovers); err != nil {
 		t.Fatal(err)
 	}
 	if leftovers != 0 {
@@ -480,6 +477,30 @@ func TestPostgresViewDroppedWithLastMember(t *testing.T) {
 	}
 	if rows != 0 {
 		t.Fatalf("view layout rows left behind: %d", rows)
+	}
+}
+
+func TestPostgresGeneratedNames(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	long := "itest_" + strings.Repeat("n", 42)
+	names := []string{long, "itest_gen", "itest_gen_pkey", "pkey", "tier_idx", "gin_idx", "Itest-Mixed.Name"}
+	for _, name := range names {
+		st.DropCollection(ctx, name)
+		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	}
+	h := New(st)
+	for _, name := range names {
+		if w := call(h, "PUT", "/collections/"+name+"?sortable=id,name", "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 201 {
+			t.Fatalf("ingest %s = %d: %s", name, w.Code, w.Body.String())
+		}
+		w := call(h, "GET", "/collections/"+name+"/items?limit=10&numberMatched=true&filter="+url.QueryEscape("id >= 3"), "", nil)
+		var counted struct {
+			NumberMatched *int64 `json:"numberMatched"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &counted); err != nil || counted.NumberMatched == nil || *counted.NumberMatched != 2 {
+			t.Fatalf("%s range filter = %s, want 2 matches", name, w.Body.String())
+		}
 	}
 }
 

@@ -12,7 +12,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## Storage — one database, one virtual GeoPackage
 
-- `chunks` and `chunk_props` are LIST-partitioned by collection: every collection owns two physical partitions with their own heaps and indexes, which removes today's cross-collection GIN noise and scopes vacuum and drop.
+- `chunks` and `chunk_props` are LIST-partitioned by collection: every collection owns two physical partitions with their own heaps and indexes, which removes today's cross-collection GIN noise and scopes vacuum and drop. A partition is named `chunks_<h>` or `chunk_props_<h>`, where `<h>` is the first 32 hex digits of the SHA-256 of the collection name. Every generated identifier (partitions, staging tables, sort and other indexes) is at most 55 bytes, distinct collections get distinct names, and the hex names cannot match PostgreSQL's own names, so no collection name can collide with another or with a catalog name.
 - Chunk ids stay globally unique (identity on the parent). Primary keys: `(collection, id)` and `(collection, chunk_id, feature_ord)`. Sidecar integrity comes from the partition lifecycle, not foreign keys — partitioned FKs would block partition swaps.
 - Chunk payloads are zstd-compressed in Go before insert and stored out-of-line uncompressed (`STORAGE EXTERNAL`): Postgres does no compression work and ships stored bytes as-is; checksums and ETags cover the raw FlatGeobuf.
 - All queries already carry `collection = $1`, so partition pruning turns access into per-collection index scans with unchanged SQL.

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -62,7 +64,8 @@ var partitions = []partition{
 }
 
 func partitionName(parent, collection string) string {
-	return parent + "_" + collection
+	sum := sha256.Sum256([]byte(collection))
+	return parent + "_" + hex.EncodeToString(sum[:16])
 }
 
 func (i *Ingest) staged(parent string) string {
