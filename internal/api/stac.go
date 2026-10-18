@@ -43,7 +43,6 @@ func (s *Server) stacCollections(w http.ResponseWriter, r *http.Request) {
 		"collections": out,
 		"links": []map[string]any{
 			{"rel": "self", "href": base + "/stac/collections", "type": "application/json"},
-			{"rel": "root", "href": base + "/stac", "type": "application/json"},
 		},
 	})
 }
@@ -108,9 +107,7 @@ func (s *Server) stacCollectionBody(ctx context.Context, info store.CollectionIn
 	}
 	out["links"] = []map[string]any{
 		{"rel": "self", "href": base + "/stac/collections/" + info.Name, "type": "application/json"},
-		{"rel": "root", "href": base + "/stac", "type": "application/json"},
 		{"rel": "parent", "href": base + "/stac/collections", "type": "application/json"},
-		{"rel": "items", "href": base + "/stac/collections/" + info.Name + "/items", "type": "application/geo+json"},
 	}
 	return out
 }

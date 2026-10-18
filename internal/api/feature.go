@@ -40,13 +40,9 @@ func (s *Server) feature(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) lookupFeature(ctx context.Context, info store.CollectionInfo, fid string) (*chunk.Feature, bool, error) {
 	if info.Kind == "view" {
-		for _, member := range s.streamTargets(ctx, info) {
-			feature, ok, err := s.lookupFeature(ctx, member, fid)
-			if err != nil {
-				return nil, false, err
-			}
-			if ok {
-				return feature, true, nil
+		for _, member := range s.targets(ctx, info) {
+			if feature, ok, err := s.lookupFeature(ctx, member, fid); err != nil || ok {
+				return feature, ok, err
 			}
 		}
 		return nil, false, nil
@@ -56,47 +52,21 @@ func (s *Server) lookupFeature(ctx context.Context, info store.CollectionInfo, f
 		if _, isString := values[0].(string); !isString {
 			values = append(values, fid)
 		}
-		var lastErr error
 		for _, value := range values {
-			feature, ok, err := s.featureByProperty(ctx, info, *info.IDColumn, value)
-			if ok {
-				return feature, true, nil
+			if feature, ok, err := s.featureByProperty(ctx, info, *info.IDColumn, value); err != nil || ok {
+				return feature, ok, err
 			}
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			lastErr = nil
-		}
-		if lastErr != nil {
-			return nil, false, lastErr
 		}
 	}
 	chunkID, ord, ok := parseSyntheticID(fid)
 	if !ok {
 		return nil, false, nil
 	}
-	row, err := s.Store.ChunkByID(ctx, info.Name, chunkID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, false, nil
+	feature, ok, err := s.chunkFeature(ctx, info, chunkID, ord)
+	if ok {
+		feature.ID = fid
 	}
-	if err != nil {
-		return nil, false, err
-	}
-	c, err := chunk.Open(row.Data)
-	if err != nil {
-		return nil, false, err
-	}
-	features, err := c.SearchAll()
-	if err != nil {
-		return nil, false, err
-	}
-	if ord >= len(features) {
-		return nil, false, nil
-	}
-	feature := c.GeoJSON(features[ord])
-	feature.ID = fid
-	return feature, true, nil
+	return feature, ok, err
 }
 
 func (s *Server) featureByProperty(ctx context.Context, info store.CollectionInfo, column string, value any) (*chunk.Feature, bool, error) {
@@ -104,24 +74,26 @@ func (s *Server) featureByProperty(ctx context.Context, info store.CollectionInf
 	if err != nil || !ok {
 		return nil, false, err
 	}
-	row, err := s.Store.ChunkByID(ctx, info.Name, match.ChunkID)
-	if err != nil {
-		return nil, false, err
+	feature, ok, err := s.chunkFeature(ctx, info, match.ChunkID, match.Ord)
+	if ok {
+		feature.ID = featureID(info, match.ChunkID, match.Ord, feature.Properties)
 	}
-	c, err := chunk.Open(row.Data)
-	if err != nil {
-		return nil, false, err
-	}
-	features, err := c.SearchAll()
-	if err != nil {
-		return nil, false, err
-	}
-	if match.Ord >= len(features) {
+	return feature, ok, err
+}
+
+func (s *Server) chunkFeature(ctx context.Context, info store.CollectionInfo, chunkID int64, ord int) (*chunk.Feature, bool, error) {
+	row, err := s.Store.ChunkByID(ctx, info.Name, chunkID)
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, false, nil
 	}
-	feature := c.GeoJSON(features[match.Ord])
-	feature.ID = featureID(info, match.ChunkID, match.Ord, feature.Properties)
-	return feature, true, nil
+	if err != nil {
+		return nil, false, err
+	}
+	c, features, err := s.openFeatures(ctx, info, chunkID, row)
+	if err != nil || ord >= len(features) {
+		return nil, false, err
+	}
+	return c.GeoJSON(features[ord]), true, nil
 }
 
 func parseSyntheticID(value string) (int64, int, bool) {

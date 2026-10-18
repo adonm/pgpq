@@ -147,18 +147,21 @@ func (s *Server) collectionGeometryType(r *http.Request, info store.CollectionIn
 		return ""
 	}
 	for _, f := range features {
-		switch g := c.GeoJSON(f).Geometry; {
-		case g == nil:
-			continue
-		case strings.HasPrefix(g.Type, "Point"):
-			return "Point"
-		case strings.HasPrefix(g.Type, "Line"):
-			return "Polyline"
-		default:
-			return "Polygon"
+		if g := c.GeoJSON(f).Geometry; g != nil {
+			return geometryClass(g.Type)
 		}
 	}
 	return ""
+}
+
+func geometryClass(typ string) string {
+	switch strings.TrimPrefix(typ, "Multi") {
+	case "Point":
+		return "Point"
+	case "LineString":
+		return "Polyline"
+	}
+	return "Polygon"
 }
 
 type projectLayerSpec struct {

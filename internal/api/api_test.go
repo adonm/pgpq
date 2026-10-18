@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/adonm/postfgb/internal/store"
@@ -130,6 +131,33 @@ func TestUnsupportedQuery(t *testing.T) {
 		if w.Code != tc.want {
 			t.Fatalf("%s = %d, want %d", tc.target, w.Code, tc.want)
 		}
+	}
+}
+
+func TestGeometryClass(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"Point", "Point"},
+		{"MultiPoint", "Point"},
+		{"LineString", "Polyline"},
+		{"MultiLineString", "Polyline"},
+		{"Polygon", "Polygon"},
+		{"MultiPolygon", "Polygon"},
+	}
+	for _, tc := range cases {
+		if got := geometryClass(tc.in); got != tc.want {
+			t.Fatalf("geometryClass(%s) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestLandingLinks(t *testing.T) {
+	w := httptest.NewRecorder()
+	NewWithConfig(Config{}).ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 200 || strings.Contains(w.Body.String(), "/stac") {
+		t.Fatalf("landing = %d, links to /stac: %s", w.Code, w.Body.String())
 	}
 }
 

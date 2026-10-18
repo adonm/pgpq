@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -156,12 +157,18 @@ func TestPostgresIngestQuery(t *testing.T) {
 				BBox [][]float64 `json:"bbox"`
 			} `json:"spatial"`
 		} `json:"extent"`
+		Links []struct {
+			Rel string `json:"rel"`
+		} `json:"links"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &collection); err != nil {
 		t.Fatal(err)
 	}
 	if collection.ID != name || len(collection.Extent.Spatial.BBox) != 1 || collection.Extent.Spatial.BBox[0][0] < 7.39 {
 		t.Fatalf("stac collection = %+v", collection)
+	}
+	if len(collection.Links) != 2 || collection.Links[0].Rel != "self" || collection.Links[1].Rel != "parent" {
+		t.Fatalf("stac links = %+v", collection.Links)
 	}
 
 	w = call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 7))
@@ -215,5 +222,64 @@ func TestPostgresIngestQuery(t *testing.T) {
 	w = call(h, "GET", "/collections/"+name+"/items?limit=1", "", nil)
 	if w.Code != 404 {
 		t.Fatalf("items after delete = %d", w.Code)
+	}
+}
+
+func TestPostgresViewPaging(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	view := "itest_view"
+	members := []string{"itest_view_a", "itest_view_b"}
+	for _, name := range append(members, view) {
+		st.DropCollection(ctx, name)
+		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	}
+	h := New(st)
+	for _, name := range members {
+		if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 5)); w.Code != 201 {
+			t.Fatalf("ingest %s = %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+	if w := call(h, "PUT", "/collections/"+view, "application/json", []byte(`{"members":["itest_view_a","itest_view_b"]}`)); w.Code != 201 {
+		t.Fatalf("view = %d: %s", w.Code, w.Body.String())
+	}
+
+	page := call(h, "GET", "/collections/"+view+"/items?limit=3&offset=6", "", nil)
+	var geo struct {
+		Features []struct {
+			Properties struct {
+				Name string `json:"name"`
+			} `json:"properties"`
+		} `json:"features"`
+	}
+	if err := json.Unmarshal(page.Body.Bytes(), &geo); err != nil || page.Code != 200 {
+		t.Fatalf("view page = %d: %s", page.Code, page.Body.String())
+	}
+	var fromJSON []string
+	for _, f := range geo.Features {
+		fromJSON = append(fromJSON, f.Properties.Name)
+	}
+
+	export := call(h, "GET", "/collections/"+view+"/items?limit=3&offset=6&f=flatgeobuf", "", nil)
+	if export.Code != 200 {
+		t.Fatalf("view export = %d: %s", export.Code, export.Body.String())
+	}
+	c, err := chunk.Open(export.Body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	features, err := c.SearchAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromFGB []string
+	for _, f := range features {
+		fromFGB = append(fromFGB, fmt.Sprint(c.GeoJSON(f).Properties["name"]))
+	}
+
+	slices.Sort(fromJSON)
+	slices.Sort(fromFGB)
+	if len(fromJSON) != 3 || !slices.Equal(fromJSON, fromFGB) {
+		t.Fatalf("view offset 6 page = %v, export = %v", fromJSON, fromFGB)
 	}
 }

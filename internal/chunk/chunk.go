@@ -94,13 +94,6 @@ func (c *Chunk) SearchAll() ([]*flattypes.Feature, error) {
 	return c.Search(env[0], env[1], env[2], env[3])
 }
 
-func (c *Chunk) SearchOptional(bbox *[4]float64) ([]*flattypes.Feature, error) {
-	if bbox == nil {
-		return c.SearchAll()
-	}
-	return c.Search(bbox[0], bbox[1], bbox[2], bbox[3])
-}
-
 func GeoJSONFeature(header *flattypes.Header, f *flattypes.Feature) *Feature {
 	var raw flattypes.Geometry
 	return &Feature{

@@ -166,10 +166,6 @@ func (s *Store) forgetCasts(collection string) {
 	s.castsMu.Unlock()
 }
 
-func (s *Store) Ping(ctx context.Context) error {
-	return s.Pool.Ping(ctx)
-}
-
 func (s *Store) Ready(ctx context.Context) error {
 	if err := s.Pool.Ping(ctx); err != nil {
 		return err

@@ -84,14 +84,6 @@ func (s *Store) ChunkSizes(ctx context.Context, collection string, ids []int64) 
 	return sizes, rows.Err()
 }
 
-func (s *Store) ChunksByIDs(ctx context.Context, collection string, ids []int64) ([]ChunkRow, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	return scanChunks(ctx, s.Pool,
-		`select id, feature_count, minx, miny, maxx, maxy, data from chunks where collection = $1 and id = any($2) order by id`, collection, ids)
-}
-
 func scanChunks(ctx context.Context, conn db, query string, args ...any) ([]ChunkRow, error) {
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {

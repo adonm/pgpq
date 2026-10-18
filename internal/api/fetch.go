@@ -15,7 +15,10 @@ import (
 	"github.com/adonm/postfgb/internal/store"
 )
 
-const chunkFetchWorkers = 8
+const (
+	chunkFetchWorkers = 8
+	decodeWindow      = 256
+)
 
 func (s *Server) fetchRows(ctx context.Context, collection string, ids []int64) []store.ChunkRow {
 	rows := make([]store.ChunkRow, len(ids))
@@ -80,49 +83,34 @@ func budgetMetas(metas []store.ChunkMeta, maxBytes int) ([]store.ChunkMeta, bool
 	return metas, false
 }
 
-// openAndSearch opens a chunk (through the shared cache) and materialises its
-// features, so the walker can keep several chunks in flight at once.
-func (s *Server) openAndSearch(ctx context.Context, info store.CollectionInfo, meta store.ChunkMeta, row store.ChunkRow) openedChunk {
+func (s *Server) openFeatures(ctx context.Context, info store.CollectionInfo, id int64, row store.ChunkRow) (*chunk.Chunk, []*flattypes.Feature, error) {
 	if row.Data == nil {
-		return openedChunk{err: errors.New("chunk row missing")}
+		return nil, nil, errors.New("chunk row missing")
 	}
-	c, err := s.openChunk(ctx, info.Name, info.Version, meta.ID, row)
+	c, err := s.openChunk(ctx, info.Name, info.Version, id, row)
 	if err != nil {
-		return openedChunk{err: err}
+		return nil, nil, err
 	}
 	features, err := c.SearchAll()
-	if err != nil {
-		return openedChunk{err: err}
-	}
-	return openedChunk{chunk: c, features: features}
+	return c, features, err
 }
 
-// geojsonAll decodes a chunk's features across the available cores, in order.
-func geojsonAll(c *chunk.Chunk, features []*flattypes.Feature) []*chunk.Feature {
-	out := make([]*chunk.Feature, len(features))
-	stripe := (len(features) + runtime.NumCPU() - 1) / max(runtime.NumCPU(), 1)
-	if stripe < 1 {
-		stripe = len(features)
-	}
+func decodeAt(c *chunk.Chunk, features []*flattypes.Feature, ords []int) []*chunk.Feature {
+	out := make([]*chunk.Feature, len(ords))
+	stripe := max((len(ords)+runtime.NumCPU()-1)/runtime.NumCPU(), 1)
 	var wg sync.WaitGroup
-	for lo := 0; lo < len(features); lo += stripe {
-		hi := min(lo+stripe, len(features))
+	for lo := 0; lo < len(ords); lo += stripe {
+		hi := min(lo+stripe, len(ords))
 		wg.Add(1)
 		go func(lo, hi int) {
 			defer wg.Done()
-			for i := lo; i < hi; i++ {
-				out[i] = c.GeoJSON(features[i])
+			for j := lo; j < hi; j++ {
+				out[j] = c.GeoJSON(features[ords[j]])
 			}
 		}(lo, hi)
 	}
 	wg.Wait()
 	return out
-}
-
-type openedChunk struct {
-	chunk    *chunk.Chunk
-	features []*flattypes.Feature
-	err      error
 }
 
 func (s *Server) openChunk(ctx context.Context, collection string, version, id int64, row store.ChunkRow) (*chunk.Chunk, error) {
