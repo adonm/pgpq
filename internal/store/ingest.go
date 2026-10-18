@@ -10,7 +10,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+
 	"github.com/adonm/postfgb/internal/cql"
+	"github.com/adonm/postfgb/internal/fgb"
 )
 
 type Ingest struct {
@@ -240,10 +243,13 @@ func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
 	if err != nil {
 		return id, err
 	}
+	geometry := fgb.GeometryOf(payload.HeaderBlob)
 	tier := i.virtual[payload.Tier]
 	if tier == nil {
-		tier = &virtualTier{header: payload.HeaderBlob}
+		tier = &virtualTier{header: payload.HeaderBlob, geometry: geometry}
 		i.virtual[payload.Tier] = tier
+	} else if geometry != tier.geometry {
+		tier.geometry = flattypes.GeometryTypeUnknown
 	}
 	tier.leaves = append(tier.leaves, payload.Leaves)
 	tier.lengths = append(tier.lengths, int64(payload.FeatureBytes))

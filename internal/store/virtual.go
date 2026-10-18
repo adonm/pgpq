@@ -7,6 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+
 	"github.com/adonm/postfgb/internal/fgb"
 )
 
@@ -25,10 +27,11 @@ type VirtualRun struct {
 }
 
 type virtualTier struct {
-	header  []byte
-	leaves  [][]fgb.Leaf
-	lengths []int64
-	count   uint64
+	header   []byte
+	geometry flattypes.GeometryType
+	leaves   [][]fgb.Leaf
+	lengths  []int64
+	count    uint64
 }
 
 type tierLayout struct {
@@ -50,7 +53,7 @@ func (i *Ingest) buildVirtual(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		header, ok := fgb.Header(i.collection, chunks.header, chunks.count, envelope, fgb.GeometryOf(chunks.header))
+		header, ok := fgb.Header(i.collection, chunks.header, chunks.count, envelope, chunks.geometry)
 		if !ok {
 			continue
 		}

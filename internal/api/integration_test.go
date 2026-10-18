@@ -1084,17 +1084,8 @@ func TestPostgresViewMixedGeometry(t *testing.T) {
 			t.Fatalf("view %s = %d: %s", view.name, w.Code, w.Body.String())
 		}
 	}
-	geometryOf := func(path string) (flattypes.GeometryType, []byte) {
-		t.Helper()
-		w := call(h, "GET", path, "", nil)
-		header := fgbHeader(w.Body.Bytes())
-		if w.Code != 200 || header == nil {
-			t.Fatalf("%s = %d: %s", path, w.Code, w.Body.String())
-		}
-		return header.GeometryType(), w.Body.Bytes()
-	}
 	for _, path := range []string{"/collections/" + mixed + "/items.fgb", "/collections/" + mixed + "/items?f=flatgeobuf&limit=100"} {
-		geometry, body := geometryOf(path)
+		geometry, body := geometryAt(t, h, path)
 		if geometry != flattypes.GeometryTypeUnknown {
 			t.Fatalf("%s declares geometry %v, want Unknown", path, geometry)
 		}
@@ -1102,8 +1093,101 @@ func TestPostgresViewMixedGeometry(t *testing.T) {
 			t.Fatalf("%s features = %v, want 5 points and 5 polygons", path, got)
 		}
 	}
-	if geometry, _ := geometryOf("/collections/" + same + "/items.fgb"); geometry != flattypes.GeometryTypePoint {
+	if geometry, _ := geometryAt(t, h, "/collections/"+same+"/items.fgb"); geometry != flattypes.GeometryTypePoint {
 		t.Fatalf("view of two point members declares geometry %v, want Point", geometry)
+	}
+}
+
+func geometryAt(t *testing.T, h http.Handler, path string) (flattypes.GeometryType, []byte) {
+	t.Helper()
+	w := call(h, "GET", path, "", nil)
+	header := fgbHeader(w.Body.Bytes())
+	if w.Code != 200 || header == nil {
+		t.Fatalf("%s = %d: %s", path, w.Code, w.Body.String())
+	}
+	return header.GeometryType(), w.Body.Bytes()
+}
+
+func mixedChunksFGB(t *testing.T) []byte {
+	t.Helper()
+	cols := []chunk.Column{
+		{Name: "id", Type: flattypes.ColumnTypeLong},
+		{Name: "name", Type: flattypes.ColumnTypeString},
+	}
+	features := make([]chunk.InputFeature, 0, 24386+300)
+	for i := 0; i < 24386; i++ {
+		features = append(features, chunk.InputFeature{
+			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: json.RawMessage("[7.4,43.7]")},
+			Properties: map[string]json.RawMessage{
+				"id":   json.RawMessage(strconv.Itoa(1000000 + i)),
+				"name": json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("p-%07d", i))),
+			},
+		})
+	}
+	for i := 0; i < 300; i++ {
+		x, y := 100+float64(i)*0.001, -50.0
+		coords, err := json.Marshal([][][]float64{{{x, y}, {x + 0.0005, y}, {x + 0.0005, y + 0.0005}, {x, y}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		features = append(features, chunk.InputFeature{
+			Geometry: chunk.RawGeometry{Type: "Polygon", Coordinates: coords},
+			Properties: map[string]json.RawMessage{
+				"id":   json.RawMessage(strconv.Itoa(2000000 + i)),
+				"name": json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("q-%07d", i))),
+			},
+		})
+	}
+	body, err := chunk.EncodeCols("itest", cols, features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestPostgresCollectionMixedGeometry(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name := "itest_mixed_native"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	h := New(st)
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", mixedChunksFGB(t)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	rows, err := st.Pool.Query(ctx, `select feature_count, data from chunks where collection = $1 and tier = 0 order by id`, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var counts []int
+	var kinds []string
+	for rows.Next() {
+		var n int
+		var data []byte
+		if err := rows.Scan(&n, &data); err != nil {
+			t.Fatal(err)
+		}
+		c, err := chunk.Open(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts = append(counts, n)
+		kinds = append(kinds, c.Header().GeometryType().String())
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(counts, []int{24386, 300}) || !slices.Equal(kinds, []string{"Point", "Polygon"}) {
+		t.Fatalf("chunks hold %v features of types %v, want 24386 points then 300 polygons", counts, kinds)
+	}
+	for _, path := range []string{"/collections/" + name + "/items.fgb", "/collections/" + name + "/items?f=flatgeobuf&limit=100000"} {
+		geometry, body := geometryAt(t, h, path)
+		if geometry != flattypes.GeometryTypeUnknown {
+			t.Fatalf("%s declares geometry %v, want Unknown", path, geometry)
+		}
+		if got := geometryCounts(t, body); !maps.Equal(got, map[string]int{"Point": 24386, "Polygon": 300}) {
+			t.Fatalf("%s features = %v, want 24386 points and 300 polygons", path, got)
+		}
 	}
 }
 
