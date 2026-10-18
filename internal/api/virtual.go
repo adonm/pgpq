@@ -153,12 +153,7 @@ func (s *Server) storedVirtual(ctx context.Context, info store.CollectionInfo, t
 	if err != nil {
 		return nil, err
 	}
-	var runs []store.VirtualRun
-	if info.Kind == "view" {
-		runs, err = s.Store.ViewRuns(ctx, info)
-	} else {
-		runs, err = s.Store.VirtualRuns(ctx, info.Name, tier)
-	}
+	runs, err := s.Store.VirtualRuns(ctx, info, tier)
 	if err != nil {
 		return nil, err
 	}
@@ -178,11 +173,7 @@ func (s *Server) storedVirtual(ctx context.Context, info store.CollectionInfo, t
 		runs:     make([]virtualRun, 0, len(runs)),
 	}
 	for _, run := range runs {
-		origin := run.Collection
-		if origin == "" {
-			origin = info.Name
-		}
-		vf.runs = append(vf.runs, virtualRun{collection: origin, chunkID: run.ChunkID, base: run.Base, bytes: run.Bytes})
+		vf.runs = append(vf.runs, virtualRun{collection: run.Collection, chunkID: run.ChunkID, base: run.Base, bytes: run.Bytes})
 	}
 	return vf, nil
 }

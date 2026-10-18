@@ -15,135 +15,121 @@ type Ingest struct {
 	store      *Store
 	tx         pgx.Tx
 	collection string
-	staging    map[string]string
 	virtual    map[int]*virtualTier
 }
 
+type partition struct {
+	parent  string
+	table   string
+	indexes []string
+}
+
+var partitions = []partition{
+	{
+		parent: "chunks",
+		table: `create table %[1]s (
+	id bigint not null,
+	collection text not null,
+	tier smallint not null default 0,
+	feature_count int not null,
+	size_bytes int not null,
+	feature_bytes int not null default 0,
+	minx double precision not null,
+	miny double precision not null,
+	maxx double precision not null,
+	maxy double precision not null,
+	checksum text,
+	columns jsonb not null default '[]',
+	data bytea not null,
+	primary key (collection, id)
+)`,
+		indexes: []string{
+			`create index on %[1]s using gist (box(point(minx, miny), point(maxx, maxy)))`,
+			`create index on %[1]s (tier, id)`,
+		},
+	},
+	{
+		parent: "chunk_props",
+		table: `create table %[1]s (
+	collection text not null,
+	chunk_id bigint not null,
+	feature_ord int not null,
+	props jsonb not null,
+	primary key (collection, chunk_id, feature_ord)
+)`,
+		indexes: []string{`create index on %[1]s using gin (props jsonb_path_ops)`},
+	},
+}
+
+func partitionName(parent, collection string) string {
+	return parent + "_" + collection
+}
+
+func (i *Ingest) staged(parent string) string {
+	return pgx.Identifier{"staging", partitionName(parent, i.collection)}.Sanitize()
+}
+
 func (s *Store) BeginIngest(ctx context.Context, name string) (*Ingest, error) {
-	if !collectionName.MatchString(name) {
+	if !ValidName(name) {
 		return nil, fmt.Errorf("invalid collection name %q", name)
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx,
-		`insert into collections (name) values ($1) on conflict (name) do nothing`, name); err != nil {
-		tx.Rollback(ctx)
-		return nil, err
-	}
-	ing := &Ingest{store: s, tx: tx, collection: name, staging: map[string]string{}, virtual: map[int]*virtualTier{}}
-	if err := ing.createStaging(ctx); err != nil {
+	ing := &Ingest{store: s, tx: tx, collection: name, virtual: map[int]*virtualTier{}}
+	if err := ing.stage(ctx); err != nil {
 		tx.Rollback(ctx)
 		return nil, err
 	}
 	return ing, nil
 }
 
-func (i *Ingest) createStaging(ctx context.Context) error {
-	for _, parent := range chunkPartitions {
-		i.staging[parent] = parent + "_" + i.collection + "_next"
-	}
-	chunks := pgx.Identifier{i.staging["chunks"]}.Sanitize()
-	if _, err := i.tx.Exec(ctx, `create table `+chunks+` (
-		id bigint not null,
-		collection text not null,
-		tier smallint not null default 0,
-		feature_count int not null,
-		size_bytes int not null,
-		feature_bytes int not null default 0,
-		minx double precision not null,
-		miny double precision not null,
-		maxx double precision not null,
-		maxy double precision not null,
-		checksum text,
-		columns jsonb not null default '[]',
-		data bytea not null,
-		primary key (collection, id)
-	)`); err != nil {
+func (i *Ingest) stage(ctx context.Context) error {
+	if _, err := i.tx.Exec(ctx, `insert into collections (name) values ($1) on conflict (name) do nothing`, i.collection); err != nil {
 		return err
 	}
-	props := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
-	if _, err := i.tx.Exec(ctx, `create table `+props+` (
-		collection text not null,
-		chunk_id bigint not null,
-		feature_ord int not null,
-		props jsonb not null,
-		primary key (collection, chunk_id, feature_ord)
-	)`); err != nil {
-		return err
+	for _, p := range partitions {
+		if _, err := i.tx.Exec(ctx, fmt.Sprintf(p.table, i.staged(p.parent))); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (i *Ingest) createIndexes(ctx context.Context) error {
-	chunks := pgx.Identifier{i.staging["chunks"]}.Sanitize()
-	if _, err := i.tx.Exec(ctx, `create index on `+chunks+` using gist (box(point(minx, miny), point(maxx, maxy)))`); err != nil {
-		return err
-	}
-	if _, err := i.tx.Exec(ctx, `create index on `+chunks+` (tier, id)`); err != nil {
-		return err
-	}
-	props := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
-	_, err := i.tx.Exec(ctx, `create index on `+props+` using gin (props jsonb_path_ops)`)
-	return err
-}
-
-func (i *Ingest) swap(ctx context.Context) error {
-	view := pgx.Identifier{"layers", i.collection}.Sanitize()
-	if _, err := i.tx.Exec(ctx, `drop view if exists `+view); err != nil {
-		return err
-	}
-	for j := len(chunkPartitions) - 1; j >= 0; j-- {
-		old := pgx.Identifier{chunkPartitions[j] + "_" + i.collection}.Sanitize()
-		if _, err := i.tx.Exec(ctx, `drop table if exists `+old); err != nil {
-			return err
-		}
-	}
-	for _, parent := range chunkPartitions {
-		staging := pgx.Identifier{i.staging[parent]}.Sanitize()
-		final := pgx.Identifier{parent + "_" + i.collection}.Sanitize()
-		if _, err := i.tx.Exec(ctx, `alter table `+staging+` rename to `+final); err != nil {
-			return err
-		}
-		if _, err := i.tx.Exec(ctx, `alter table `+parent+` attach partition `+final+` for values in ('`+i.collection+`')`); err != nil {
-			return err
-		}
-		if err := i.renameIndexes(ctx, parent+"_"+i.collection); err != nil {
-			return err
-		}
-		if _, err := i.tx.Exec(ctx, `analyze `+final); err != nil {
-			return err
+	for _, p := range partitions {
+		for _, index := range p.indexes {
+			if _, err := i.tx.Exec(ctx, fmt.Sprintf(index, i.staged(p.parent))); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (i *Ingest) renameIndexes(ctx context.Context, table string) error {
-	rows, err := i.tx.Query(ctx, `select indexname from pg_indexes where tablename = $1`, table)
-	if err != nil {
+func (i *Ingest) swap(ctx context.Context) error {
+	if err := dropPartitions(ctx, i.tx, i.collection); err != nil {
 		return err
 	}
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			return err
+	for _, p := range partitions {
+		final := ident(partitionName(p.parent, i.collection))
+		for _, stmt := range []string{
+			`alter table ` + i.staged(p.parent) + ` set schema public`,
+			`alter table ` + ident(p.parent) + ` attach partition ` + final + ` for values in ('` + i.collection + `')`,
+			`analyze ` + final,
+		} {
+			if _, err := i.tx.Exec(ctx, stmt); err != nil {
+				return err
+			}
 		}
-		names = append(names, name)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, name := range names {
-		renamed := strings.Replace(name, "_next_", "_", 1)
-		if renamed == name {
-			continue
-		}
-		if _, err := i.tx.Exec(ctx,
-			`alter index `+pgx.Identifier{name}.Sanitize()+` rename to `+pgx.Identifier{renamed}.Sanitize()); err != nil {
+	return nil
+}
+
+func dropPartitions(ctx context.Context, conn db, collection string) error {
+	for _, p := range partitions {
+		if _, err := conn.Exec(ctx, `drop table if exists `+ident(partitionName(p.parent, collection))); err != nil {
 			return err
 		}
 	}
@@ -151,47 +137,35 @@ func (i *Ingest) renameIndexes(ctx context.Context, table string) error {
 }
 
 func (s *Store) DropCollection(ctx context.Context, name string) error {
-	if !collectionName.MatchString(name) {
+	if !ValidName(name) {
 		return fmt.Errorf("invalid collection name %q", name)
 	}
-	var exists bool
-	if err := s.Pool.QueryRow(ctx,
-		`select exists (select 1 from collections where name = $1)`, name).Scan(&exists); err != nil {
+	if _, err := s.Collection(ctx, name); err != nil {
 		return err
-	}
-	if !exists {
-		return ErrNotFound
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	view := pgx.Identifier{"layers", name}.Sanitize()
-	if _, err := tx.Exec(ctx, `drop view if exists `+view); err != nil {
+	if err := dropPartitions(ctx, tx, name); err != nil {
 		return err
 	}
-	for j := len(chunkPartitions) - 1; j >= 0; j-- {
-		partition := pgx.Identifier{chunkPartitions[j] + "_" + name}.Sanitize()
-		if _, err := tx.Exec(ctx, `drop table if exists `+partition); err != nil {
+	for _, query := range []string{
+		`delete from collections where name = $1`,
+		`delete from virtual_file where collection = $1`,
+		`delete from virtual_segment where collection = $1`,
+	} {
+		if _, err := tx.Exec(ctx, query, name); err != nil {
 			return err
 		}
-	}
-	if _, err := tx.Exec(ctx, `delete from collections where name = $1`, name); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `delete from virtual_file where collection = $1`, name); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `delete from virtual_segment where collection = $1`, name); err != nil {
-		return err
 	}
 	s.forgetCasts(name)
 	return tx.Commit(ctx)
 }
 
 func (s *Store) PutMeta(ctx context.Context, name string, doc []byte, meta CollectionMeta) error {
-	if !collectionName.MatchString(name) {
+	if !ValidName(name) {
 		return fmt.Errorf("invalid collection name %q", name)
 	}
 	return putMeta(ctx, s.Pool, name, doc, meta)
@@ -229,26 +203,14 @@ func (i *Ingest) Commit(ctx context.Context) error {
 	if err := refreshStats(ctx, i.tx, i.collection); err != nil {
 		return err
 	}
-	if _, err := i.tx.Exec(ctx, `create schema if not exists layers`); err != nil {
-		return err
-	}
-	view := pgx.Identifier{"layers", i.collection}.Sanitize()
-	if _, err := i.tx.Exec(ctx,
-		`create or replace view `+view+` as select * from chunks where collection = '`+i.collection+`' and tier = 0`); err != nil {
-		return err
-	}
 	if err := i.buildVirtual(ctx); err != nil {
 		return err
 	}
-	if err := i.rebuildMemberViews(ctx); err != nil {
+	if err := i.store.rebuildMemberViews(ctx, i.tx, i.collection); err != nil {
 		return err
 	}
 	i.store.forgetCasts(i.collection)
 	return i.tx.Commit(ctx)
-}
-
-func (i *Ingest) rebuildMemberViews(ctx context.Context) error {
-	return i.store.rebuildMemberViews(ctx, i.tx, i.collection)
 }
 
 func (i *Ingest) Rollback(ctx context.Context) {
@@ -256,7 +218,14 @@ func (i *Ingest) Rollback(ctx context.Context) {
 }
 
 func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
-	id, err := putChunk(ctx, i.tx, i.staging["chunks"], i.collection, payload)
+	var id int64
+	err := i.tx.QueryRow(ctx, `
+		insert into `+i.staged("chunks")+` (id, collection, tier, feature_count, size_bytes, feature_bytes, minx, miny, maxx, maxy, checksum, columns, data)
+		values (nextval(pg_get_serial_sequence('chunks', 'id')), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+		returning id`,
+		i.collection, payload.Tier, payload.Count, payload.Size, payload.FeatureBytes,
+		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY,
+		payload.Checksum, payload.Columns, payload.Data).Scan(&id)
 	if err != nil {
 		return id, err
 	}
@@ -272,26 +241,30 @@ func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
 }
 
 func (i *Ingest) PutChunkProps(ctx context.Context, chunkID int64, docs []string) error {
-	return putChunkProps(ctx, i.tx, i.staging["chunk_props"], i.collection, chunkID, docs)
-}
-
-func (i *Ingest) Chunks(ctx context.Context, bbox *[4]float64, limit, tier int) ([]ChunkRow, error) {
-	return chunks(ctx, i.tx, i.staging["chunks"], i.collection, bbox, limit, tier)
-}
-
-func (i *Ingest) DeleteChunksAboveTier(ctx context.Context, tier int) error {
-	return deleteChunksAboveTier(ctx, i.tx, i.staging["chunks"], tier)
-}
-
-func (i *Ingest) SetCatalog(ctx context.Context, sortable []string, idColumn, timeColumn string, timeMin, timeMax *time.Time) error {
+	if len(docs) == 0 {
+		return nil
+	}
 	_, err := i.tx.Exec(ctx, `
-		update collections set kind = 'native', version = version + 1, updated_at = now(), sortable = coalesce($2::text[], '{}'),
-			id_column = $3, time_column = $4, time_min = $5, time_max = $6
-		where name = $1`, i.collection, sortable, nullable(idColumn), nullable(timeColumn), timeMin, timeMax)
+		insert into `+i.staged("chunk_props")+` (collection, chunk_id, feature_ord, props)
+		select $1, $2, input.ord - 1, input.doc::jsonb
+		from unnest($3::text[]) with ordinality as input(doc, ord)
+		where input.doc <> '' and input.doc <> '{}' and input.doc <> 'null'`, i.collection, chunkID, docs)
 	return err
 }
 
-func SortExpr(name string, cast cql.Cast) string {
+func (i *Ingest) BaseChunks(ctx context.Context) ([][]byte, error) {
+	return queryAll(ctx, i.tx, pgx.RowTo[[]byte], `select data from `+i.staged("chunks")+` where tier = 0 order by id`)
+}
+
+func (i *Ingest) SetCatalog(ctx context.Context, idColumn, timeColumn string, timeMin, timeMax *time.Time) error {
+	_, err := i.tx.Exec(ctx, `
+		update collections set kind = 'native', version = version + 1, updated_at = now(),
+			id_column = $2, time_column = $3, time_min = $4, time_max = $5
+		where name = $1`, i.collection, nullable(idColumn), nullable(timeColumn), timeMin, timeMax)
+	return err
+}
+
+func sortExpr(name string, cast cql.Cast) string {
 	switch cast {
 	case cql.CastNumeric, cql.CastBoolean, cql.CastTimestamp:
 		return cql.ColumnExpr("props", name, cast)
@@ -303,13 +276,12 @@ func SortExpr(name string, cast cql.Cast) string {
 
 func (i *Ingest) CreateSortIndexes(ctx context.Context, cols []SortColumn) error {
 	for idx, col := range cols {
-		expr := SortExpr(col.Name, col.Cast)
+		expr := sortExpr(col.Name, col.Cast)
 		if expr == "" {
 			return fmt.Errorf("sortable: unsupported cast %q", col.Cast)
 		}
-		name := pgx.Identifier{fmt.Sprintf("%s_sort_%d_idx", i.staging["chunk_props"], idx)}.Sanitize()
-		table := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
-		if _, err := i.tx.Exec(ctx, `create index `+name+` on `+table+` ((`+expr+`))`); err != nil {
+		name := ident(fmt.Sprintf("%s_sort_%d_idx", partitionName("chunk_props", i.collection), idx))
+		if _, err := i.tx.Exec(ctx, `create index `+name+` on `+i.staged("chunk_props")+` ((`+expr+`))`); err != nil {
 			return err
 		}
 	}
@@ -321,34 +293,6 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
-}
-
-func putChunk(ctx context.Context, conn db, table, collection string, payload Payload) (int64, error) {
-	var id int64
-	err := conn.QueryRow(ctx, `
-		insert into `+table+` (id, collection, tier, feature_count, size_bytes, feature_bytes, minx, miny, maxx, maxy, checksum, columns, data)
-		values (nextval(pg_get_serial_sequence('chunks', 'id')), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
-		returning id`,
-		collection, payload.Tier, payload.Count, payload.Size, payload.FeatureBytes,
-		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY,
-		payload.Checksum, payload.Columns, payload.Data).Scan(&id)
-	return id, err
-}
-
-func putChunkProps(ctx context.Context, conn db, table, collection string, chunkID int64, docs []string) error {
-	if len(docs) == 0 {
-		return nil
-	}
-	ords := make([]int32, len(docs))
-	for i := range ords {
-		ords[i] = int32(i)
-	}
-	_, err := conn.Exec(ctx, `
-		insert into `+table+` (collection, chunk_id, feature_ord, props)
-		select $1, $2, ord, doc::jsonb
-		from unnest($3::int[], $4::text[]) as input(ord, doc)
-		where doc <> '' and doc <> '{}' and doc <> 'null'`, collection, chunkID, ords, docs)
-	return err
 }
 
 func refreshStats(ctx context.Context, conn db, name string) error {

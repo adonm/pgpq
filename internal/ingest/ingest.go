@@ -208,7 +208,7 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	if err := ing.CreateSortIndexes(ctx, sortColumns(cols, opts.Sortable)); err != nil {
 		return Result{}, err
 	}
-	if err := ing.SetCatalog(ctx, opts.Sortable, idColumn, timeColumn, timeMin, timeMax); err != nil {
+	if err := ing.SetCatalog(ctx, idColumn, timeColumn, timeMin, timeMax); err != nil {
 		return Result{}, err
 	}
 	if err := ing.Commit(ctx); err != nil {
@@ -558,11 +558,8 @@ func columnList(cols []chunk.Column) []columnInfo {
 }
 
 func overviews(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column) error {
-	rows, err := ing.Chunks(ctx, nil, 1000000, 0)
+	base, err := ing.BaseChunks(ctx)
 	if err != nil {
-		return err
-	}
-	if err := ing.DeleteChunksAboveTier(ctx, 0); err != nil {
 		return err
 	}
 	specs := []*tierSpec{
@@ -581,8 +578,8 @@ func overviews(ctx context.Context, ing *store.Ingest, collection string, cols [
 		spec.batch = spec.batch[:0]
 		return nil
 	}
-	for _, row := range rows {
-		c, err := chunk.Open(row.Data)
+	for _, data := range base {
+		c, err := chunk.Open(data)
 		if err != nil {
 			return err
 		}

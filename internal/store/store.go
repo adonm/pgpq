@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
-	"sort"
 	"sync"
 	"time"
 
@@ -25,20 +24,6 @@ var migrations embed.FS
 var ErrNotFound = errors.New("store: not found")
 
 var ErrConflict = errors.New("store: conflict")
-
-var TrackedExtensions = []string{
-	"postgis",
-	"pg_trgm",
-	"pg_bigm",
-	"unaccent",
-	"btree_gin",
-	"btree_gist",
-	"bloom",
-	"hll",
-	"pg_roaringbitmap",
-	"pgvector",
-	"h3-pg",
-}
 
 type Store struct {
 	Pool    *pgxpool.Pool
@@ -61,24 +46,14 @@ type Payload struct {
 }
 
 type ChunkRow struct {
-	ID           int64
-	FeatureCount int
-	SizeBytes    int
-	MinX, MinY   float64
-	MaxX, MaxY   float64
-	Checksum     *string
-	Columns      []byte
-	Data         []byte
-	Tier         int
+	Data []byte
+	Tier int
 }
 
 type ChunkMeta struct {
 	ID           int64
 	FeatureCount int
 	SizeBytes    int
-	MinX, MinY   float64
-	MaxX, MaxY   float64
-	Checksum     *string
 	Columns      []byte
 }
 
@@ -95,7 +70,6 @@ type CollectionInfo struct {
 	TimeMax      *time.Time
 	IDColumn     *string
 	TimeColumn   *string
-	Sortable     []string
 	Title        *string
 	Description  *string
 	License      *string
@@ -171,59 +145,52 @@ func (s *Store) Ready(ctx context.Context) error {
 	if err := s.Pool.Ping(ctx); err != nil {
 		return err
 	}
-	names, err := migrationFiles()
+	names, err := migrationNames()
 	if err != nil {
 		return err
 	}
 	if len(names) == 0 {
 		return errors.New("no migrations embedded")
 	}
+	want := names[len(names)-1]
 	var latest string
-	if err := s.Pool.QueryRow(ctx,
-		`select coalesce(max(version), 'none') from schema_migrations`).Scan(&latest); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
-			return fmt.Errorf("database is not migrated: want %s", names[len(names)-1])
-		}
+	err = s.Pool.QueryRow(ctx, `select coalesce(max(version), 'none') from schema_migrations`).Scan(&latest)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+		return fmt.Errorf("database is not migrated: want %s", want)
+	}
+	if err != nil {
 		return err
 	}
-	if latest != names[len(names)-1] {
-		return fmt.Errorf("database is not migrated: want %s, have %s", names[len(names)-1], latest)
+	if latest != want {
+		return fmt.Errorf("database is not migrated: want %s, have %s", want, latest)
 	}
 	return nil
 }
 
-func migrationFiles() ([]string, error) {
+func migrationNames() ([]string, error) {
 	entries, err := fs.ReadDir(migrations, "migrations")
-	if err != nil {
-		return nil, err
-	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			names = append(names, entry.Name())
-		}
+		names = append(names, entry.Name())
 	}
-	sort.Strings(names)
-	return names, nil
+	return names, err
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
-	const migrationsTable = `create table if not exists schema_migrations (
+	if _, err := s.Pool.Exec(ctx, `create table if not exists schema_migrations (
 		version text primary key,
 		applied_at timestamptz not null default now()
-	)`
-	if _, err := s.Pool.Exec(ctx, migrationsTable); err != nil {
+	)`); err != nil {
 		return err
 	}
-	names, err := migrationFiles()
+	names, err := migrationNames()
 	if err != nil {
 		return err
 	}
 	for _, name := range names {
 		var applied bool
-		if err := s.Pool.QueryRow(ctx,
-			`select exists (select 1 from schema_migrations where version = $1)`, name).Scan(&applied); err != nil {
+		if err := s.Pool.QueryRow(ctx, `select exists (select 1 from schema_migrations where version = $1)`, name).Scan(&applied); err != nil {
 			return err
 		}
 		if applied {
@@ -243,41 +210,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) Capabilities(ctx context.Context) (map[string]bool, error) {
-	caps := make(map[string]bool, len(TrackedExtensions))
-	for _, name := range TrackedExtensions {
-		caps[name] = false
-	}
-	rows, err := s.Pool.Query(ctx,
-		`select name from pg_available_extensions where name = any($1)`, TrackedExtensions)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		caps[name] = true
-	}
-	return caps, rows.Err()
-}
-
 var collectionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$`)
 
 func ValidName(name string) bool {
 	return collectionName.MatchString(name)
 }
 
-var chunkPartitions = []string{"chunks", "chunk_props"}
+func ident(name string) string {
+	return pgx.Identifier{name}.Sanitize()
+}
 
-const (
-	matchOrderedBudget = 500 * time.Millisecond
-	maxMatchBudget     = 4 * time.Second
-)
-
-func deleteChunksAboveTier(ctx context.Context, conn db, table string, tier int) error {
-	_, err := conn.Exec(ctx, `delete from `+table+` where tier > $1`, tier)
-	return err
+func queryAll[T any](ctx context.Context, conn db, scan pgx.RowToFunc[T], sql string, args ...any) ([]T, error) {
+	rows, err := conn.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scan)
 }

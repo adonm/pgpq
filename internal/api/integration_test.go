@@ -189,8 +189,8 @@ func TestPostgresIngestQuery(t *testing.T) {
 	var leftovers int
 	if err := st.Pool.QueryRow(ctx, `
 		select count(*) from pg_tables
-		where tablename in ($1, $2)`,
-		"chunks_"+name+"_next", "chunk_props_"+name+"_next").Scan(&leftovers); err != nil {
+		where schemaname = 'staging' and tablename in ($1, $2)`,
+		"chunks_"+name, "chunk_props_"+name).Scan(&leftovers); err != nil {
 		t.Fatal(err)
 	}
 	if leftovers != 0 {

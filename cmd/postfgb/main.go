@@ -52,15 +52,6 @@ func serve(args []string) {
 			fatal(err)
 		}
 	}
-	caps, err := st.Capabilities(ctx)
-	if err != nil {
-		fatal(err)
-	}
-	for _, name := range store.TrackedExtensions {
-		if caps[name] {
-			slog.Info("extension available", "name", name)
-		}
-	}
 	if *readonly {
 		slog.Info("read-only worker")
 	}
