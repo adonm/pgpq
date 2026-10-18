@@ -29,16 +29,6 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-func (w *statusWriter) Flush() {
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
-
-func (w *statusWriter) Unwrap() http.ResponseWriter {
-	return w.ResponseWriter
-}
-
 func (s *Server) observe(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -52,10 +42,7 @@ func (s *Server) observe(next http.Handler) http.Handler {
 			route = "unmatched"
 		}
 		elapsed := time.Since(start)
-		labels := metricLabels("route", route, "method", r.Method)
-		s.metrics.add("postfgb_http_requests_total", metricLabels("route", route, "method", r.Method, "status", fmt.Sprint(sw.status)), 1)
-		s.metrics.observe("postfgb_http_request_duration_seconds", labels, elapsed.Seconds())
-		s.metrics.add("postfgb_http_response_bytes_total", labels, int64(sw.bytes))
+		s.metrics.recordRequest(route, r.Method, sw.status, sw.bytes, elapsed)
 		slog.Info("request",
 			"method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery, "route", route,
 			"status", sw.status, "duration_ms", elapsed.Milliseconds(), "bytes", sw.bytes)
@@ -82,13 +69,12 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	s.metrics.render(w)
+	s.metrics.write(w)
 	if s.Store == nil {
 		return
 	}
 	stat := s.Store.Pool.Stat()
-	fmt.Fprintf(w, "# HELP postfgb_pg_pool_connections PostgreSQL pool connections by state.\n")
-	fmt.Fprintf(w, "# TYPE postfgb_pg_pool_connections gauge\n")
+	family(w, "postfgb_pg_pool_connections", "gauge", "PostgreSQL pool connections by state.")
 	fmt.Fprintf(w, "postfgb_pg_pool_connections{state=\"total\"} %d\n", stat.TotalConns())
 	fmt.Fprintf(w, "postfgb_pg_pool_connections{state=\"acquired\"} %d\n", stat.AcquiredConns())
 	fmt.Fprintf(w, "postfgb_pg_pool_connections{state=\"idle\"} %d\n", stat.IdleConns())

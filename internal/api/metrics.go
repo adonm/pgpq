@@ -1,151 +1,87 @@
 package api
 
 import (
+	"bytes"
 	"fmt"
 	"io"
-	"sort"
-	"strings"
+	"maps"
+	"slices"
 	"sync"
+	"time"
 )
 
-type durationStat struct {
-	sum   float64
-	count int64
-}
-
 type metrics struct {
-	mu        sync.Mutex
-	counters  map[string]int64
-	durations map[string]durationStat
+	mu       sync.Mutex
+	requests map[string]int64
+	routes   map[string]routeStat
+	ingests  map[string]int64
+	features int64
+	chunks   int64
 }
 
-var metricHelp = map[string]string{
-	"postfgb_http_requests_total":           "HTTP requests by route, method and status.",
-	"postfgb_http_request_duration_seconds": "HTTP request duration by route and method.",
-	"postfgb_http_response_bytes_total":     "HTTP response body bytes by route and method.",
-	"postfgb_ingest_total":                  "Collection ingests by result.",
-	"postfgb_ingest_features_total":         "Features ingested.",
-	"postfgb_ingest_chunks_total":           "Chunks produced by ingest.",
+type routeStat struct {
+	calls   int64
+	bytes   int64
+	seconds float64
 }
 
 func newMetrics() *metrics {
-	return &metrics{
-		counters:  map[string]int64{},
-		durations: map[string]durationStat{},
-	}
+	return &metrics{requests: map[string]int64{}, routes: map[string]routeStat{}, ingests: map[string]int64{}}
 }
 
-func (m *metrics) add(name, labels string, delta int64) {
+func (m *metrics) recordRequest(route, method string, status, size int, elapsed time.Duration) {
+	labels := fmt.Sprintf(`route=%q,method=%q`, route, method)
 	m.mu.Lock()
-	m.counters[name+labels] += delta
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	m.requests[fmt.Sprintf(`%s,status="%d"`, labels, status)]++
+	stat := m.routes[labels]
+	stat.calls++
+	stat.bytes += int64(size)
+	stat.seconds += elapsed.Seconds()
+	m.routes[labels] = stat
 }
 
-func (m *metrics) observe(name, labels string, seconds float64) {
+func (m *metrics) recordIngest(result string, features, chunks int) {
 	m.mu.Lock()
-	stat := m.durations[name+labels]
-	stat.sum += seconds
-	stat.count++
-	m.durations[name+labels] = stat
+	defer m.mu.Unlock()
+	m.ingests[fmt.Sprintf(`result=%q`, result)]++
+	m.features += int64(features)
+	m.chunks += int64(chunks)
+}
+
+func (m *metrics) write(w io.Writer) {
+	var out bytes.Buffer
+	m.mu.Lock()
+	m.render(&out)
 	m.mu.Unlock()
+	out.WriteTo(w)
 }
 
 func (m *metrics) render(w io.Writer) {
-	m.mu.Lock()
-	counters := make(map[string]int64, len(m.counters))
-	for key, value := range m.counters {
-		counters[key] = value
+	family(w, "postfgb_http_requests_total", "counter", "HTTP requests by route, method and status.")
+	for _, labels := range slices.Sorted(maps.Keys(m.requests)) {
+		fmt.Fprintf(w, "postfgb_http_requests_total{%s} %d\n", labels, m.requests[labels])
 	}
-	durations := make(map[string]durationStat, len(m.durations))
-	for key, value := range m.durations {
-		durations[key] = value
+	family(w, "postfgb_http_response_bytes_total", "counter", "HTTP response body bytes by route and method.")
+	for _, labels := range slices.Sorted(maps.Keys(m.routes)) {
+		fmt.Fprintf(w, "postfgb_http_response_bytes_total{%s} %d\n", labels, m.routes[labels].bytes)
 	}
-	m.mu.Unlock()
-	writeSamples(w, map[string]map[string]string{
-		"counter": counterSamples(counters),
-		"summary": durationSamples(durations),
-	})
+	family(w, "postfgb_http_request_duration_seconds", "summary", "HTTP request duration by route and method.")
+	for _, labels := range slices.Sorted(maps.Keys(m.routes)) {
+		stat := m.routes[labels]
+		fmt.Fprintf(w, "postfgb_http_request_duration_seconds_count{%s} %d\n", labels, stat.calls)
+		fmt.Fprintf(w, "postfgb_http_request_duration_seconds_sum{%s} %f\n", labels, stat.seconds)
+	}
+	family(w, "postfgb_ingest_total", "counter", "Collection ingests by result.")
+	for _, labels := range slices.Sorted(maps.Keys(m.ingests)) {
+		fmt.Fprintf(w, "postfgb_ingest_total{%s} %d\n", labels, m.ingests[labels])
+	}
+	family(w, "postfgb_ingest_features_total", "counter", "Features ingested.")
+	fmt.Fprintf(w, "postfgb_ingest_features_total %d\n", m.features)
+	family(w, "postfgb_ingest_chunks_total", "counter", "Chunks produced by ingest.")
+	fmt.Fprintf(w, "postfgb_ingest_chunks_total %d\n", m.chunks)
 }
 
-func counterSamples(values map[string]int64) map[string]string {
-	samples := make(map[string]string, len(values))
-	for key, value := range values {
-		samples[key] = fmt.Sprintf("%d", value)
-	}
-	return samples
-}
-
-func durationSamples(values map[string]durationStat) map[string]string {
-	samples := make(map[string]string, len(values)*2)
-	for key, value := range values {
-		name, labels := key, ""
-		if idx := strings.IndexByte(key, '{'); idx >= 0 {
-			name, labels = key[:idx], key[idx:]
-		}
-		samples[name+"_sum"+labels] = formatFloat(value.sum)
-		samples[name+"_count"+labels] = fmt.Sprintf("%d", value.count)
-	}
-	return samples
-}
-
-func writeSamples(w io.Writer, families map[string]map[string]string) {
-	for _, kind := range []string{"counter", "summary"} {
-		samples := families[kind]
-		names := make([]string, 0, len(samples))
-		grouped := map[string][]string{}
-		for key := range samples {
-			name := key
-			if idx := strings.IndexByte(key, '{'); idx >= 0 {
-				name = key[:idx]
-			}
-			if kind == "summary" {
-				name = strings.TrimSuffix(name, "_sum")
-				name = strings.TrimSuffix(name, "_count")
-			}
-			if _, ok := grouped[name]; !ok {
-				names = append(names, name)
-			}
-			grouped[name] = append(grouped[name], key)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			help, ok := metricHelp[name]
-			if !ok {
-				continue
-			}
-			fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-			fmt.Fprintf(w, "# TYPE %s %s\n", name, kind)
-			keys := grouped[name]
-			sort.Strings(keys)
-			for _, key := range keys {
-				fmt.Fprintf(w, "%s %s\n", key, samples[key])
-			}
-		}
-	}
-}
-
-func formatFloat(value float64) string {
-	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", value), "0"), ".")
-}
-
-func metricLabels(pairs ...string) string {
-	var b strings.Builder
-	b.WriteByte('{')
-	for i := 0; i+1 < len(pairs); i += 2 {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(pairs[i])
-		b.WriteString(`="`)
-		b.WriteString(escapeLabel(pairs[i+1]))
-		b.WriteByte('"')
-	}
-	b.WriteByte('}')
-	return b.String()
-}
-
-func escapeLabel(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `"`, `\"`)
-	return strings.ReplaceAll(value, "\n", `\n`)
+func family(w io.Writer, name, kind, help string) {
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", name, help, name, kind)
 }

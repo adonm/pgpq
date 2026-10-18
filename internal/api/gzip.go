@@ -15,27 +15,19 @@ type encodingWriter struct {
 	encoding string
 	writer   io.WriteCloser
 	decided  bool
-	skip     bool
 }
 
 func negotiateEncoding(header string) string {
 	zstdQ, gzipQ := 0.0, 0.0
 	for _, part := range strings.Split(header, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
 		name, params, _ := strings.Cut(part, ";")
-		name = strings.ToLower(strings.TrimSpace(name))
 		q := 1.0
-		if strings.Contains(params, "q=") {
-			_, value, _ := strings.Cut(params, "q=")
-			value = strings.TrimSpace(strings.TrimSuffix(value, ","))
-			if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+		if _, value, ok := strings.Cut(params, "q="); ok {
+			if parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
 				q = parsed
 			}
 		}
-		switch name {
+		switch strings.ToLower(strings.TrimSpace(name)) {
 		case "zstd":
 			zstdQ = q
 		case "gzip", "*":
@@ -72,25 +64,27 @@ func (e *encodingWriter) decide() {
 		return
 	}
 	e.decided = true
-	ct := e.Header().Get("Content-Type")
-	e.skip = e.Header().Get("Content-Encoding") != "" || e.Header().Get("Content-Length") != "" ||
-		!(strings.HasPrefix(ct, "application/json") || strings.HasPrefix(ct, "application/geo+json"))
-	if e.skip {
+	h := e.Header()
+	ct := h.Get("Content-Type")
+	if h.Get("Content-Encoding") != "" || h.Get("Content-Length") != "" ||
+		!(strings.HasPrefix(ct, "application/json") || strings.HasPrefix(ct, "application/geo+json")) {
 		return
 	}
-	e.Header().Del("Content-Length")
-	e.Header().Set("Content-Encoding", e.encoding)
-	e.Header().Add("Vary", "Accept-Encoding")
-	if e.encoding == "zstd" {
-		writer, err := zstd.NewWriter(e.ResponseWriter, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithWindowSize(1<<20))
-		if err != nil {
-			e.skip = true
-			return
-		}
-		e.writer = writer
+	writer, err := newEncoder(e.encoding, e.ResponseWriter)
+	if err != nil {
 		return
 	}
-	e.writer = gzip.NewWriter(e.ResponseWriter)
+	h.Del("Content-Length")
+	h.Set("Content-Encoding", e.encoding)
+	h.Add("Vary", "Accept-Encoding")
+	e.writer = writer
+}
+
+func newEncoder(encoding string, w io.Writer) (io.WriteCloser, error) {
+	if encoding == "zstd" {
+		return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithWindowSize(1<<20))
+	}
+	return gzip.NewWriter(w), nil
 }
 
 func (e *encodingWriter) WriteHeader(code int) {
@@ -104,18 +98,6 @@ func (e *encodingWriter) Write(b []byte) (int, error) {
 		return e.writer.Write(b)
 	}
 	return e.ResponseWriter.Write(b)
-}
-
-func (e *encodingWriter) Flush() {
-	e.decide()
-	if e.writer != nil {
-		if flusher, ok := e.writer.(interface{ Flush() error }); ok {
-			flusher.Flush()
-		}
-	}
-	if flusher, ok := e.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
 }
 
 func (e *encodingWriter) close() {

@@ -17,21 +17,11 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
+	if len(os.Args) < 2 || os.Args[1] != "serve" {
+		fmt.Fprintln(os.Stderr, "usage: postfgb serve [flags]")
 		os.Exit(2)
 	}
-	switch os.Args[1] {
-	case "serve":
-		serve(os.Args[2:])
-	default:
-		usage()
-		os.Exit(2)
-	}
-}
-
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: postfgb serve [flags]")
+	serve(os.Args[2:])
 }
 
 func fatal(err error) {
@@ -46,9 +36,8 @@ func serve(args []string) {
 	maxConns := fs.Int("max-conns", 0, "maximum PostgreSQL pool connections (0 keeps the driver default)")
 	minConns := fs.Int("min-conns", 0, "minimum idle PostgreSQL pool connections (0 keeps the driver default)")
 	maxChunkBytes := fs.Int("max-chunk-bytes", 32<<20, "per-request chunk fetch budget in bytes")
-	readonlyHelp := "serve the read-only surface: no ingest and no delete"
-	readonly := fs.Bool("readonly", envBool("POSTFGB_READONLY"), readonlyHelp)
-	runMigrations := fs.Bool("migrate", true, "run migrations at startup (skipped by default in --readonly)")
+	readonly := fs.Bool("readonly", envBool("POSTFGB_READONLY"), "serve the read-only surface: no ingest and no delete")
+	migrate := fs.Bool("migrate", true, "run migrations at startup (skipped by default in --readonly)")
 	fs.Parse(args)
 	ctx := context.Background()
 	st, err := store.OpenWithPool(ctx, *dsn, store.PoolOptions{MaxConns: int32(*maxConns), MinConns: int32(*minConns)})
@@ -56,17 +45,9 @@ func serve(args []string) {
 		fatal(err)
 	}
 	defer st.Close()
-	migrate := *runMigrations
-	if *readonly {
-		explicit := false
-		fs.Visit(func(f *flag.Flag) {
-			if f.Name == "migrate" {
-				explicit = true
-			}
-		})
-		migrate = migrate && explicit
-	}
-	if migrate {
+	migrateSet := false
+	fs.Visit(func(f *flag.Flag) { migrateSet = migrateSet || f.Name == "migrate" })
+	if *migrate && (migrateSet || !*readonly) {
 		if err := st.Migrate(ctx); err != nil {
 			fatal(err)
 		}

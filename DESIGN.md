@@ -48,7 +48,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 ## Read path
 
 - The RustGIS project at `/viewer.rgis` carries, per collection, one range-readable `.fgb` layer per overview tier plus full detail, ordered coarsest first and named `<title> · 1%` / `· 10%` / `<title>`, each constrained to its zoom band with the app's `min_scale`/`max_scale` (a layer draws when `max_scale <= 1:scale <= min_scale`; tiers are probed per collection and `overview=` falls back to full detail when a tier is missing). All layers are `visible: false`; RustGIS has no layer-group node (its folders are filesystem paths) and no live OGC API Features layer kind — its service flow pages the collection and materializes it — so a zoom-switching set of file layers plus a `service_groups` record pointing at the collection list is how a project expresses both.
-- The read surface is CORS-open (`Access-Control-Allow-Origin: *`, ETag and Content-Crs exposed) so browser clients — the RustGIS web app embedded by the minimal `/viewer` host (an iframe on `web.rustgis.app/?embed&project=…`, fed by the project generated at `/viewer.rgis`: range-readable FlatGeobuf layers, all hidden by default), or any RustGIS build elsewhere — can query any deployment directly; the browser tooling is RustGIS itself, not a second API.
+- The read surface is CORS-open (`Access-Control-Allow-Origin: *`, ETag and Content-Crs exposed) so browser clients — the RustGIS web app that `/viewer` redirects to (`web.rustgis.app/?embed&project=…`, fed by the project generated at `/viewer.rgis`: range-readable FlatGeobuf layers, all hidden by default), or any RustGIS build elsewhere — can query any deployment directly; the browser tooling is RustGIS itself, not a second API.
 
 - Unfiltered scans stream chunk windows in id order with no fixed chunk cap; offset paging stays exact at any collection size.
 - Filtered fan-out runs under a per-request byte budget (`--max-chunk-bytes`, 32 MiB by default) so windows stay bounded no matter how large individual chunks are; short pages always carry honest next links.
@@ -91,6 +91,7 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 - Removed: S2 coverings (bounding-box pruning is enough because features are tested exactly after pruning).
 - Removed: spatial CQL2 functions (`S_INTERSECTS`, with the polyclip-go intersection engine and the WKT parser). `bbox` covers the spatial filter; features are not tested against polygons, and spatial functions answer 400.
 - Removed: CQL2-JSON (`filter-lang=cql2-json`, and a JSON `filter` in the STAC search body). The clients in use (GDAL, RustGIS) send CQL2 text, which is now the only filter encoding; any other `filter-lang` answers 400.
+- Removed: the HTML host page at `/viewer` (an iframe, toolbar and CSS around the RustGIS app). `/viewer` is now a 302 to `web.rustgis.app/?embed&project=…`, which reads `/viewer.rgis` itself, so the page added nothing the redirect does not.
 - Removed: the STAC catalog, STAC items and STAC search (`/stac`, `/stac/collections/{id}/items`, `/stac/search`). Items and search duplicated the OGC items endpoint, which the clients in use read at `/collections/{id}/items`, and the STAC core and item-search conformance claims went with them.
 
 ## Build order
