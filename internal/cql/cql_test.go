@@ -133,6 +133,38 @@ func TestTypedColumnsUseTheIndexedExpression(t *testing.T) {
 	}
 }
 
+func TestEqualityFollowsColumnCast(t *testing.T) {
+	casts := Casts{"id": CastNumeric, "flag": CastBoolean, "name": CastText}
+	build := func(in string) (string, []any) {
+		t.Helper()
+		expr, err := Parse(in)
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		return sqlOf(expr, casts)
+	}
+	for _, pair := range [][2]string{
+		{`id = '393226'`, `id = 393226`},
+		{`id IN ('1', '2')`, `id IN (1, 2)`},
+		{`flag = 'true'`, `flag = true`},
+		{`flag = 'false'`, `flag = false`},
+	} {
+		sqlA, argsA := build(pair[0])
+		sqlB, argsB := build(pair[1])
+		if sqlA != sqlB || !reflect.DeepEqual(argsA, argsB) {
+			t.Fatalf("%s and %s differ:\n%s %v\n%s %v", pair[0], pair[1], sqlA, argsA, sqlB, argsB)
+		}
+	}
+	for _, tc := range []struct{ in, value string }{
+		{`id = 'abc'`, "abc"}, {`id = 'Inf'`, "Inf"}, {`id = 'NaN'`, "NaN"}, {`flag = 'yes'`, "yes"},
+	} {
+		sql, args := build(tc.in)
+		if len(args) != 2 || args[1] != tc.value || !strings.Contains(sql, "$2::text") {
+			t.Fatalf("%s should stay on the text path: %s %v", tc.in, sql, args)
+		}
+	}
+}
+
 func sqlOf(e Expr, casts Casts) (string, []any) {
 	b := NewBuilder("props", casts)
 	return e.SQL(b), b.Args()

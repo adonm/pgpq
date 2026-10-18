@@ -146,6 +146,8 @@ func TestTypedLiteral(t *testing.T) {
 		{"1.5", 1.5},
 		{"true", true},
 		{"false", false},
+		{"Inf", "Inf"},
+		{"NaN", "NaN"},
 		{"feature-42", "feature-42"},
 	}
 	for _, tc := range cases {

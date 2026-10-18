@@ -980,6 +980,41 @@ func TestPostgresTypedColumns(t *testing.T) {
 	}
 }
 
+func TestPostgresEqualityFollowsColumnCast(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name := "itest_equality"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	h := New(st)
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", typedFGB(t)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	matched := func(query string, want int64) {
+		t.Helper()
+		w := call(h, "GET", "/collections/"+name+"/items?limit=1&numberMatched=true&"+query, "", nil)
+		var doc struct {
+			NumberMatched *int64 `json:"numberMatched"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil || w.Code != 200 || doc.NumberMatched == nil || *doc.NumberMatched != want {
+			t.Fatalf("%s = %d: %s, want %d matches", query, w.Code, w.Body.String(), want)
+		}
+	}
+	for _, filter := range []string{"id = 1", "id = '1'", "id IN ('1', 'x')"} {
+		matched("filter="+url.QueryEscape(filter), 1)
+	}
+	for _, filter := range []string{"c_bool = true", "c_bool = 'true'"} {
+		matched("filter="+url.QueryEscape(filter), 1)
+	}
+	matched("c_bool=true", 1)
+	matched("c_bool=false", 1)
+	matched("id=1", 1)
+	matched("filter="+url.QueryEscape("c_bool = false"), 1)
+	matched("filter="+url.QueryEscape("c_string = 'Inf'"), 0)
+	matched("filter="+url.QueryEscape("c_double = 'NaN'"), 0)
+	matched("c_double=Inf", 0)
+}
+
 func extraColumnFGB(t *testing.T, count int) []byte {
 	t.Helper()
 	features := make([]chunk.InputFeature, 0, count)

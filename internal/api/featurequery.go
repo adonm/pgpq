@@ -155,11 +155,8 @@ func typedLiteral(value string) any {
 	case "false":
 		return false
 	}
-	if n, err := strconv.ParseInt(value, 10, 64); err == nil {
+	if n, ok := cql.Number(value); ok {
 		return n
-	}
-	if f, err := strconv.ParseFloat(value, 64); err == nil {
-		return f
 	}
 	return value
 }

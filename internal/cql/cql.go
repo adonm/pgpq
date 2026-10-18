@@ -3,6 +3,7 @@ package cql
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -95,10 +96,10 @@ type Compare struct {
 }
 
 func (e *Compare) SQL(b *Builder) string {
-	if e.Op == "=" {
-		return equalityExpr(b, e.Prop, e.Value)
-	}
 	value := coerce(e.Value, b.Casts[e.Prop])
+	if e.Op == "=" {
+		return equalityExpr(b, e.Prop, value)
+	}
 	return valueExpr(b, e.Prop, value) + " " + e.Op + " " + b.Bind(value)
 }
 
@@ -128,7 +129,7 @@ type In struct {
 func (e *In) SQL(b *Builder) string {
 	parts := make([]string, len(e.Values))
 	for i, v := range e.Values {
-		parts[i] = equalityExpr(b, e.Prop, v)
+		parts[i] = equalityExpr(b, e.Prop, coerce(v, b.Casts[e.Prop]))
 	}
 	sql := "(" + strings.Join(parts, " or ") + ")"
 	if e.Not {
@@ -171,7 +172,7 @@ func equalityExpr(b *Builder, prop string, value any) string {
 	switch value.(type) {
 	case bool:
 		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(value)+"::boolean"))
-		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(value)+"::text"))
+		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(fmt.Sprint(value))+"::text"))
 	case int, int64, float64:
 		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(value)+"::numeric"))
 		clauses = append(clauses, equalityClause(b.Col, key, b.Bind(fmt.Sprint(value))+"::text"))
@@ -226,6 +227,16 @@ func indexable(value any, cast Cast) bool {
 	return false
 }
 
+func Number(text string) (any, bool) {
+	if n, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return n, true
+	}
+	if f, err := strconv.ParseFloat(text, 64); err == nil && !math.IsInf(f, 0) && !math.IsNaN(f) {
+		return f, true
+	}
+	return nil, false
+}
+
 func coerce(value any, cast Cast) any {
 	switch cast {
 	case CastNumeric:
@@ -233,11 +244,8 @@ func coerce(value any, cast Cast) any {
 		case int, int64, float64:
 			return v
 		case string:
-			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			if n, ok := Number(v); ok {
 				return n
-			}
-			if f, err := strconv.ParseFloat(v, 64); err == nil {
-				return f
 			}
 		}
 	case CastBoolean:
