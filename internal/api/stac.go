@@ -319,7 +319,7 @@ func (s *Server) stacItems(w http.ResponseWriter, r *http.Request) {
 	q.overview = &zero
 	var matched *int64
 	if len(q.shapes) == 0 {
-		if count, ok, err := s.countMatches(ctx, info, q.bbox, q.query, q.filter, q.tw); err == nil && ok {
+		if count, ok, err := s.countMatches(ctx, info, q.bbox, q.filter, q.tw); err == nil && ok {
 			matched = &count
 		}
 	}
@@ -473,7 +473,7 @@ func (s *Server) stacSearch(w http.ResponseWriter, r *http.Request) {
 	if bbox == nil && len(shapes) == 0 && filter == nil && !tw.set {
 		var total int64
 		for _, info := range infos {
-			if count, ok, err := s.countMatches(ctx, info, nil, "", nil, timeWindow{}); err == nil && ok {
+			if count, ok, err := s.countMatches(ctx, info, nil, nil, timeWindow{}); err == nil && ok {
 				total += count
 			}
 		}

@@ -64,16 +64,6 @@ func (i *Ingest) createStaging(ctx context.Context) error {
 	)`); err != nil {
 		return err
 	}
-	text := pgx.Identifier{i.staging["chunk_text"]}.Sanitize()
-	if _, err := i.tx.Exec(ctx, `create table `+text+` (
-		collection text not null,
-		chunk_id bigint not null,
-		feature_ord int not null,
-		tsv tsvector not null,
-		primary key (collection, chunk_id, feature_ord)
-	)`); err != nil {
-		return err
-	}
 	props := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
 	if _, err := i.tx.Exec(ctx, `create table `+props+` (
 		collection text not null,
@@ -93,10 +83,6 @@ func (i *Ingest) createIndexes(ctx context.Context) error {
 		return err
 	}
 	if _, err := i.tx.Exec(ctx, `create index on `+chunks+` (tier, id)`); err != nil {
-		return err
-	}
-	text := pgx.Identifier{i.staging["chunk_text"]}.Sanitize()
-	if _, err := i.tx.Exec(ctx, `create index on `+text+` using gin (tsv)`); err != nil {
 		return err
 	}
 	props := pgx.Identifier{i.staging["chunk_props"]}.Sanitize()
@@ -286,10 +272,6 @@ func (i *Ingest) PutChunk(ctx context.Context, payload Payload) (int64, error) {
 	return id, nil
 }
 
-func (i *Ingest) PutChunkText(ctx context.Context, chunkID int64, docs []string) error {
-	return putChunkText(ctx, i.tx, i.staging["chunk_text"], i.collection, chunkID, docs)
-}
-
 func (i *Ingest) PutChunkProps(ctx context.Context, chunkID int64, docs []string) error {
 	return putChunkProps(ctx, i.tx, i.staging["chunk_props"], i.collection, chunkID, docs)
 }
@@ -352,22 +334,6 @@ func putChunk(ctx context.Context, conn db, table, collection string, payload Pa
 		payload.MinX, payload.MinY, payload.MaxX, payload.MaxY, payload.Cover,
 		payload.Checksum, payload.Columns, payload.Data).Scan(&id)
 	return id, err
-}
-
-func putChunkText(ctx context.Context, conn db, table, collection string, chunkID int64, docs []string) error {
-	if len(docs) == 0 {
-		return nil
-	}
-	ords := make([]int32, len(docs))
-	for i := range ords {
-		ords[i] = int32(i)
-	}
-	_, err := conn.Exec(ctx, `
-		insert into `+table+` (collection, chunk_id, feature_ord, tsv)
-		select $1, $2, ord, to_tsvector('simple', doc)
-		from unnest($3::int[], $4::text[]) as input(ord, doc)
-		where doc <> ''`, collection, chunkID, ords, docs)
-	return err
 }
 
 func putChunkProps(ctx context.Context, conn db, table, collection string, chunkID int64, docs []string) error {

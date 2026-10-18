@@ -16,7 +16,6 @@ type featureQuery struct {
 	tw       timeWindow
 	filter   cql.Expr
 	shapes   []geo.Shape
-	query    string
 	offset   int
 	limit    int
 	overview *int
@@ -61,7 +60,6 @@ func (s *Server) parseFeatureQuery(r *http.Request, info store.CollectionInfo, l
 	q.bbox = bbox
 	q.tw = tw
 	q.filter = extracted
-	q.query = r.URL.Query().Get("q")
 	q.overview = overview
 	return q, nil
 }
@@ -108,7 +106,7 @@ func (s *Server) streamCollections(ctx context.Context, infos []store.Collection
 			}
 			filter = cql.And(filter, datetimeExpr(*info.TimeColumn, q.tw))
 		}
-		if filter == nil && q.query == "" {
+		if filter == nil {
 			tier := 0
 			if q.overview != nil && info.Kind != "view" {
 				tier = *q.overview
@@ -118,13 +116,13 @@ func (s *Server) streamCollections(ctx context.Context, infos []store.Collection
 		}
 		skip := 0
 		if remaining > 0 {
-			count, err := s.Store.CountMatches(ctx, info.Name, q.bbox, q.query, filter)
+			count, err := s.Store.CountMatches(ctx, info.Name, q.bbox, filter)
 			if err != nil {
 				continue
 			}
 			skip = min(remaining, int(count))
 		}
 		remaining -= skip
-		s.streamMatches(ctx, sink, info, q.bbox, q.query, filter, skip)
+		s.streamMatches(ctx, sink, info, q.bbox, filter, skip)
 	}
 }

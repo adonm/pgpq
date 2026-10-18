@@ -114,6 +114,8 @@ func TestUnsupportedQuery(t *testing.T) {
 		{"/collections/demo/items", 200},
 		{"/collections/demo/items?sortby=name", 400},
 		{"/collections/demo/items?sortby=", 400},
+		{"/collections/demo/items?q=road", 400},
+		{"/collections/demo/items?q=", 400},
 		{"/collections/demo/items?crs=" + crs84, 200},
 		{"/collections/demo/items?crs=EPSG:3857", 400},
 		{"/collections/demo/items?bbox=1,2,3,4&bbox-crs=" + crs84, 200},
@@ -129,7 +131,7 @@ func TestUnsupportedQuery(t *testing.T) {
 }
 
 func TestParseFilters(t *testing.T) {
-	r := httptest.NewRequest("GET", "/collections/demo/items?bbox=1,2,3,4&q=road&kind=highway&limit=5&filter=i%3E1", nil)
+	r := httptest.NewRequest("GET", "/collections/demo/items?bbox=1,2,3,4&kind=highway&limit=5&filter=i%3E1", nil)
 	filters := parseFilters(r)
 	if len(filters) != 1 || filters["kind"] != "highway" {
 		t.Fatalf("filters = %v", filters)

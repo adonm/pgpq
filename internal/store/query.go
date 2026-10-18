@@ -153,26 +153,14 @@ func CastOf(columnType string) cql.Cast {
 	return cql.CastNone
 }
 
-func matchesWhere(collection string, casts cql.Casts, bbox *[4]float64, query string, filter cql.Expr) (string, string, []any) {
+func matchesWhere(collection string, casts cql.Casts, bbox *[4]float64, filter cql.Expr) (string, string, []any) {
 	from := `chunk_props m`
 	where := `m.collection = $1`
-	args := []any{collection}
 	b := cql.NewBuilder("m.props", casts, collection)
-	switch {
-	case query != "" && filter != nil:
-		from = `chunk_text m join chunk_props p on p.collection = m.collection and p.chunk_id = m.chunk_id and p.feature_ord = m.feature_ord`
-		b = cql.NewBuilder("p.props", casts, collection, query)
-		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2) and ` + filter.SQL(b)
-	case query != "":
-		from = `chunk_text m`
-		args = append(args, query)
-		where += ` and m.tsv @@ websearch_to_tsquery('simple', $2)`
-	default:
-		if filter != nil {
-			where += ` and ` + filter.SQL(b)
-		}
+	if filter != nil {
+		where += ` and ` + filter.SQL(b)
 	}
-	args = b.Args()
+	args := b.Args()
 	if bbox != nil {
 		from += ` join chunks ch on ch.collection = m.collection and ch.id = m.chunk_id`
 		fragment, extra := bboxPredicate("ch.", bbox, len(args)+1)
@@ -182,8 +170,8 @@ func matchesWhere(collection string, casts cql.Casts, bbox *[4]float64, query st
 	return from, where, args
 }
 
-func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
-	if query == "" && filter == nil {
+func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+	if filter == nil {
 		return nil, nil
 	}
 	casts, err := s.ColumnCasts(ctx, collection)
@@ -195,24 +183,24 @@ func (s *Store) Matches(ctx context.Context, collection string, bbox *[4]float64
 		budget = maxMatchBudget
 	}
 	probe, cancel := context.WithTimeout(ctx, budget)
-	matches, err := s.matchesInIndexOrder(probe, collection, casts, bbox, query, filter, limit, offset)
+	matches, err := s.matchesInIndexOrder(probe, collection, casts, bbox, filter, limit, offset)
 	cancel()
 	if err == nil || !matchTimedOut(err) {
 		return matches, err
 	}
-	return s.matchesByIndexScan(ctx, collection, casts, bbox, query, filter, limit, offset)
+	return s.matchesByIndexScan(ctx, collection, casts, bbox, filter, limit, offset)
 }
 
-func (s *Store) matchesInIndexOrder(ctx context.Context, collection string, casts cql.Casts, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
-	from, where, args := matchesWhere(collection, casts, bbox, query, filter)
+func (s *Store) matchesInIndexOrder(ctx context.Context, collection string, casts cql.Casts, bbox *[4]float64, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+	from, where, args := matchesWhere(collection, casts, bbox, filter)
 	args = append(args, limit, offset)
 	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by m.chunk_id, m.feature_ord limit $%d offset $%d`,
 		from, where, len(args)-1, len(args))
 	return scanMatches(ctx, s.Pool, sql, args...)
 }
 
-func (s *Store) matchesByIndexScan(ctx context.Context, collection string, casts cql.Casts, bbox *[4]float64, query string, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
-	from, where, args := matchesWhere(collection, casts, bbox, query, filter)
+func (s *Store) matchesByIndexScan(ctx context.Context, collection string, casts cql.Casts, bbox *[4]float64, filter cql.Expr, limit, offset int) ([]FeatureMatch, error) {
+	from, where, args := matchesWhere(collection, casts, bbox, filter)
 	args = append(args, limit, offset)
 	sql := fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s order by (m.chunk_id + 0), m.feature_ord limit $%d offset $%d`,
 		from, where, len(args)-1, len(args))
@@ -249,7 +237,7 @@ func (s *Store) FindFeature(ctx context.Context, collection string, filter cql.E
 	if err != nil {
 		return FeatureMatch{}, false, err
 	}
-	from, where, args := matchesWhere(collection, casts, nil, "", filter)
+	from, where, args := matchesWhere(collection, casts, nil, filter)
 	var match FeatureMatch
 	err = s.Pool.QueryRow(ctx,
 		fmt.Sprintf(`select m.chunk_id, m.feature_ord from %s where %s limit 1`, from, where), args...).
@@ -263,12 +251,12 @@ func (s *Store) FindFeature(ctx context.Context, collection string, filter cql.E
 	return match, true, nil
 }
 
-func (s *Store) CountMatches(ctx context.Context, collection string, bbox *[4]float64, query string, filter cql.Expr) (int64, error) {
+func (s *Store) CountMatches(ctx context.Context, collection string, bbox *[4]float64, filter cql.Expr) (int64, error) {
 	casts, err := s.ColumnCasts(ctx, collection)
 	if err != nil {
 		return 0, err
 	}
-	from, where, args := matchesWhere(collection, casts, bbox, query, filter)
+	from, where, args := matchesWhere(collection, casts, bbox, filter)
 	var count int64
 	err = s.Pool.QueryRow(ctx, fmt.Sprintf(`select count(*) from %s where %s`, from, where), args...).Scan(&count)
 	return count, err

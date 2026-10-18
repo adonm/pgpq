@@ -274,7 +274,7 @@ func ValidName(name string) bool {
 	return collectionName.MatchString(name)
 }
 
-var chunkPartitions = []string{"chunks", "chunk_text", "chunk_props"}
+var chunkPartitions = []string{"chunks", "chunk_props"}
 
 const (
 	matchOrderedBudget = 500 * time.Millisecond

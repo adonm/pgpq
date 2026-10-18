@@ -538,13 +538,6 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 	if tier > 0 {
 		return len(data), nil
 	}
-	docs := make([]string, len(batch))
-	for i := range batch {
-		docs[i] = chunk.Text(batch[i].Properties)
-	}
-	if err := ing.PutChunkText(ctx, id, docs); err != nil {
-		return 0, err
-	}
 	props := make([]string, len(batch))
 	for i := range batch {
 		body, err := json.Marshal(batch[i].Properties)

@@ -109,9 +109,11 @@ func NewWithConfig(cfg Config) http.Handler {
 func rejectUnsupportedQuery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
-		if query.Has("sortby") {
-			http.Error(w, "sortby is not supported", http.StatusBadRequest)
-			return
+		for _, name := range []string{"sortby", "q"} {
+			if query.Has(name) {
+				http.Error(w, name+" is not supported", http.StatusBadRequest)
+				return
+			}
 		}
 		for _, name := range []string{"crs", "bbox-crs"} {
 			if value := query.Get(name); value != "" && value != crs84 {
@@ -282,7 +284,7 @@ func timeInterval(minT, maxT time.Time) *temporalExtent {
 }
 
 var reservedParams = map[string]bool{
-	"bbox": true, "limit": true, "offset": true, "q": true, "f": true,
+	"bbox": true, "limit": true, "offset": true, "f": true,
 	"filter": true, "filter-lang": true, "format": true,
 	"overview": true, "numberMatched": true,
 	"datetime": true, "crs": true, "bbox-crs": true,
@@ -336,7 +338,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	}
 	var matched *int64
 	if r.URL.Query().Get("numberMatched") == "true" && len(q.shapes) == 0 {
-		count, ok, err := s.countMatches(ctx, info, q.bbox, q.query, q.filter, q.tw)
+		count, ok, err := s.countMatches(ctx, info, q.bbox, q.filter, q.tw)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -346,7 +348,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if flatgeobuf {
-		s.writeFGB(ctx, w, r, id, q.bbox, q.query, q.filter, q.shapes, q.offset, q.limit, 0)
+		s.writeFGB(ctx, w, r, id, q.bbox, q.filter, q.shapes, q.offset, q.limit, 0)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json")
@@ -439,8 +441,8 @@ func (s *Server) streamBBox(ctx context.Context, sink featureSink, info store.Co
 	})
 }
 
-func (s *Server) streamMatches(ctx context.Context, sink featureSink, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, offset int) {
-	matches, err := s.Store.Matches(ctx, info.Name, bbox, query, filter, sink.remaining(), offset)
+func (s *Server) streamMatches(ctx context.Context, sink featureSink, info store.CollectionInfo, bbox *[4]float64, filter cql.Expr, offset int) {
+	matches, err := s.Store.Matches(ctx, info.Name, bbox, filter, sink.remaining(), offset)
 	if err != nil {
 		slog.Error("matches query failed", "collection", info.Name, "error", err)
 		return
@@ -621,12 +623,12 @@ func typedLiteral(value string) any {
 	return value
 }
 
-func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, tw timeWindow) (int64, bool, error) {
+func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, filter cql.Expr, tw timeWindow) (int64, bool, error) {
 	if info.Kind == "view" {
 		var total int64
 		exact := true
 		for _, member := range s.streamTargets(ctx, info) {
-			count, ok, err := s.countMatches(ctx, member, bbox, query, filter, tw)
+			count, ok, err := s.countMatches(ctx, member, bbox, filter, tw)
 			if err != nil {
 				return 0, false, err
 			}
@@ -644,8 +646,8 @@ func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, bb
 		}
 		filter = cql.And(filter, datetimeExpr(*info.TimeColumn, tw))
 	}
-	if query != "" || filter != nil {
-		count, err := s.Store.CountMatches(ctx, info.Name, bbox, query, filter)
+	if filter != nil {
+		count, err := s.Store.CountMatches(ctx, info.Name, bbox, filter)
 		if err != nil {
 			return 0, false, err
 		}
@@ -679,8 +681,8 @@ func inBounds(f *chunk.Feature, bbox *[4]float64) bool {
 		bound.Max[1] >= bbox[1] && bound.Min[1] <= bbox[3]
 }
 
-func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, id string, bbox *[4]float64, query string, filter cql.Expr, shapes []geo.Shape, offset, limit, tier int) {
-	features, header, err := s.collectFeatures(ctx, id, bbox, query, filter, shapes, offset, limit, tier)
+func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Request, id string, bbox *[4]float64, filter cql.Expr, shapes []geo.Shape, offset, limit, tier int) {
+	features, header, err := s.collectFeatures(ctx, id, bbox, filter, shapes, offset, limit, tier)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -703,12 +705,12 @@ func (s *Server) writeFGB(ctx context.Context, w http.ResponseWriter, r *http.Re
 	w.Write(data)
 }
 
-func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, shapes []geo.Shape, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float64, filter cql.Expr, shapes []geo.Shape, offset, limit, tier int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	if info, err := s.Store.Collection(ctx, id); err == nil && info.Kind == "view" {
-		return s.collectView(ctx, info, bbox, query, filter, shapes, offset, limit)
+		return s.collectView(ctx, info, bbox, filter, shapes, offset, limit)
 	}
-	if query != "" || filter != nil {
-		return s.collectMatches(ctx, id, bbox, query, filter, shapes, offset, limit)
+	if filter != nil {
+		return s.collectMatches(ctx, id, bbox, filter, shapes, offset, limit)
 	}
 	var features []*flattypes.Feature
 	var header *flattypes.Header
@@ -737,8 +739,8 @@ func (s *Server) collectFeatures(ctx context.Context, id string, bbox *[4]float6
 	return features, header, nil
 }
 
-func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64, query string, filter cql.Expr, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
-	matches, err := s.Store.Matches(ctx, id, bbox, query, filter, limit, offset)
+func (s *Server) collectMatches(ctx context.Context, id string, bbox *[4]float64, filter cql.Expr, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+	matches, err := s.Store.Matches(ctx, id, bbox, filter, limit, offset)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -860,7 +862,7 @@ func parseOffset(r *http.Request) (int, error) {
 	return n, nil
 }
 
-func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, query string, filter cql.Expr, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
+func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbox *[4]float64, filter cql.Expr, shapes []geo.Shape, offset, limit int) ([]*flattypes.Feature, *flattypes.Header, error) {
 	var features []*flattypes.Feature
 	var header *flattypes.Header
 	remaining := offset
@@ -868,7 +870,7 @@ func (s *Server) collectView(ctx context.Context, info store.CollectionInfo, bbo
 		if len(features) >= limit {
 			break
 		}
-		collected, memberHeader, err := s.collectFeatures(ctx, member.Name, bbox, query, filter, shapes, remaining, limit-len(features), 0)
+		collected, memberHeader, err := s.collectFeatures(ctx, member.Name, bbox, filter, shapes, remaining, limit-len(features), 0)
 		if err != nil {
 			return nil, nil, err
 		}
