@@ -382,7 +382,7 @@ func (s *Server) serveVirtualCollection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	tier := 0
-	if overview != nil {
+	if overview != nil && info.Kind != "view" {
 		tier = *overview
 	}
 	vf, err := s.virtualFile(ctx, info, tier)

@@ -197,7 +197,7 @@ func targetFilter(target store.CollectionInfo, q featureQuery) (cql.Expr, bool) 
 
 func (s *Server) walkFeatures(ctx context.Context, info store.CollectionInfo, q featureQuery, out sink) error {
 	tier := 0
-	if q.overview != nil {
+	if q.overview != nil && info.Kind != "view" {
 		tier = *q.overview
 	}
 	offset := q.offset

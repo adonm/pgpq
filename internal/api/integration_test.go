@@ -292,6 +292,95 @@ func TestPostgresViewPaging(t *testing.T) {
 	}
 }
 
+func TestPostgresViewOverview(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	view := "itest_tier_view"
+	members := []string{"itest_tier_a", "itest_tier_b"}
+	for _, name := range append(members, view) {
+		st.DropCollection(ctx, name)
+		t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	}
+	h := New(st)
+	for _, name := range members {
+		if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", fixtureFGB(t, 40)); w.Code != 201 {
+			t.Fatalf("ingest %s = %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+	if w := call(h, "PUT", "/collections/"+view, "application/json", []byte(`{"members":["itest_tier_a","itest_tier_b"]}`)); w.Code != 201 {
+		t.Fatalf("view = %d: %s", w.Code, w.Body.String())
+	}
+
+	ids := func(path string) []string {
+		t.Helper()
+		w := call(h, "GET", path, "", nil)
+		var doc struct {
+			Features []struct {
+				ID any `json:"id"`
+			} `json:"features"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil || w.Code != 200 {
+			t.Fatalf("%s = %d: %s", path, w.Code, w.Body.String())
+		}
+		var out []string
+		for _, f := range doc.Features {
+			out = append(out, fmt.Sprint(f.ID))
+		}
+		return out
+	}
+	if got := ids("/collections/" + members[0] + "/items?overview=1&limit=100"); len(got) != 4 {
+		t.Fatalf("native overview returned %d features, want the 4 tier-1 features", len(got))
+	}
+	full := ids("/collections/" + view + "/items?limit=100")
+	if len(full) != 80 {
+		t.Fatalf("view returned %d features, want 80", len(full))
+	}
+	for _, overview := range []string{"0", "1", "2"} {
+		if got := ids("/collections/" + view + "/items?limit=100&overview=" + overview); !slices.Equal(got, full) {
+			t.Fatalf("view overview=%s returned %v, want full detail %v", overview, got, full)
+		}
+	}
+	export := call(h, "GET", "/collections/"+view+"/items?limit=100&f=flatgeobuf&overview=1", "", nil)
+	c, err := chunk.Open(export.Body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exported, err := c.SearchAll(); err != nil || len(exported) != 80 {
+		t.Fatalf("view export with overview=1 returned %d features (%v), want 80", len(exported), err)
+	}
+	plain := call(h, "GET", "/collections/"+view+"/items.fgb", "", nil)
+	overview := call(h, "GET", "/collections/"+view+"/items.fgb?overview=1", "", nil)
+	if plain.Code != 200 || overview.Code != 200 || !bytes.Equal(plain.Body.Bytes(), overview.Body.Bytes()) {
+		t.Fatalf("view items.fgb with overview=1 differs from full detail")
+	}
+	var numbered struct {
+		NumberMatched *int64 `json:"numberMatched"`
+	}
+	w := call(h, "GET", "/collections/"+view+"/items?limit=1&overview=1&numberMatched=true", "", nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &numbered); err != nil || numbered.NumberMatched == nil || *numbered.NumberMatched != 80 {
+		t.Fatalf("view numberMatched with overview=1 = %s, want 80", w.Body.String())
+	}
+
+	var tier0, tier1 int64
+	if err := st.Pool.QueryRow(ctx, `select id from chunks where collection = $1 and tier = 0`, members[0]).Scan(&tier0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Pool.QueryRow(ctx, `select id from chunks where collection = $1 and tier = 1`, members[0]).Scan(&tier1); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/collections/" + members[0] + "/items/%d-0",
+		"/collections/" + view + "/items/%d-0",
+	} {
+		if w := call(h, "GET", fmt.Sprintf(path, tier1), "", nil); w.Code != 404 {
+			t.Fatalf("tier-1 feature id via %s = %d, want 404", path, w.Code)
+		}
+		if w := call(h, "GET", fmt.Sprintf(path, tier0), "", nil); w.Code != 200 {
+			t.Fatalf("tier-0 feature id via %s = %d, want 200", path, w.Code)
+		}
+	}
+}
+
 func chunkStarts(t *testing.T, st *store.Store, name string) []int {
 	t.Helper()
 	rows, err := st.Pool.Query(context.Background(),

@@ -256,9 +256,9 @@ func (s *Store) CountMatches(ctx context.Context, collection string, filter cql.
 func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (ChunkRow, error) {
 	var row ChunkRow
 	err := s.Pool.QueryRow(ctx, `
-		select id, feature_count, size_bytes, minx, miny, maxx, maxy, checksum, columns, data
+		select id, feature_count, size_bytes, minx, miny, maxx, maxy, checksum, columns, data, tier
 		from chunks where collection = $1 and id = $2`, collection, id).
-		Scan(&row.ID, &row.FeatureCount, &row.SizeBytes, &row.MinX, &row.MinY, &row.MaxX, &row.MaxY, &row.Checksum, &row.Columns, &row.Data)
+		Scan(&row.ID, &row.FeatureCount, &row.SizeBytes, &row.MinX, &row.MinY, &row.MaxX, &row.MaxY, &row.Checksum, &row.Columns, &row.Data, &row.Tier)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return row, ErrNotFound
 	}

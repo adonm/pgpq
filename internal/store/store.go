@@ -69,6 +69,7 @@ type ChunkRow struct {
 	Checksum     *string
 	Columns      []byte
 	Data         []byte
+	Tier         int
 }
 
 type ChunkMeta struct {

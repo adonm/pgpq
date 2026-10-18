@@ -86,7 +86,7 @@ func (s *Server) chunkFeature(ctx context.Context, info store.CollectionInfo, ch
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, false, nil
 	}
-	if err != nil {
+	if err != nil || row.Tier > 0 {
 		return nil, false, err
 	}
 	c, features, err := s.openFeatures(ctx, info, chunkID, row)
