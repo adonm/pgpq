@@ -186,7 +186,7 @@ func (s *Store) buildView(ctx context.Context, tx pgx.Tx, info CollectionInfo) e
 			return err
 		}
 		if schema != nil && !bytes.Equal(columns, schema) {
-			return fmt.Errorf("%w: member %q has a different schema from the other members of view %q", ErrInvalidView, member.Name, info.Name)
+			return fmt.Errorf("%w: members %q and %q of view %q have different schemas", ErrInvalidView, names[0], member.Name, info.Name)
 		}
 		schema = columns
 		if memberHeader == nil {
