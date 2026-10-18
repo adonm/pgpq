@@ -14,6 +14,7 @@ import (
 
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
+	"github.com/adonm/postfgb/internal/stats"
 )
 
 type Ingest struct {
@@ -63,6 +64,19 @@ var partitions = []partition{
 	primary key (collection, chunk_id, feature_ord)
 )`,
 		indexes: []string{`create index on %[1]s using gin (props jsonb_path_ops)`},
+	},
+	{
+		parent: "chunk_stats",
+		table: `create table %[1]s (
+	collection text not null,
+	chunk_id bigint not null,
+	"column" text not null,
+	min double precision,
+	max double precision,
+	nulls bigint not null default 0,
+	bloom bytea,
+	primary key (collection, chunk_id, "column")
+)`,
 	},
 }
 
@@ -130,7 +144,8 @@ func (i *Ingest) swap(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	_, err := i.tx.Exec(ctx, `update collections set stats_version = version where name = $1`, i.collection)
+	return err
 }
 
 func dropPartitions(ctx context.Context, conn db, collection string) error {
@@ -266,6 +281,31 @@ func (i *Ingest) PutChunkProps(ctx context.Context, chunkID int64, docs []string
 		select $1, $2, input.ord - 1, input.doc::jsonb
 		from unnest($3::text[]) with ordinality as input(doc, ord)
 		where input.doc <> '' and input.doc <> '{}' and input.doc <> 'null'`, i.collection, chunkID, docs)
+	return err
+}
+
+func (i *Ingest) PutChunkStats(ctx context.Context, chunkID int64, rows []stats.Row) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	names := make([]string, len(rows))
+	mins := make([]*float64, len(rows))
+	maxs := make([]*float64, len(rows))
+	nulls := make([]int64, len(rows))
+	blooms := make([][]byte, len(rows))
+	for j, row := range rows {
+		names[j] = row.Column
+		mins[j] = row.Min
+		maxs[j] = row.Max
+		nulls[j] = row.Nulls
+		blooms[j] = row.Bloom
+	}
+	_, err := i.tx.Exec(ctx, `
+		insert into `+i.staged("chunk_stats")+` (collection, chunk_id, "column", min, max, nulls, bloom)
+		select $1, $2, input.name, input.min, input.max, input.nulls, input.bloom
+		from unnest($3::text[], $4::float8[], $5::float8[], $6::bigint[], $7::bytea[])
+			as input(name, min, max, nulls, bloom)`,
+		i.collection, chunkID, names, mins, maxs, nulls, blooms)
 	return err
 }
 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
+	"github.com/adonm/postfgb/internal/stats"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -977,6 +978,76 @@ func TestPostgresTypedColumns(t *testing.T) {
 	}
 	if got := feature("2"); !maps.Equal(got, want) {
 		t.Fatalf("feature 2 properties = %v, want %v", got, want)
+	}
+}
+
+func TestPostgresChunkStats(t *testing.T) {
+	st := integrationStore(t)
+	ctx := context.Background()
+	name := "itest_stats"
+	st.DropCollection(ctx, name)
+	t.Cleanup(func() { st.DropCollection(context.Background(), name) })
+	h := New(st)
+	if w := call(h, "PUT", "/collections/"+name, "application/flatgeobuf", typedFGB(t)); w.Code != 201 {
+		t.Fatalf("ingest = %d: %s", w.Code, w.Body.String())
+	}
+	info, err := st.Collection(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statsVersion int64
+	if err := st.Pool.QueryRow(ctx, `select stats_version from collections where name = $1`, name).Scan(&statsVersion); err != nil {
+		t.Fatal(err)
+	}
+	if statsVersion != info.Version || statsVersion <= 0 {
+		t.Fatalf("stats_version = %d, want the collection version %d", statsVersion, info.Version)
+	}
+	var chunks, columns, rows int64
+	if err := st.Pool.QueryRow(ctx, `select
+		(select count(*) from chunks where collection = $1),
+		(select count(distinct "column") from chunk_stats where collection = $1),
+		(select count(*) from chunk_stats where collection = $1)`, name).Scan(&chunks, &columns, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if chunks < 1 || columns != 14 {
+		t.Fatalf("chunks = %d, columns = %d, want 14 columns", chunks, columns)
+	}
+	if rows != chunks*columns {
+		t.Fatalf("chunk_stats rows = %d, want %d chunks x %d columns", rows, chunks, columns)
+	}
+	var nulls int64
+	if err := st.Pool.QueryRow(ctx, `select coalesce(sum(nulls), 0) from chunk_stats where collection = $1`, name).Scan(&nulls); err != nil {
+		t.Fatal(err)
+	}
+	if nulls != 0 {
+		t.Fatalf("chunk_stats nulls = %d, want 0 for the typed fixture", nulls)
+	}
+	var min, max float64
+	if err := st.Pool.QueryRow(ctx, `select min, max from chunk_stats where collection = $1 and "column" = 'c_long'
+		and chunk_id = (select min(id) from chunks where collection = $1 and tier = 0)`, name).Scan(&min, &max); err != nil {
+		t.Fatal(err)
+	}
+	if min != -9000000000000000000 || max != 0 {
+		t.Fatalf("c_long = [%v, %v], want [-9000000000000000000, 0]", min, max)
+	}
+	h1, h2 := stats.Hashes("hello")
+	var bloom []byte
+	var present bool
+	if err := st.Pool.QueryRow(ctx, `select bloom, bloom_has(bloom, $2, $3) from chunk_stats where collection = $1 and "column" = 'c_string'
+		and chunk_id = (select min(id) from chunks where collection = $1 and tier = 0)`, name, h1, h2).Scan(&bloom, &present); err != nil {
+		t.Fatal(err)
+	}
+	if !present || !stats.MayContain(bloom, "hello") {
+		t.Fatal("the c_string bloom does not hold the ingested value hello")
+	}
+	absentH1, absentH2 := stats.Hashes("absent-value")
+	var absent bool
+	if err := st.Pool.QueryRow(ctx, `select bloom_has(bloom, $2, $3) from chunk_stats where collection = $1 and "column" = 'c_string'
+		and chunk_id = (select min(id) from chunks where collection = $1 and tier = 0)`, name, absentH1, absentH2).Scan(&absent); err != nil {
+		t.Fatal(err)
+	}
+	if absent {
+		t.Fatal("the c_string bloom claims a value that was never ingested")
 	}
 }
 

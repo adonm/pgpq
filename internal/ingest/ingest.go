@@ -24,6 +24,7 @@ import (
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/fgb"
+	"github.com/adonm/postfgb/internal/stats"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -540,6 +541,13 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 	if err != nil {
 		return 0, err
 	}
+	rows, err := chunkStats(c)
+	if err != nil {
+		return 0, err
+	}
+	if err := ing.PutChunkStats(ctx, id, rows); err != nil {
+		return 0, err
+	}
 	if tier > 0 {
 		return len(data), nil
 	}
@@ -555,6 +563,19 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 		return 0, err
 	}
 	return len(data), nil
+}
+
+func chunkStats(c *chunk.Chunk) ([]stats.Row, error) {
+	features, err := c.SearchAll()
+	if err != nil {
+		return nil, err
+	}
+	cols := c.Columns()
+	props := make([]map[string]any, len(features))
+	for i, f := range features {
+		props[i] = chunk.DecodeProperties(f.PropertiesBytes(), cols)
+	}
+	return stats.Compute(cols, props), nil
 }
 
 func columnList(cols []chunk.Column) []columnInfo {

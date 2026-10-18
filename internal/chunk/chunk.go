@@ -107,6 +107,10 @@ func (c *Chunk) GeoJSON(f *flattypes.Feature) *Feature {
 	return GeoJSONFeature(c.header, f)
 }
 
+func DecodeProperties(buf []byte, cols []Column) map[string]any {
+	return decodeProperties(buf, cols)
+}
+
 func decodeGeometry(g *flattypes.Geometry, fallback flattypes.GeometryType) *Geometry {
 	if g == nil {
 		return nil

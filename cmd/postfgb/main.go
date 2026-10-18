@@ -17,11 +17,23 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "serve" {
-		fmt.Fprintln(os.Stderr, "usage: postfgb serve [flags]")
-		os.Exit(2)
+	if len(os.Args) < 2 {
+		usage()
 	}
-	serve(os.Args[2:])
+	switch os.Args[1] {
+	case "serve":
+		serve(os.Args[2:])
+	case "backfill-stats":
+		backfillStats(os.Args[2:])
+	default:
+		usage()
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage: postfgb serve [flags]")
+	fmt.Fprintln(os.Stderr, "       postfgb backfill-stats [flags] [collection]")
+	os.Exit(2)
 }
 
 func fatal(err error) {
@@ -81,4 +93,31 @@ func serve(args []string) {
 func envBool(name string) bool {
 	value, err := strconv.ParseBool(os.Getenv(name))
 	return err == nil && value
+}
+
+func backfillStats(args []string) {
+	fs := flag.NewFlagSet("backfill-stats", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
+	fs.Parse(args)
+	if fs.NArg() > 1 {
+		fmt.Fprintln(os.Stderr, "usage: postfgb backfill-stats [flags] [collection]")
+		os.Exit(2)
+	}
+	ctx := context.Background()
+	st, err := store.Open(ctx, *dsn)
+	if err != nil {
+		fatal(err)
+	}
+	defer st.Close()
+	if err := st.Migrate(ctx); err != nil {
+		fatal(err)
+	}
+	results, err := st.BackfillStats(ctx, fs.Arg(0))
+	if err != nil {
+		fatal(err)
+	}
+	for _, result := range results {
+		slog.Info("backfilled statistics", "collection", result.Collection, "chunks", result.Chunks,
+			"rows", result.Rows, "bloom_bytes", result.Bytes)
+	}
 }
