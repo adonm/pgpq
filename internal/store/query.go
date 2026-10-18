@@ -30,7 +30,7 @@ func bboxSQL(b *sqlArgs, prefix string, bbox *[4]float64) string {
 
 func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]float64, limit, tier int, after int64) ([]ChunkMeta, error) {
 	var a sqlArgs
-	sql := `select id, feature_count, size_bytes, columns from chunks where collection = ` + a.bind(collection) + ` and tier = ` + a.bind(tier)
+	sql := `select id, feature_count, feature_base, minx, miny, maxx, maxy, size_bytes, columns from chunks where collection = ` + a.bind(collection) + ` and tier = ` + a.bind(tier)
 	if after > 0 {
 		sql += ` and id > ` + a.bind(after)
 	}
@@ -40,8 +40,39 @@ func (s *Store) ChunkMetas(ctx context.Context, collection string, bbox *[4]floa
 
 func scanChunkMeta(row pgx.CollectableRow) (ChunkMeta, error) {
 	var meta ChunkMeta
-	err := row.Scan(&meta.ID, &meta.FeatureCount, &meta.SizeBytes, &meta.Columns)
+	err := row.Scan(&meta.ID, &meta.FeatureCount, &meta.FeatureBase, &meta.MinX, &meta.MinY, &meta.MaxX, &meta.MaxY, &meta.SizeBytes, &meta.Columns)
 	return meta, err
+}
+
+func (s *Store) ChunkAtOffset(ctx context.Context, collection string, tier, offset int) (ChunkMeta, bool, error) {
+	var meta ChunkMeta
+	err := s.Pool.QueryRow(ctx, `select id, feature_count, feature_base, minx, miny, maxx, maxy, size_bytes, columns from chunks where collection = $1 and tier = $2 and feature_base <= $3 order by feature_base desc limit 1`, collection, tier, offset).
+		Scan(&meta.ID, &meta.FeatureCount, &meta.FeatureBase, &meta.MinX, &meta.MinY, &meta.MaxX, &meta.MaxY, &meta.SizeBytes, &meta.Columns)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return meta, false, nil
+	}
+	if err != nil {
+		return meta, false, err
+	}
+	return meta, true, nil
+}
+
+func (s *Store) ChunkRows(ctx context.Context, collection string, ids []int64) (map[int64]ChunkRow, error) {
+	rows, err := s.Pool.Query(ctx, `select id, data, tier from chunks where collection = $1 and id = any($2)`, collection, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64]ChunkRow, len(ids))
+	for rows.Next() {
+		var id int64
+		var row ChunkRow
+		if err := rows.Scan(&id, &row.Data, &row.Tier); err != nil {
+			return nil, err
+		}
+		out[id] = row
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ChunkSizes(ctx context.Context, collection string, ids []int64) (map[int64]int, error) {
@@ -63,7 +94,7 @@ func (s *Store) ChunkSizes(ctx context.Context, collection string, ids []int64) 
 }
 
 func (s *Store) FindFeature(ctx context.Context, info CollectionInfo, filter cql.Expr) (FeatureMatch, bool, error) {
-	ids, err := s.CandidateChunks(ctx, info, nil, filter)
+	ids, err := s.CandidateChunks(ctx, info, nil, filter, 0)
 	if err != nil {
 		return FeatureMatch{}, false, err
 	}

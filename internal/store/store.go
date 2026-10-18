@@ -49,6 +49,9 @@ type ChunkRow struct {
 type ChunkMeta struct {
 	ID           int64
 	FeatureCount int
+	FeatureBase  int64
+	MinX, MinY   float64
+	MaxX, MaxY   float64
 	SizeBytes    int
 	Columns      []byte
 }

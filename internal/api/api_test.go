@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -90,7 +91,7 @@ func TestEmitSkipsOnlyExactMatches(t *testing.T) {
 	}
 	for _, tc := range cases {
 		sink := &collectSink{limit: tc.limit}
-		rest, err := emit(store.CollectionInfo{Name: "unit"}, tc.bbox, 9, c, all, ordinals(0, len(all)), tc.offset, sink)
+		rest, err := emit(store.CollectionInfo{Name: "unit"}, tc.bbox, 9, c, all, ordinals(0, len(all)), nil, tc.offset, &startPos{}, sink)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,13 +158,27 @@ func TestTypedLiteral(t *testing.T) {
 	}
 }
 
-func TestPageLink(t *testing.T) {
+func TestNextLink(t *testing.T) {
 	r := httptest.NewRequest("GET", "/collections/demo/items?limit=100&bbox=1,2,3,4", nil)
-	want := "/collections/demo/items?bbox=1%2C2%2C3%2C4&limit=100&offset=100"
-	if got := pageLink(r, 100, 0, 100); got != want {
-		t.Fatalf("link = %s, want %s", got, want)
+	info := store.CollectionInfo{Name: "demo", UID: 7, Version: 3}
+	q := featureQuery{fingerprint: requestFingerprint(r)}
+	res := walkResult{member: 0, pos: startPos{chunkID: 42, ord: 5}, set: true}
+	link := nextLink(r, info, q, res, 100, 0, 100)
+	target, err := url.Parse(link)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := pageLink(r, 100, 0, 42); got != "" {
+	if target.Query().Has("offset") {
+		t.Fatalf("cursor link still carries an offset: %s", link)
+	}
+	c, err := decodeCursor(target.Query().Get("cursor"))
+	if err != nil {
+		t.Fatalf("link %s: %v", link, err)
+	}
+	if c.uid != 7 || c.version != 3 || c.chunkID != 42 || c.ord != 5 || c.fingerprint != q.fingerprint {
+		t.Fatalf("cursor = %+v", c)
+	}
+	if got := nextLink(r, info, q, walkResult{}, 100, 0, 42); got != "" {
 		t.Fatalf("partial page link = %q, want empty", got)
 	}
 }

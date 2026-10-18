@@ -305,9 +305,18 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	q.offset = offset
 	if flatgeobuf {
 		q.overview = nil
+	} else if err := checkOverview(q); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateCursor(info, q); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	q.offset = offset
+	if flatgeobuf {
 		s.writeFGB(w, r, info, q, limit)
 		return
 	}
@@ -324,12 +333,13 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	}
 	var body bytes.Buffer
 	page := newPageWriter(&body, limit, matched)
-	if err := s.walkFeatures(ctx, info, q, page); err != nil {
+	res, err := s.walkFeatures(ctx, info, q, page)
+	if err != nil {
 		slog.Error("items walk failed", "collection", id, "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	page.close(pageLink(r, limit, offset, page.count))
+	page.close(nextLink(r, info, q, res, limit, offset, page.count))
 	w.Header().Set("Content-Type", "application/geo+json")
 	if r.URL.Query().Get("crs") != "" {
 		w.Header().Set("Content-Crs", crs84)
@@ -339,7 +349,8 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeFGB(w http.ResponseWriter, r *http.Request, info store.CollectionInfo, q featureQuery, limit int) {
 	out := &fgbCollector{limit: limit}
-	if err := s.walkFeatures(r.Context(), info, q, out); err != nil {
+	res, err := s.walkFeatures(r.Context(), info, q, out)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -354,7 +365,7 @@ func (s *Server) writeFGB(w http.ResponseWriter, r *http.Request, info store.Col
 		return
 	}
 	w.Header().Set("Content-Type", "application/flatgeobuf")
-	if link := pageLink(r, limit, q.offset, len(out.features)); link != "" {
+	if link := nextLink(r, info, q, res, limit, q.offset, len(out.features)); link != "" {
 		w.Header().Set("Link", "<"+link+">; rel=\"next\"")
 	}
 	w.Write(data)
@@ -452,12 +463,25 @@ func sameColumns(a, b *flattypes.Header) bool {
 	return true
 }
 
-func pageLink(r *http.Request, limit, offset, count int) string {
+func nextLink(r *http.Request, info store.CollectionInfo, q featureQuery, res walkResult, limit, offset, count int) string {
 	if count < limit {
 		return ""
 	}
 	query := r.URL.Query()
+	query.Del("offset")
 	query.Set("limit", strconv.Itoa(limit))
-	query.Set("offset", strconv.Itoa(offset+count))
+	if res.set {
+		query.Set("cursor", encodeCursor(cursor{
+			uid:         info.UID,
+			version:     info.Version,
+			tier:        effectiveTier(info, q),
+			member:      res.member,
+			chunkID:     res.pos.chunkID,
+			ord:         res.pos.ord,
+			fingerprint: q.fingerprint,
+		}))
+	} else {
+		query.Set("offset", strconv.Itoa(offset+count))
+	}
 	return r.URL.Path + "?" + query.Encode()
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"regexp"
 	"sort"
@@ -33,6 +34,7 @@ const (
 	sortWindowBytes  = 8 << 20
 	targetChunkBytes = 2 << 20
 	maxChunkFeatures = 50000
+	maxChunkBytes    = 8 << 20
 )
 
 type sizer struct {
@@ -82,7 +84,13 @@ type Result struct {
 	Created  bool
 }
 
+type chunkTiming struct {
+	encode time.Duration
+	write  time.Duration
+}
+
 func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Result, error) {
+	started := time.Now()
 	reader, err := fgb.NewReader(body)
 	if err != nil {
 		return Result{}, invalid(err)
@@ -112,6 +120,9 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		return Result{}, err
 	}
 	defer ing.Rollback(ctx)
+	if err := ing.StageFeatureBase(ctx); err != nil {
+		return Result{}, err
+	}
 	result := Result{Created: created}
 	sizer := newSizer()
 	batch := make([]chunk.InputFeature, 0, 1024)
@@ -120,14 +131,27 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	var timeMin, timeMax *time.Time
 	jsonDecided := false
 	var flat flattening
+	var timing chunkTiming
+	var stream, tiers time.Duration
+	specs := []*tierSpec{
+		{tier: 1, stride: 10, tol: 0.01, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
+		{tier: 2, stride: 100, tol: 0.05, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
+	}
 	flush := func() error {
-		encoded, err := putChunk(ctx, ing, opts.Collection, cols, batch, 0)
+		data, err := putChunk(ctx, ing, opts.Collection, cols, batch, 0, &timing)
 		if err != nil {
 			return err
 		}
-		sizer.reset(encoded, len(batch))
+		sizer.reset(len(data), len(batch))
 		batch = batch[:0]
 		result.Chunks++
+		tierStart := time.Now()
+		for _, spec := range specs {
+			if err := spec.sample(ctx, ing, opts.Collection, cols, data); err != nil {
+				return err
+			}
+		}
+		tiers += time.Since(tierStart)
 		return nil
 	}
 	drain := func() error {
@@ -157,6 +181,7 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		return nil
 	}
 	for {
+		loopStart := time.Now()
 		f, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			break
@@ -165,6 +190,7 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 			return Result{}, invalid(err)
 		}
 		feature, err := toInput(header, f, transform)
+		stream += time.Since(loopStart)
 		if err != nil {
 			return Result{}, invalid(err)
 		}
@@ -198,15 +224,27 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	if result.Features == 0 {
 		return Result{}, invalid(errors.New("upload contains no features"))
 	}
-	if err := overviews(ctx, ing, opts.Collection, cols); err != nil {
+	tierStart := time.Now()
+	for _, spec := range specs {
+		if err := spec.flush(ctx, ing, opts.Collection, cols); err != nil {
+			return Result{}, err
+		}
+	}
+	tiers += time.Since(tierStart)
+	if err := ing.ComputeFeatureBase(ctx); err != nil {
 		return Result{}, err
 	}
 	if err := ing.SetCatalog(ctx, idColumn, timeColumn, timeMin, timeMax); err != nil {
 		return Result{}, err
 	}
+	commitStart := time.Now()
 	if err := ing.Commit(ctx); err != nil {
 		return Result{}, err
 	}
+	commit := time.Since(commitStart)
+	slog.Info("ingest", "collection", opts.Collection, "features", result.Features, "chunks", result.Chunks,
+		"stream", stream, "encode", timing.encode, "chunk_write", timing.write, "tiers", tiers,
+		"commit", commit, "total", time.Since(started))
 	return result, nil
 }
 
@@ -496,27 +534,59 @@ type columnInfo struct {
 	Type string `json:"type"`
 }
 
-func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column, batch []chunk.InputFeature, tier int) (int, error) {
+func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column, batch []chunk.InputFeature, tier int, timing *chunkTiming) ([]byte, error) {
+	var last []byte
+	err := encodeChunks(collection, cols, batch, maxChunkBytes, timing, func(data []byte) error {
+		if err := storeChunk(ctx, ing, collection, data, tier, timing); err != nil {
+			return err
+		}
+		last = data
+		return nil
+	})
+	return last, err
+}
+
+func encodeChunks(collection string, cols []chunk.Column, batch []chunk.InputFeature, limit int, timing *chunkTiming, emit func([]byte) error) error {
+	encodeStart := time.Now()
 	data, err := chunk.EncodeCols(collection, cols, batch)
-	if err != nil {
-		return 0, err
+	if timing != nil {
+		timing.encode += time.Since(encodeStart)
 	}
+	if err != nil {
+		return err
+	}
+	if len(data) > limit && len(batch) > 1 {
+		mid := len(batch) / 2
+		if err := encodeChunks(collection, cols, batch[:mid], limit, timing, emit); err != nil {
+			return err
+		}
+		return encodeChunks(collection, cols, batch[mid:], limit, timing, emit)
+	}
+	return emit(data)
+}
+
+func storeChunk(ctx context.Context, ing *store.Ingest, collection string, data []byte, tier int, timing *chunkTiming) error {
+	writeStart := time.Now()
 	c, err := chunk.Open(data)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	env, ok := c.Envelope()
 	if !ok {
-		return 0, errors.New("ingest: chunk missing envelope")
+		return errors.New("ingest: chunk missing envelope")
 	}
 	sum := sha256.Sum256(data)
 	columns, err := json.Marshal(columnList(c.Columns()))
 	if err != nil {
-		return 0, err
+		return err
 	}
 	headerBlob, leaves, featureBytes, ok := fgb.Layout(data, c.Header())
 	if !ok {
-		return 0, errors.New("ingest: chunk layout unreadable")
+		return errors.New("ingest: chunk layout unreadable")
+	}
+	rows, err := chunkStats(c)
+	if err != nil {
+		return err
 	}
 	payload := store.Payload{
 		Data: chunk.Compress(data), Size: len(data), Count: c.Count(), Tier: tier,
@@ -529,16 +599,15 @@ func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []
 	}
 	id, err := ing.PutChunk(ctx, payload)
 	if err != nil {
-		return 0, err
-	}
-	rows, err := chunkStats(c)
-	if err != nil {
-		return 0, err
+		return err
 	}
 	if err := ing.PutChunkStats(ctx, id, rows); err != nil {
-		return 0, err
+		return err
 	}
-	return len(data), nil
+	if timing != nil {
+		timing.write += time.Since(writeStart)
+	}
+	return nil
 }
 
 func chunkStats(c *chunk.Chunk) ([]stats.Row, error) {
@@ -562,60 +631,44 @@ func columnList(cols []chunk.Column) []columnInfo {
 	return list
 }
 
-func overviews(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column) error {
-	base, err := ing.BaseChunks(ctx)
+func (s *tierSpec) sample(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column, data []byte) error {
+	c, err := chunk.Open(data)
 	if err != nil {
 		return err
 	}
-	specs := []*tierSpec{
-		{tier: 1, stride: 10, tol: 0.01, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
-		{tier: 2, stride: 100, tol: 0.05, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
+	feats, err := c.SearchAll()
+	if err != nil {
+		return err
 	}
-	flush := func(spec *tierSpec) error {
-		if len(spec.batch) == 0 {
-			return nil
+	for i, f := range feats {
+		if i%s.stride != 0 {
+			continue
 		}
-		encoded, err := putChunk(ctx, ing, collection, cols, spec.batch, spec.tier)
-		if err != nil {
-			return err
+		feature, ok := tierFeature(c, f, s)
+		if !ok {
+			continue
 		}
-		spec.sizer.reset(encoded, len(spec.batch))
-		spec.batch = spec.batch[:0]
-		return nil
-	}
-	for _, data := range base {
-		c, err := chunk.Open(data)
-		if err != nil {
-			return err
-		}
-		feats, err := c.SearchAll()
-		if err != nil {
-			return err
-		}
-		for _, spec := range specs {
-			for i, f := range feats {
-				if i%spec.stride != 0 {
-					continue
-				}
-				feature, ok := tierFeature(c, f, spec)
-				if !ok {
-					continue
-				}
-				spec.batch = append(spec.batch, feature)
-				spec.sizer.add(feature)
-				if spec.sizer.full(len(spec.batch)) {
-					if err := flush(spec); err != nil {
-						return err
-					}
-				}
+		s.batch = append(s.batch, feature)
+		s.sizer.add(feature)
+		if s.sizer.full(len(s.batch)) {
+			if err := s.flush(ctx, ing, collection, cols); err != nil {
+				return err
 			}
 		}
 	}
-	for _, spec := range specs {
-		if err := flush(spec); err != nil {
-			return err
-		}
+	return nil
+}
+
+func (s *tierSpec) flush(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column) error {
+	if len(s.batch) == 0 {
+		return nil
 	}
+	data, err := putChunk(ctx, ing, collection, cols, s.batch, s.tier, nil)
+	if err != nil {
+		return err
+	}
+	s.sizer.reset(len(data), len(s.batch))
+	s.batch = s.batch[:0]
 	return nil
 }
 

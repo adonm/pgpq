@@ -546,7 +546,7 @@ func chunkStarts(t *testing.T, st *store.Store, name string) []int {
 func walkIDs(t *testing.T, s *Server, info store.CollectionInfo, q featureQuery, limit int) []string {
 	t.Helper()
 	out := &collectSink{limit: limit}
-	if err := s.walkFeatures(context.Background(), info, q, out); err != nil {
+	if _, err := s.walkFeatures(context.Background(), info, q, out); err != nil {
 		t.Fatal(err)
 	}
 	ids := make([]string, 0, len(out.hits))

@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	chunkFetchWorkers = 8
-	minDecodeWindow   = 256
+	minDecodeWindow = 256
 )
+
+var decodeWorkers = max(runtime.NumCPU(), 1)
 
 func (s *Server) fetchRows(ctx context.Context, collection string, ids []int64) ([]store.ChunkRow, []error) {
 	rows := make([]store.ChunkRow, len(ids))
@@ -26,19 +27,43 @@ func (s *Server) fetchRows(ctx context.Context, collection string, ids []int64) 
 	if len(ids) == 0 {
 		return rows, errs
 	}
-	sem := make(chan struct{}, chunkFetchWorkers)
-	var wg sync.WaitGroup
+	found, err := s.Store.ChunkRows(ctx, collection, ids)
+	if err != nil {
+		for i := range errs {
+			errs[i] = err
+		}
+		return rows, errs
+	}
 	for i, id := range ids {
+		row, ok := found[id]
+		if !ok {
+			errs[i] = store.ErrNotFound
+			continue
+		}
+		rows[i] = row
+	}
+	return rows, errs
+}
+
+func (s *Server) decodeChunks(ctx context.Context, info store.CollectionInfo, metas []store.ChunkMeta, rows []store.ChunkRow, errs []error) ([]*chunk.Chunk, [][]*flattypes.Feature, []error) {
+	chunks := make([]*chunk.Chunk, len(metas))
+	features := make([][]*flattypes.Feature, len(metas))
+	sem := make(chan struct{}, decodeWorkers)
+	var wg sync.WaitGroup
+	for i := range metas {
+		if errs[i] != nil {
+			continue
+		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, id int64) {
+		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			rows[i], errs[i] = s.Store.ChunkByID(ctx, collection, id)
-		}(i, id)
+			chunks[i], features[i], errs[i] = s.openFeatures(ctx, info, metas[i].ID, rows[i])
+		}(i)
 	}
 	wg.Wait()
-	return rows, errs
+	return chunks, features, errs
 }
 
 func (s *Server) chunkBatches(ctx context.Context, collection string, ids []int64) [][]int64 {

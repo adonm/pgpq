@@ -364,7 +364,7 @@ func corpusOracle(t *testing.T, st *store.Store, info store.CollectionInfo) {
 				reference = append(reference, f.id)
 			}
 		}
-		ids, err := st.CandidateChunks(context.Background(), info, nil, expr)
+		ids, err := st.CandidateChunks(context.Background(), info, nil, expr, 0)
 		if err != nil {
 			t.Fatalf("tree %d %q: %v", i, node.text(), err)
 		}
