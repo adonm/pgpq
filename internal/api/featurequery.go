@@ -307,6 +307,9 @@ func ordinals(start, count int) []int {
 }
 
 func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q featureQuery, filter cql.Expr, offset int, out sink) (int, error) {
+	if store.StatsReady(target) {
+		return s.walkCandidates(ctx, target, q, filter, offset, out)
+	}
 	pos := 0
 	if q.bbox == nil && offset > 0 {
 		count, err := s.Store.CountMatches(ctx, target, filter)
@@ -330,6 +333,73 @@ func (s *Server) walkMatches(ctx context.Context, target store.CollectionInfo, q
 		}
 	}
 	return offset, nil
+}
+
+func (s *Server) walkCandidates(ctx context.Context, target store.CollectionInfo, q featureQuery, filter cql.Expr, offset int, out sink) (int, error) {
+	casts, err := s.Store.ColumnCasts(ctx, target)
+	if err != nil {
+		return offset, err
+	}
+	ids, err := s.Store.CandidateChunks(ctx, target, q.bbox, filter)
+	if err != nil {
+		return offset, err
+	}
+	for _, batch := range s.chunkBatches(ctx, target.Name, ids) {
+		rows, errs := s.fetchRows(ctx, target.Name, batch)
+		for j, id := range batch {
+			if out.remaining() == 0 {
+				return offset, nil
+			}
+			if errs[j] != nil {
+				return offset, fmt.Errorf("chunk %d: %w", id, errs[j])
+			}
+			c, features, err := s.openFeatures(ctx, target, id, rows[j])
+			if err != nil {
+				return offset, fmt.Errorf("chunk %d: %w", id, err)
+			}
+			if offset, err = emit(target, q.bbox, id, c, features, matchingOrds(c, features, filter, casts), offset, out); err != nil {
+				return offset, err
+			}
+		}
+	}
+	return offset, nil
+}
+
+func (s *Server) countCandidates(ctx context.Context, target store.CollectionInfo, filter cql.Expr) (int64, error) {
+	casts, err := s.Store.ColumnCasts(ctx, target)
+	if err != nil {
+		return 0, err
+	}
+	ids, err := s.Store.CandidateChunks(ctx, target, nil, filter)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, batch := range s.chunkBatches(ctx, target.Name, ids) {
+		rows, errs := s.fetchRows(ctx, target.Name, batch)
+		for j, id := range batch {
+			if errs[j] != nil {
+				return 0, fmt.Errorf("chunk %d: %w", id, errs[j])
+			}
+			c, features, err := s.openFeatures(ctx, target, id, rows[j])
+			if err != nil {
+				return 0, fmt.Errorf("chunk %d: %w", id, err)
+			}
+			total += int64(len(matchingOrds(c, features, filter, casts)))
+		}
+	}
+	return total, nil
+}
+
+func matchingOrds(c *chunk.Chunk, features []*flattypes.Feature, filter cql.Expr, casts cql.Casts) []int {
+	cols := c.Columns()
+	ords := make([]int, 0, len(features))
+	for i, f := range features {
+		if cql.Match(filter, chunk.DecodeProperties(f.PropertiesBytes(), cols), casts) {
+			ords = append(ords, i)
+		}
+	}
+	return ords
 }
 
 func (s *Server) emitMatches(ctx context.Context, target store.CollectionInfo, bbox *[4]float64, matches []store.FeatureMatch, offset int, out sink) (int, error) {
@@ -409,13 +479,20 @@ func (s *Server) countMatches(ctx context.Context, info store.CollectionInfo, q 
 			total += target.FeatureCount
 			continue
 		}
-		count, err := s.Store.CountMatches(ctx, target, filter)
+		count, err := s.countTarget(ctx, target, filter)
 		if err != nil {
 			return 0, false, err
 		}
 		total += count
 	}
 	return total, true, nil
+}
+
+func (s *Server) countTarget(ctx context.Context, target store.CollectionInfo, filter cql.Expr) (int64, error) {
+	if store.StatsReady(target) {
+		return s.countCandidates(ctx, target, filter)
+	}
+	return s.Store.CountMatches(ctx, target, filter)
 }
 
 func featureID(info store.CollectionInfo, chunkID int64, ord int, props map[string]any) any {

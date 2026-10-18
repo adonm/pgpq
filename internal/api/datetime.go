@@ -71,10 +71,8 @@ func parseDatetime(value string) (time.Time, time.Time, error) {
 }
 
 func parseInstant(value string) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
-		if t, err := time.Parse(layout, value); err == nil {
-			return t, nil
-		}
+	if t, ok := cql.ParseTime(value); ok {
+		return t, nil
 	}
 	return time.Time{}, errors.New("invalid datetime " + value)
 }

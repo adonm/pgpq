@@ -68,6 +68,7 @@ type CollectionInfo struct {
 	Kind         string
 	Members      []byte
 	Version      int64
+	StatsVersion int64
 	ChunkCount   int64
 	FeatureCount int64
 	MinX, MinY   *float64

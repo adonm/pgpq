@@ -166,11 +166,11 @@ func (s *Store) ChunkByID(ctx context.Context, collection string, id int64) (Chu
 	return row, err
 }
 
-const collectionColumns = `select name, uid, kind, version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, title, description, license, keywords, stac, members from collections`
+const collectionColumns = `select name, uid, kind, version, stats_version, chunk_count, feature_count, minx, miny, maxx, maxy, time_min, time_max, id_column, time_column, title, description, license, keywords, stac, members from collections`
 
 func scanCollection(row pgx.CollectableRow) (CollectionInfo, error) {
 	var info CollectionInfo
-	err := row.Scan(&info.Name, &info.UID, &info.Kind, &info.Version, &info.ChunkCount, &info.FeatureCount,
+	err := row.Scan(&info.Name, &info.UID, &info.Kind, &info.Version, &info.StatsVersion, &info.ChunkCount, &info.FeatureCount,
 		&info.MinX, &info.MinY, &info.MaxX, &info.MaxY, &info.TimeMin, &info.TimeMax, &info.IDColumn, &info.TimeColumn,
 		&info.Title, &info.Description, &info.License, &info.Keywords, &info.Stac, &info.Members)
 	return info, err

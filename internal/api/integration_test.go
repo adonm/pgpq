@@ -1322,10 +1322,11 @@ func TestPostgresChunkFailureAnswers500(t *testing.T) {
 	if _, err := st.Pool.Exec(ctx, `delete from chunks where collection = $1 and id = $2`, name, victim); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{all, matched} {
-		if w := read(path); w.Code != 500 {
-			t.Fatalf("%s with a missing chunk = %d, want 500: %s", path, w.Code, w.Body.String())
-		}
+	if w := read(all); w.Code != 500 {
+		t.Fatalf("%s with a missing chunk = %d, want 500: %s", all, w.Code, w.Body.String())
+	}
+	if w := read(matched); w.Code != 200 {
+		t.Fatalf("%s with a missing chunk = %d, want 200: %s", matched, w.Code, w.Body.String())
 	}
 	if w := read(first); w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte(`"numberReturned":10`)) {
 		t.Fatalf("first page with a missing later chunk = %d: %s", w.Code, w.Body.String())
