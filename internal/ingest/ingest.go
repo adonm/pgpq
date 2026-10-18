@@ -11,9 +11,12 @@ import (
 	"log/slog"
 	"math"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
@@ -84,9 +87,149 @@ type Result struct {
 	Created  bool
 }
 
-type chunkTiming struct {
-	encode time.Duration
-	write  time.Duration
+type prepResult struct {
+	payload  store.Payload
+	rows     []stats.Row
+	prepare  time.Duration
+	stats    time.Duration
+	compress time.Duration
+	err      error
+}
+
+type prepRequest struct {
+	raw  []byte
+	tier int
+	out  chan prepResult
+}
+
+type future struct {
+	req *prepRequest
+	raw []byte
+}
+
+type pipeline struct {
+	ctx        context.Context
+	ing        *store.Ingest
+	collection string
+	jobs       chan *prepRequest
+	futures    []*future
+	limit      int
+	workers    sync.WaitGroup
+	once       sync.Once
+	encode     atomic.Int64
+	prepared   atomic.Int64
+	stats      atomic.Int64
+	compress   atomic.Int64
+	store      atomic.Int64
+}
+
+func newPipeline(ctx context.Context, ing *store.Ingest, collection string) *pipeline {
+	workers := min(runtime.NumCPU(), 8)
+	p := &pipeline{
+		ctx: ctx, ing: ing, collection: collection,
+		jobs:  make(chan *prepRequest, workers),
+		limit: workers * 2,
+	}
+	p.workers.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer p.workers.Done()
+			for req := range p.jobs {
+				req.out <- p.prepare(req.raw, req.tier)
+			}
+		}()
+	}
+	return p
+}
+
+func (p *pipeline) submit(raw []byte, tier int) error {
+	req := &prepRequest{raw: raw, tier: tier, out: make(chan prepResult, 1)}
+	p.jobs <- req
+	p.futures = append(p.futures, &future{req: req, raw: raw})
+	if len(p.futures) >= p.limit {
+		return p.drain()
+	}
+	return nil
+}
+
+func (p *pipeline) drain() error {
+	for len(p.futures) > 0 {
+		f := p.futures[0]
+		p.futures = p.futures[1:]
+		res := <-f.req.out
+		if res.err != nil {
+			return res.err
+		}
+		p.prepared.Add(int64(res.prepare))
+		p.stats.Add(int64(res.stats))
+		p.compress.Add(int64(res.compress))
+		start := time.Now()
+		id, err := p.ing.PutChunk(p.ctx, res.payload)
+		if err != nil {
+			return err
+		}
+		if err := p.ing.PutChunkStats(p.ctx, id, res.rows); err != nil {
+			return err
+		}
+		p.store.Add(int64(time.Since(start)))
+	}
+	return nil
+}
+
+func (p *pipeline) finish() error {
+	var err error
+	p.once.Do(func() {
+		err = p.drain()
+		close(p.jobs)
+		p.workers.Wait()
+	})
+	return err
+}
+
+func (p *pipeline) prepare(raw []byte, tier int) prepResult {
+	var res prepResult
+	start := time.Now()
+	c, err := chunk.FromRaw(raw)
+	if err != nil {
+		res.err = err
+		return res
+	}
+	env, ok := c.Envelope()
+	if !ok {
+		res.err = errors.New("ingest: chunk missing envelope")
+		return res
+	}
+	columns, err := json.Marshal(columnList(c.Columns()))
+	if err != nil {
+		res.err = err
+		return res
+	}
+	headerBlob, leaves, featureBytes, ok := fgb.Layout(raw, c.Header())
+	if !ok {
+		res.err = errors.New("ingest: chunk layout unreadable")
+		return res
+	}
+	rows, err := chunkStats(c)
+	if err != nil {
+		res.err = err
+		return res
+	}
+	res.stats = time.Since(start)
+	sum := sha256.Sum256(raw)
+	compressStart := time.Now()
+	res.payload = store.Payload{
+		Data: chunk.Compress(raw), Size: len(raw), Count: c.Count(), Tier: tier,
+		MinX: env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
+		Checksum:     hex.EncodeToString(sum[:]),
+		Columns:      string(columns),
+		FeatureBytes: featureBytes,
+		HeaderBlob:   headerBlob,
+		Leaves:       leaves,
+	}
+	res.compress = time.Since(compressStart)
+	res.rows = rows
+	res.prepare = time.Since(start)
+	return res
 }
 
 func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Result, error) {
@@ -131,14 +274,15 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	var timeMin, timeMax *time.Time
 	jsonDecided := false
 	var flat flattening
-	var timing chunkTiming
 	var stream, tiers time.Duration
+	p := newPipeline(ctx, ing, opts.Collection)
+	defer p.finish()
 	specs := []*tierSpec{
 		{tier: 1, stride: 10, tol: 0.01, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
 		{tier: 2, stride: 100, tol: 0.05, sizer: newSizer(), batch: make([]chunk.InputFeature, 0, 4096)},
 	}
 	flush := func() error {
-		data, err := putChunk(ctx, ing, opts.Collection, cols, batch, 0, &timing)
+		data, err := p.putChunk(opts.Collection, cols, batch, 0)
 		if err != nil {
 			return err
 		}
@@ -147,7 +291,7 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 		result.Chunks++
 		tierStart := time.Now()
 		for _, spec := range specs {
-			if err := spec.sample(ctx, ing, opts.Collection, cols, data); err != nil {
+			if err := spec.sample(ctx, p, opts.Collection, cols, data); err != nil {
 				return err
 			}
 		}
@@ -226,11 +370,14 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	}
 	tierStart := time.Now()
 	for _, spec := range specs {
-		if err := spec.flush(ctx, ing, opts.Collection, cols); err != nil {
+		if err := spec.flush(ctx, p, opts.Collection, cols); err != nil {
 			return Result{}, err
 		}
 	}
 	tiers += time.Since(tierStart)
+	if err := p.finish(); err != nil {
+		return Result{}, err
+	}
 	if err := ing.ComputeFeatureBase(ctx); err != nil {
 		return Result{}, err
 	}
@@ -243,8 +390,9 @@ func Run(ctx context.Context, st *store.Store, body io.Reader, opts Options) (Re
 	}
 	commit := time.Since(commitStart)
 	slog.Info("ingest", "collection", opts.Collection, "features", result.Features, "chunks", result.Chunks,
-		"stream", stream, "encode", timing.encode, "chunk_write", timing.write, "tiers", tiers,
-		"commit", commit, "total", time.Since(started))
+		"stream", stream, "encode", time.Duration(p.encode.Load()), "prepare_sum", time.Duration(p.prepared.Load()),
+		"stats_sum", time.Duration(p.stats.Load()), "compress_sum", time.Duration(p.compress.Load()),
+		"store", time.Duration(p.store.Load()), "tiers", tiers, "commit", commit, "total", time.Since(started))
 	return result, nil
 }
 
@@ -534,23 +682,20 @@ type columnInfo struct {
 	Type string `json:"type"`
 }
 
-func putChunk(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column, batch []chunk.InputFeature, tier int, timing *chunkTiming) ([]byte, error) {
+func (p *pipeline) putChunk(collection string, cols []chunk.Column, batch []chunk.InputFeature, tier int) ([]byte, error) {
 	var last []byte
-	err := encodeChunks(collection, cols, batch, maxChunkBytes, timing, func(data []byte) error {
-		if err := storeChunk(ctx, ing, collection, data, tier, timing); err != nil {
-			return err
-		}
+	err := encodeChunks(collection, cols, batch, maxChunkBytes, &p.encode, func(data []byte) error {
 		last = data
-		return nil
+		return p.submit(data, tier)
 	})
 	return last, err
 }
 
-func encodeChunks(collection string, cols []chunk.Column, batch []chunk.InputFeature, limit int, timing *chunkTiming, emit func([]byte) error) error {
+func encodeChunks(collection string, cols []chunk.Column, batch []chunk.InputFeature, limit int, timing *atomic.Int64, emit func([]byte) error) error {
 	encodeStart := time.Now()
 	data, err := chunk.EncodeCols(collection, cols, batch)
 	if timing != nil {
-		timing.encode += time.Since(encodeStart)
+		timing.Add(int64(time.Since(encodeStart)))
 	}
 	if err != nil {
 		return err
@@ -563,51 +708,6 @@ func encodeChunks(collection string, cols []chunk.Column, batch []chunk.InputFea
 		return encodeChunks(collection, cols, batch[mid:], limit, timing, emit)
 	}
 	return emit(data)
-}
-
-func storeChunk(ctx context.Context, ing *store.Ingest, collection string, data []byte, tier int, timing *chunkTiming) error {
-	writeStart := time.Now()
-	c, err := chunk.Open(data)
-	if err != nil {
-		return err
-	}
-	env, ok := c.Envelope()
-	if !ok {
-		return errors.New("ingest: chunk missing envelope")
-	}
-	sum := sha256.Sum256(data)
-	columns, err := json.Marshal(columnList(c.Columns()))
-	if err != nil {
-		return err
-	}
-	headerBlob, leaves, featureBytes, ok := fgb.Layout(data, c.Header())
-	if !ok {
-		return errors.New("ingest: chunk layout unreadable")
-	}
-	rows, err := chunkStats(c)
-	if err != nil {
-		return err
-	}
-	payload := store.Payload{
-		Data: chunk.Compress(data), Size: len(data), Count: c.Count(), Tier: tier,
-		MinX: env[0], MinY: env[1], MaxX: env[2], MaxY: env[3],
-		Checksum:     hex.EncodeToString(sum[:]),
-		Columns:      string(columns),
-		FeatureBytes: featureBytes,
-		HeaderBlob:   headerBlob,
-		Leaves:       leaves,
-	}
-	id, err := ing.PutChunk(ctx, payload)
-	if err != nil {
-		return err
-	}
-	if err := ing.PutChunkStats(ctx, id, rows); err != nil {
-		return err
-	}
-	if timing != nil {
-		timing.write += time.Since(writeStart)
-	}
-	return nil
 }
 
 func chunkStats(c *chunk.Chunk) ([]stats.Row, error) {
@@ -631,7 +731,7 @@ func columnList(cols []chunk.Column) []columnInfo {
 	return list
 }
 
-func (s *tierSpec) sample(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column, data []byte) error {
+func (s *tierSpec) sample(ctx context.Context, p *pipeline, collection string, cols []chunk.Column, data []byte) error {
 	c, err := chunk.Open(data)
 	if err != nil {
 		return err
@@ -651,7 +751,7 @@ func (s *tierSpec) sample(ctx context.Context, ing *store.Ingest, collection str
 		s.batch = append(s.batch, feature)
 		s.sizer.add(feature)
 		if s.sizer.full(len(s.batch)) {
-			if err := s.flush(ctx, ing, collection, cols); err != nil {
+			if err := s.flush(ctx, p, collection, cols); err != nil {
 				return err
 			}
 		}
@@ -659,11 +759,11 @@ func (s *tierSpec) sample(ctx context.Context, ing *store.Ingest, collection str
 	return nil
 }
 
-func (s *tierSpec) flush(ctx context.Context, ing *store.Ingest, collection string, cols []chunk.Column) error {
+func (s *tierSpec) flush(ctx context.Context, p *pipeline, collection string, cols []chunk.Column) error {
 	if len(s.batch) == 0 {
 		return nil
 	}
-	data, err := putChunk(ctx, ing, collection, cols, s.batch, s.tier, nil)
+	data, err := p.putChunk(collection, cols, s.batch, s.tier)
 	if err != nil {
 		return err
 	}

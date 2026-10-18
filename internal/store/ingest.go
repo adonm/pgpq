@@ -49,7 +49,7 @@ var partitions = []partition{
 	maxy double precision not null,
 	checksum text,
 	columns jsonb not null default '[]',
-	data bytea not null,
+	data bytea storage external not null,
 	primary key (collection, id)
 )`,
 		indexes: []string{
@@ -123,8 +123,19 @@ func stageVirtual(ctx context.Context, conn db, collection string) error {
 		if _, err := conn.Exec(ctx, fmt.Sprintf(p.table, stagedName(p.parent, collection))); err != nil {
 			return err
 		}
+		if err := boundCheck(ctx, conn, stagedName(p.parent, collection), collection); err != nil {
+			return err
+		}
 	}
 	_, err := conn.Exec(ctx, fmt.Sprintf(nodeTableDDL, stagedName("virtual_node", collection)))
+	return err
+}
+
+func boundCheck(ctx context.Context, conn db, table, collection string) error {
+	if !ValidName(collection) {
+		return fmt.Errorf("invalid collection name %q", collection)
+	}
+	_, err := conn.Exec(ctx, `alter table `+table+` add constraint bound check (collection = '`+collection+`')`)
 	return err
 }
 
@@ -177,6 +188,9 @@ func (i *Ingest) stage(ctx context.Context) error {
 	}
 	for _, p := range partitions {
 		if _, err := i.tx.Exec(ctx, fmt.Sprintf(p.table, i.staged(p.parent))); err != nil {
+			return err
+		}
+		if err := boundCheck(ctx, i.tx, i.staged(p.parent), i.collection); err != nil {
 			return err
 		}
 	}
