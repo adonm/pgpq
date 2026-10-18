@@ -35,7 +35,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 
 ## Write path — HTTP only
 
-- `PUT /collections/{id}` (writable mode) is content-negotiated. A FlatGeobuf body — the default for any non-JSON content type — creates or replaces the collection from a whole file, not pre-chunked uploads. A JSON body writes catalog metadata: the STAC collection document is stored and echoed by the STAC facade, and its `title`, `description`, `license` and `keywords` feed the OGC collection. `DELETE /collections/{id}` drops the collection.
+- `PUT /collections/{id}` (writable mode) is content-negotiated. A FlatGeobuf body — the default for any non-JSON content type — creates or replaces the collection from a whole file, not pre-chunked uploads. A JSON body writes catalog metadata: the STAC collection document is stored and echoed by the STAC facade, which serves only the collection documents, and its `title`, `description`, `license` and `keywords` feed the OGC collection. `DELETE /collections/{id}` drops the collection.
 - Loads are transactional: rows go into uncommitted staging tables, indexes and overview tiers are built there, and the commit swaps partitions — drop the old ones, attach the staged ones — so parent-level locks last milliseconds. Readers keep serving the previous version for the whole load and see either the old collection or the new one.
 - Failure or disconnect rolls back; staging tables disappear with the transaction and loads are retried from scratch (accepted cost).
 - Input CRS: any CRS supported by the pure-Go projection layer ([wroge/wgs84](https://github.com/wroge/wgs84)) is reprojected to WGS84 during ingest; anything else is rejected at upload time. Stored geometries are 2D (Z dropped), and chunks declare EPSG:4326.
@@ -58,6 +58,7 @@ Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) and
 - Overview tiers: ordinal stride 10 / 100 with Douglas-Peucker simplification (only for geometries larger than the tolerance — small polygons are kept whole), so building layers get real tiers too; ~10-15% extra storage; a collection without tiers falls back to full detail.
 - Queryables come from catalog columns; `datetime` filters the recorded time column (per member on views); `sortby` and `q` are not supported and answer 400; `crs` and `bbox-crs` accept only CRS84 and answer 400 for any other value, and a GeoJSON response to a `crs` request carries `Content-Crs` set to CRS84; CQL2 text covers comparisons, `IN`/`BETWEEN`/`LIKE`/`IS NULL` and `AND`/`OR`/`NOT`, and `filter-lang` other than `cql2-text` answers 400; `bbox` is the spatial filter, and spatial functions such as `S_INTERSECTS` are not supported and answer 400. Equality on a JSON array matches its members (`props @> jsonb_build_object(k, v)` or `props -> k @> jsonb_build_array(v)`), so list-valued tags filter like scalars; numeric and boolean literals also match their string form, because FlatGeobuf stores every attribute as text and `?building:levels=2` arrives as a number — CQL2-text identifiers stop at colons, so colon-named OSM keys (`addr:street`) go through `{property}=` query parameters. Ordered comparisons and `LIKE` read the array's text form.
 - Conformance classes are only claimed when implemented — no over-claiming.
+- The STAC facade is a read-only echo of the stored collection documents (`/stac/collections`, `/stac/collections/{id}`); it serves no STAC catalog, items or search, so it claims no STAC conformance class.
 
 ## HTTP caching
 
@@ -90,6 +91,7 @@ Design target: ~100M features in one collection on one PostgreSQL node. Chunk fe
 - Removed: S2 coverings (bounding-box pruning is enough because features are tested exactly after pruning).
 - Removed: spatial CQL2 functions (`S_INTERSECTS`, with the polyclip-go intersection engine and the WKT parser). `bbox` covers the spatial filter; features are not tested against polygons, and spatial functions answer 400.
 - Removed: CQL2-JSON (`filter-lang=cql2-json`, and a JSON `filter` in the STAC search body). The clients in use (GDAL, RustGIS) send CQL2 text, which is now the only filter encoding; any other `filter-lang` answers 400.
+- Removed: the STAC catalog, STAC items and STAC search (`/stac`, `/stac/collections/{id}/items`, `/stac/search`). Items and search duplicated the OGC items endpoint, which the clients in use read at `/collections/{id}/items`, and the STAC core and item-search conformance claims went with them.
 
 ## Build order
 

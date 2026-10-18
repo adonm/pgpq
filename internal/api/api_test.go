@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/adonm/postfgb/internal/store"
@@ -96,7 +95,7 @@ func TestReadOnlyWorker(t *testing.T) {
 
 func TestRemovedRoutes(t *testing.T) {
 	for _, h := range []http.Handler{NewWithConfig(Config{}), NewWithConfig(Config{ReadOnly: true})} {
-		for _, path := range []string{"/stats", "/collections/demo/manifest", "/collections/demo/chunks/1"} {
+		for _, path := range []string{"/stats", "/collections/demo/manifest", "/collections/demo/chunks/1", "/stac", "/stac/search", "/stac/collections/demo/items"} {
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 			if w.Code != 404 {
@@ -130,20 +129,6 @@ func TestUnsupportedQuery(t *testing.T) {
 		gate.ServeHTTP(w, httptest.NewRequest("GET", tc.target, nil))
 		if w.Code != tc.want {
 			t.Fatalf("%s = %d, want %d", tc.target, w.Code, tc.want)
-		}
-	}
-}
-
-func TestStacSearchRejectsJSONFilter(t *testing.T) {
-	h := NewWithConfig(Config{})
-	for _, body := range []string{
-		`{"filter":{"op":"=","args":[{"property":"amenity"},"bench"]}}`,
-		`{"filter-lang":"cql2-json","filter":"amenity = 'bench'"}`,
-	} {
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("POST", "/stac/search", strings.NewReader(body)))
-		if w.Code != 400 {
-			t.Fatalf("%s = %d, want 400", body, w.Code)
 		}
 	}
 }

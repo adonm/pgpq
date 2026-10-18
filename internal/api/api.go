@@ -85,12 +85,8 @@ func NewWithConfig(cfg Config) http.Handler {
 		mux.HandleFunc("PUT /collections/{id}", s.putCollection)
 		mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
 	}
-	mux.HandleFunc("GET /stac", s.stacCatalog)
 	mux.HandleFunc("GET /stac/collections", s.stacCollections)
 	mux.HandleFunc("GET /stac/collections/{id}", s.stacCollection)
-	mux.HandleFunc("GET /stac/collections/{id}/items", s.stacItems)
-	mux.HandleFunc("GET /stac/search", s.stacSearch)
-	mux.HandleFunc("POST /stac/search", s.stacSearch)
 	mux.HandleFunc("GET /viewer", s.viewer)
 	mux.HandleFunc("GET /viewer.rgis", s.viewerProject)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
@@ -173,8 +169,6 @@ func (s *Server) conformance(context.Context, *struct{}) (*conformanceOutput, er
 		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/features-filter",
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
-		"https://api.stacspec.org/v1.0.0/core",
-		"https://api.stacspec.org/v1.0.0/item-search",
 	}
 	return out, nil
 }
