@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>postfgb v2 · design</title>
 <style>
-:root{--bg:#101112;--fill:#17181a;--lane:#141517;--track:#25272b;--line:#34373d;--fg:#d8dadf;--mut:#868b94;--accent:#f2a93b;--cpu:#f2a93b;--net:#4fc3dc;--db:#7ccf8b;--band:#2a2f36;--lit:#2d2a22;--fillLit:#2b2619;color-scheme:dark}
+:root{--bg:#101112;--fill:#17181a;--lane:#141517;--track:#25272b;--line:#34373d;--fg:#d8dadf;--mut:#868b94;--accent:#f2a93b;--cpu:#f2a93b;--net:#4fc3dc;--db:#7ccf8b;--lit:#2d2a22;--fillLit:#2b2619;color-scheme:dark}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
@@ -23,20 +23,18 @@ nav button[aria-selected=true]{color:var(--fg);box-shadow:inset 0 -2px 0 var(--a
 .wl .k{color:var(--mut);font-size:11px;letter-spacing:.05em;text-transform:uppercase}
 .wl input[type=range]{width:150px;accent-color:var(--accent);margin:0}
 .wl output{color:var(--fg);white-space:nowrap}
-.sum{width:100%;margin:0;color:var(--mut);font-size:12px}
 .legend{width:100%;display:flex;flex-wrap:wrap;gap:2px 16px;font-size:11px;color:var(--mut)}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 main{max-width:1400px;margin:0 auto;padding:16px 20px 28px}
 .tab{display:none}
 .tab.on{display:block}
 .stage{position:relative;width:100%;border:1px solid var(--line);border-radius:6px;background:var(--lane);overflow:hidden}
-.stage canvas,.stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+.stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
 .stage svg{pointer-events:none}
 .t{font-size:13.5px;font-weight:600;fill:var(--fg)}
 .s{font-size:11.5px;fill:var(--mut)}
 .v{font-size:13px;fill:var(--fg)}
 .lab{font-size:11.5px;letter-spacing:.05em;fill:var(--mut)}
-.hit{fill:transparent;pointer-events:all;cursor:pointer}
 .status{min-height:1.5em;margin:10px 2px 0;font-size:13px}
 .side{margin-top:14px;border:1px solid var(--line);border-radius:6px;padding:16px 20px;background:var(--fill)}
 .side h2{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
@@ -54,24 +52,12 @@ table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:14px}
 th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
 th:first-child,td:first-child{text-align:left}
 th{color:var(--mut);font-weight:500}
-th.grp{color:var(--fg)}
 .box{border:1px solid var(--line);border-radius:6px;padding:16px 20px;background:var(--fill);margin-bottom:18px}
 .tab h3{margin:22px 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .box h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
 .box p{margin:6px 0}
 tr.pick td{font-weight:600}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
-.grid2 h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
-.grid2 ul{margin:0 0 20px;padding-left:18px}
-.grid2 ul.dec{list-style:none;padding-left:0}
-.grid2 li{margin:0 0 8px}
-.grid2 li span{color:var(--mut)}
-.tag{display:inline-block;min-width:66px;padding:0 6px;margin-right:6px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);color:var(--mut)}
-.tag.built{color:var(--fg)}
-.tag.decided,.tag.next{color:var(--accent);border-color:var(--accent)}
-.tag.cut{text-decoration:line-through}
 footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;border-top:1px solid var(--line)}
-@media (max-width:900px){.grid2{grid-template-columns:1fr}}
 #fig-model{aspect-ratio:1000 / 470}
 #fig-model text{font-family:inherit}
 #fig-model .plate{fill:var(--fill)}#fig-model .plate-edge{fill:none;stroke:var(--line);stroke-width:1.2}
@@ -79,7 +65,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
 #fig-model .stripe{fill:var(--mut)}#fig-model .role-net .stripe{fill:var(--net)}#fig-model .role-db .stripe{fill:var(--db)}#fig-model .role-step .stripe{fill:var(--cpu)}
 #fig-model .icon{color:var(--mut)}#fig-model .role-net .icon{color:var(--net)}#fig-model .role-db .icon{color:var(--db)}#fig-model .role-step .icon{color:var(--cpu)}
 #fig-model .track{fill:var(--track)}#fig-model .meter{fill:var(--mut)}#fig-model .m-net{fill:var(--net)}#fig-model .m-db{fill:var(--db)}#fig-model .m-cpu{fill:var(--cpu)}
-#fig-model .edge{fill:none;stroke:var(--mut)}#fig-model .edge.e-net{stroke:var(--net)}#fig-model .edge.e-db{stroke:var(--db)}
+#fig-model .edge{fill:none;stroke:var(--mut)}#fig-model .edge.e-db{stroke:var(--db)}
 #fig-model .edge.dash{stroke-dasharray:5 4}#fig-model .edge.hot{stroke:var(--fg);marker-end:url(#ar-fg)}
 #fig-model .box{cursor:pointer}
 #fig-overviews{aspect-ratio:1000 / 440}#fig-load{aspect-ratio:1000 / 492}#fig-reads{aspect-ratio:1000 / 340}
@@ -97,7 +83,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
 .m-net{fill:var(--net)}.m-db{fill:var(--db)}.m-cpu{fill:var(--cpu)}.m-mut{fill:var(--mut)}
 #fig-load .icon,#fig-reads .icon{color:var(--mut)}#fig-load .role-net .icon{color:var(--net)}#fig-load .role-db .icon{color:var(--db)}#fig-load .role-step .icon{color:var(--cpu)}
 #fig-reads .role-net .icon{color:var(--net)}#fig-reads .role-db .icon{color:var(--db)}#fig-reads .role-step .icon{color:var(--cpu)}
-#fig-load .ld-arrow,#fig-reads .rd-arrow{fill:none}#fig-load .ld-arrow.hot,#fig-reads .rd-arrow.hot{stroke:var(--fg);marker-end:url(#ar-fg)}
+#fig-load .ld-arrow,#fig-reads .rd-arrow{fill:none}#fig-reads .rd-arrow.hot{stroke:var(--fg);marker-end:url(#ar-fg)}
 #fig-load .ld-sub.on{fill:var(--fg)}#fig-load .ld-sub.done{fill:var(--mut)}#fig-load .ld-sub{fill:var(--mut)}
 .lede{margin:14px 2px 4px;font-size:15px}
 .lede span{display:block;color:var(--mut);font-size:13px;margin-top:3px}
@@ -129,7 +115,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
 <symbol id="i-net" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l4 3-4 3M10 9l4 3-4 3M17 9l4 3-4 3"/></symbol>
 <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></symbol>
 <symbol id="i-page" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h6M10 16h6"/></symbol>
-</defs><marker id="ar-mut" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--mut)"/></marker><marker id="ar-net" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--net)"/></marker><marker id="ar-db" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--db)"/></marker><marker id="ar-fg" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--fg)"/></marker></svg>
+</defs><marker id="ar-mut" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--mut)"/></marker><marker id="ar-db" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--db)"/></marker><marker id="ar-fg" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--fg)"/></marker></svg>
 <div class="top">
   <header>
     <div class="brand">postfgb v2 · design</div>
@@ -234,14 +220,13 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
 
 <script>
 const PAL = {
-  dark: { bg: '#101112', fill: '#17181a', lane: '#141517', track: '#25272b', line: '#34373d', fg: '#d8dadf', mut: '#868b94', accent: '#f2a93b', cpu: '#f2a93b', net: '#4fc3dc', db: '#7ccf8b', band: '#2a2f36', lit: '#2d2a22', fillLit: '#2b2619' },
-  light: { bg: '#fafaf9', fill: '#ffffff', lane: '#f1f2f3', track: '#e3e6ea', line: '#cdd1d6', fg: '#1c1d1f', mut: '#6a6f77', accent: '#b3600a', cpu: '#b3600a', net: '#0b7c99', db: '#2f7d4a', band: '#dde3ea', lit: '#f7ead7', fillLit: '#fbf1e4' },
+  dark: { bg: '#101112', fill: '#17181a', lane: '#141517', track: '#25272b', line: '#34373d', fg: '#d8dadf', mut: '#868b94', accent: '#f2a93b', cpu: '#f2a93b', net: '#4fc3dc', db: '#7ccf8b', lit: '#2d2a22', fillLit: '#2b2619' },
+  light: { bg: '#fafaf9', fill: '#ffffff', lane: '#f1f2f3', track: '#e3e6ea', line: '#cdd1d6', fg: '#1c1d1f', mut: '#6a6f77', accent: '#b3600a', cpu: '#b3600a', net: '#0b7c99', db: '#2f7d4a', lit: '#f7ead7', fillLit: '#fbf1e4' },
 };
 let P = PAL.dark;
 
-const K = { raw: 940, up: 200, zst: 220, col: 40, run: 30, idxRow: 80, node: 40, fence: 16, fenceEvery: 256, meta: 160, block: 8192, pageBytes: 8192, cache: 256 << 20, sec: 10e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 940, up: 200, zst: 220, col: 40, idxRow: 80, node: 40, fence: 16, fenceEvery: 256, meta: 160, block: 8192, sec: 10e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
-const fmtMiB = b => `${+(b / 1048576).toFixed(1)} MiB`;
 
 const CPU_SHARE = { receive: 0.25, validate: 0.15, derive: 0.35, compress: 0.25 };
 const FEAT_PER_BLOCK = Math.max(1, Math.floor(K.block / K.raw));
@@ -256,9 +241,8 @@ function collectionStored(f) {
   const samples = sampleFileBytes(Math.min(f, 256) * cells) + sampleFileBytes(256 * l6Cells(cells)) + sampleFileBytes(256 * l2Cells(cells));
   const ids = W.n * K.idxRow;
   const rows = 6 * cells + 3 * l6Cells(cells) + 3 * l2Cells(cells);
-  return { cells, detail, samples, ids, rows, rowBytes: rows * K.meta, total: detail + samples + ids + rows * K.meta };
+  return { detail, samples, rows, total: detail + samples + ids + rows * K.meta };
 }
-const TYPICAL = 12000, DENSE = 2500000;
 const W = { n: 1000000000, f: 12000, link: 125e6, page: 1000 };
 const TYPES = [{ name: 'mean', f: 12000 }, { name: 'dense', f: 2500000 }];
 const S = {
@@ -267,17 +251,13 @@ const S = {
   ov: { z: 13, sweep: null },
   load: { k: 0, sel: 0, play: null },
   reads: { req: 0, sel: 0, lit: new Set(), demo: null },
-  drag: null,
 };
-const NS = 'http://www.w3.org/2000/svg';
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const list = items => (items.length ? `<ul>${items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '');
 const pct = v => `${Math.round(v * 100)}%`;
 const fmt = n => Math.round(n).toLocaleString('en-GB');
 const set = (sel, text) => { const el = $(sel); if (el && el.textContent !== text) el.textContent = text; };
-const txt = (el, text) => { if (el.textContent !== text) el.textContent = text; };
-const alpha = (h, a) => { const n = parseInt(h.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
 
 function fmtBytes(b) {
   if (b < 1024) return `${Math.round(b)} B`;
@@ -309,7 +289,7 @@ function writeCost(f, link) {
   const db = fileBytes + idxBytes + fenBytes + colBytes + runBytes + sampleBytes + meta;
   const tUp = upload / link, tDb = db / K.db;
   const stage = Object.fromEntries(Object.entries(CPU_SHARE).map(([k, s]) => [k, s * cpu]));
-  return { f, files, samples, featuresPerBlock: FEAT_PER_BLOCK, cpu, stage, upload, memory, fileBytes, idxBytes, fenceBytes: fenBytes, chunkBytes: fileBytes, colBytes, runBytes, sampleBytes, meta, db, tUp, tDb, total: tUp + cpu + tDb + K.fixed, encodedOut: fileBytes + idxBytes + fenBytes, chunks: 1 };
+  return { f, files, cpu, stage, upload, memory, fileBytes, idxBytes, fenceBytes: fenBytes, chunkBytes: fileBytes, colBytes, runBytes, sampleBytes, meta, db, tUp, tDb, total: tUp + cpu + tDb + K.fixed };
 }
 function steps(list, link) {
   const rows = list.map(s => ({ name: s.name, db: s.db || 0, net: s.net || 0, cpu: s.cpu || 0 }));
@@ -514,7 +494,6 @@ class Model {
   currentStep() { const d = S.model.demo; return d ? d.seq[d.i] : null; }
   render() {
     const c = costNow();
-    this.cur = c;
     const d = S.model.demo, cs = this.currentStep();
     for (const { b, g, t1, t2, meter } of this.boxes) {
       const n = MODEL[b.id];
@@ -574,7 +553,6 @@ const kmTile = z => (40075.017 / 2 ** z) * Math.cos((48 * Math.PI) / 180);
 const cellKm2 = L => 85010745 / 4 ** L;
 const km2 = a => (a < 10 ? a.toFixed(1) : fmt(a));
 const withinOf = L => fmt(4 ** (8 - L));
-const km2short = a => (a >= 1e6 ? `${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${Math.round(a / 1e3)}k` : km2(a));
 const fmtCount = n => (n >= 0.05 ? (n < 1 ? n.toFixed(1) : fmt(n)) : '< 0.1');
 const detailAt = z => (W.f / cellKm2(8)) * 12 * kmTile(z) ** 2;
 const rungName = k => (k === 'detail' ? 'detail' : `L${k}`);
@@ -583,12 +561,6 @@ function rungCounts(z) {
   return RUNGS.map(k => ({ k, n: k === 'detail' ? detail : Math.min(detail, (CAP * area) / cellKm2(k)) }));
 }
 const pickAt = z => rungCounts(z).find(r => r.n <= W.page) || null;
-const detailFor = (f, z) => (f / cellKm2(8)) * 12 * kmTile(z) ** 2;
-const pickFor = (f, z) => rungCountsV(z, f).find(r => r.n <= W.page) || null;
-function rungCountsV(z, f) {
-  const area = 12 * kmTile(z) ** 2, detail = detailFor(f, z);
-  return RUNGS.map(k => ({ k, n: k === 'detail' ? detail : Math.min(detail, (CAP * area) / cellKm2(k)) }));
-}
 function zoomBands() {
   const out = {};
   for (const z of ZOOMS) {
@@ -981,25 +953,6 @@ function syncReads() {
   set('#status-reads', `${R.label}: reads ${fmtBytes(run.db)} for ${fmtBytes(run.net)} returned.`);
   document.querySelectorAll('#chips button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === Q.req)));
 }
-function syncFacts() {
-  const d13 = detailFor(DENSE, 13), d7 = detailFor(DENSE, 7);
-  const coarse = ZOOMS.find(z => { const p = pickFor(DENSE, z); return p && p.k === 8; });
-  const fine = ZOOMS.find(z => detailFor(DENSE, z) <= W.page);
-  set('#f-cache', fmtMiB(K.cache));
-  set('#f-cap', fmt(CAP));
-  set('#f-cap2', fmt(CAP));
-  set('#f-dense', fmtBig(DENSE));
-  set('#f-densemem', fmtBytes(DENSE * K.raw));
-  set('#f-filter', fmtBytes(readFilter(DENSE, W.page, W.link).db));
-  set('#f-billion', fmtBig(W.n));
-  set('#f-idx1e9', fmtBytes(W.n * K.idxRow));
-  set('#f-coarsezoom', coarse === undefined ? '—' : coarse);
-  set('#f-page', fmt(W.page));
-  set('#f-z7n', fmtBig(d7));
-  set('#f-z13n', fmt(d13));
-  set('#f-z13b', fmtBytes(d13 * K.zst));
-  set('#f-zdense', fine === undefined ? '—' : fine);
-}
 function sync() {
   if (S.tab === 'model') syncModel();
   if (S.tab === 'overviews') syncOverviews();
@@ -1009,7 +962,6 @@ function sync() {
 function refresh() {
   const el = $('#side-' + S.tab);
   if (el && SIDE[S.tab]) el.innerHTML = SIDE[S.tab]();
-  syncFacts();
   sync();
 }
 function act(tab, name, arg) {
