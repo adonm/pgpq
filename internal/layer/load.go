@@ -23,16 +23,19 @@ const (
 	maxChunkFeatures = 50000
 	maxChunkBytes    = 8 << 20
 	detailLevel      = 0
-	overviewLevel    = 10
-	denseLevel       = 12
 	overviewCap      = 256
 )
 
+// coarseStep rebuilds one overview level from the level below it.
+type coarseStep struct {
+	level int
+	from  int
+}
+
 var (
-	overviewLevels = []int{8, 10}
-	coarseLevels   = []int{6, 4, 2}
-	servedLevels   = []int{2, 4, 6, 8, 10, 12}
-	denseFeatures  = 100000
+	overviewLevels = []int{8}
+	coarseSteps    = []coarseStep{{level: 6, from: 8}, {level: 2, from: 6}}
+	servedLevels   = []int{2, 6, 8}
 )
 
 type blobPut func(ctx context.Context, collection, kind string, data []byte) (int64, error)
@@ -98,17 +101,6 @@ func (l *Layer) LoadIfUnchanged(ctx context.Context, name string, ds ingest.Data
 		}
 		chunks = append(chunks, rows...)
 	}
-	var dense []entry
-	for _, group := range groups {
-		if len(group) > denseFeatures {
-			dense = append(dense, group...)
-		}
-	}
-	rows, err := l.writeCells(ctx, l.blocks.Put, name, ds, groupByCell(sampleOverview(dense, denseLevel)), denseLevel)
-	if err != nil {
-		return LoadResult{}, err
-	}
-	chunks = append(chunks, rows...)
 	return l.commit(ctx, name, ds, cells, chunks, runFile, len(entries), base)
 }
 

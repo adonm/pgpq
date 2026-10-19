@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Read DESIGN.md before changing behavior — it is the contract. README describes what exists today.
+The design page (`internal/api/design.html`, served at `/design`) is the contract: read it before changing behavior. README describes what exists today.
 
 ## Commands
 
@@ -21,4 +21,4 @@ Read DESIGN.md before changing behavior — it is the contract. README describes
 - No cgo; the core path requires no PostgreSQL extensions.
 - Filters are enforced server-side, always; writes are served in writable mode only. No auth in the app: it runs behind an adjacent auth layer, with readonly workers for public traffic.
 - Migrations are append-only; never edit an applied migration.
-- Behavior changes and DESIGN.md changes ship in the same commit.
+- Behavior changes and design page changes ship in the same commit.

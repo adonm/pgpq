@@ -17,7 +17,7 @@ func TestSampleOverviewKeepsTheSmallestHashesPerCell(t *testing.T) {
 		id := strconv.Itoa(i)
 		entries = append(entries, entry{key: key, id: id, hash: idHash(id), cell: spatial.Partition(key)})
 	}
-	sample := sampleOverview(entries, overviewLevel)
+	sample := sampleOverview(entries, 8)
 	if len(sample) != overviewCap {
 		t.Fatalf("sample holds %d, want %d", len(sample), overviewCap)
 	}
@@ -44,20 +44,20 @@ func TestOverviewSamplesAndStaysOutOfLookups(t *testing.T) {
 	}
 	world := [4]float64{-180, -90, 180, 90}
 	detail := readAll(t, l, name, Query{Limit: 64})
-	overview := readAll(t, l, name, Query{Limit: 64, Level: overviewLevel, BBox: &world})
+	overview := readAll(t, l, name, Query{Limit: 64, Level: 8, BBox: &world})
 	checkOrdered(t, overview)
 	detailIDs := map[string]bool{}
 	population := map[uint64]int{}
 	for _, h := range detail {
 		detailIDs[h.ID] = true
-		population[spatial.Level(h.Key, overviewLevel)]++
+		population[spatial.Level(h.Key, 8)]++
 	}
 	kept := map[uint64]int{}
 	for _, h := range overview {
 		if !detailIDs[h.ID] {
 			t.Fatalf("overview feature %s is not a detail feature", h.ID)
 		}
-		kept[spatial.Level(h.Key, overviewLevel)]++
+		kept[spatial.Level(h.Key, 8)]++
 	}
 	for cell, n := range population {
 		if want := min(n, overviewCap); kept[cell] != want {
@@ -67,7 +67,7 @@ func TestOverviewSamplesAndStaysOutOfLookups(t *testing.T) {
 	if _, err := l.Lookup(ctx, name, detail[0].ID); err != nil {
 		t.Fatalf("lookup of a detail feature with an overview present: %v", err)
 	}
-	paged := readAll(t, l, name, Query{Limit: 3, Level: overviewLevel, BBox: &world})
+	paged := readAll(t, l, name, Query{Limit: 3, Level: 8, BBox: &world})
 	if !slices.Equal(sortedIDs(paged), sortedIDs(overview)) {
 		t.Fatal("paging the overview changed its features")
 	}
@@ -75,7 +75,7 @@ func TestOverviewSamplesAndStaysOutOfLookups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Items(ctx, name, Query{Limit: 5, Level: overviewLevel, Filter: expr}); !errors.Is(err, ErrInvalid) {
+	if _, err := l.Items(ctx, name, Query{Limit: 5, Level: 8, Filter: expr}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("overview with a filter: %v", err)
 	}
 }

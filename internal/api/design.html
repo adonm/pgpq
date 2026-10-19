@@ -172,7 +172,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
           <li><span class="tag built">built</span><b>Chunk size</b><br><span>2 MiB of uncompressed FGB or 50,000 features. Kept; retune only after measuring.</span></li>
           <li><span class="tag built">built</span><b>Sparse partitions</b><br><span>No packing. Every populated cell keeps at least one chunk.</span></li>
-          <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, each built per upload from the cell below. Detail is a key-range lookup over the L8 chunks, not a stored level. Level 4 and 12 are cut. Cap 256 per cell.</span></li>
+          <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, each built per upload from the cell below. Detail is not stored: it reads the L8 chunks whose envelope meets the bbox. Level 4 and 12 are cut. Cap 256 per cell.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell. The server reads only that body and writes only that cell’s rows.</span></li>
           <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
           <li><span class="tag built">built</span><b>Conditional loads</b><br><span>base=s answers 409 when a listed cell changed after s.</span></li>
@@ -194,7 +194,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>A reload of many cells is not one snapshot. Readers can see a mix of old and new cells until the last upload commits.</li>
           <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one snapshot.</li>
           <li>Id runs are delta-coded, so a lookup decodes each live run in full. At 1e9 features the runs total about 15 GB: a fence index per run is needed before lookups scale.</li>
-          <li>Low zooms: with no level below 8, a 1,000-feature page covers a dense view only from about zoom 11. Coarser views need a larger page: 10,000 from about zoom 9, 100,000 from about zoom 8.</li>
+          <li>Coarse zoom, dense data: below about zoom 10 a dense view is served by levels 6 and 2. A page that lags the zoom overscans: at zoom 7 a 1,000-feature page falls through to level 2 while the view holds about 1.9M features.</li>
           <li>Dense cities at zoom 13 hold about 240k features on screen, about 24 MB over the link. Use overviews until detail is small, around zoom 16 or 17.</li>
           <li>Overview responses carry full geometry, so they can be large.</li>
           <li>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</li>
@@ -268,7 +268,7 @@ const wDur = t => Math.min(2.4, 0.35 + 0.4 * Math.log10(1 + t * 1000));
 
 function writeCost(f, link) {
   const chunks = Math.max(1, Math.ceil(f / PER_CHUNK));
-  const samples = Math.min(f, 256) + (f > 100000 ? Math.min(f, 65536) : 0);
+  const samples = 3 * Math.min(f, 256);
   const cpu = f * K.sec;
   const upload = f * K.zst, memory = f * K.raw;
   const chunkBytes = f * K.zst, colBytes = f * K.col, runBytes = f * K.run;
@@ -276,7 +276,7 @@ function writeCost(f, link) {
   const db = chunkBytes + colBytes + runBytes + sampleBytes + meta;
   const tUp = upload / link, tDb = db / K.db;
   const stage = Object.fromEntries(Object.entries(CPU_SHARE).map(([k, s]) => [k, s * cpu]));
-  return { f, chunks, samples, cpu, stage, upload, memory, chunkBytes, colBytes, runBytes, sampleBytes, meta, db, tUp, tDb, total: tUp + cpu + tDb + K.fixed, encodedOut: chunkBytes + colBytes, files: 2 * chunks + 2 };
+  return { f, chunks, samples, cpu, stage, upload, memory, chunkBytes, colBytes, runBytes, sampleBytes, meta, db, tUp, tDb, total: tUp + cpu + tDb + K.fixed, encodedOut: chunkBytes + colBytes, files: 2 * chunks + 7 };
 }
 function steps(list, link) {
   const rows = list.map(s => ({ name: s.name, db: s.db || 0, net: s.net || 0, cpu: s.cpu || 0 }));
@@ -492,7 +492,7 @@ const MODEL = {
     layout: ['files: fgb, cols, idrun', 'rows written unpublished, by COPY'], index: [] },
   commit: { t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total,
     l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
-    text: 'One transaction: lock the collection row, check base=s, end the cell’s live rows, insert the new rows, insert the snapshot, publish the files. Nothing outside the cell is read or written.',
+    text: 'One transaction: lock the collection row, check base=s, end the cell’s live rows, insert the new rows, rebuild levels 6 and 2 for its ancestors from the samples below, insert the snapshot, publish the files. It reads its own samples and the sibling samples under its ancestors.',
     layout: ['one snapshot per upload'], index: [] },
   blobs: { t: 'blobs & files', kind: 'db', size: c => c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes,
     l1: c => `${fmtBytes(c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes)} of blocks`, l2: c => `${fmt(c.Wr.files)} files`,
@@ -697,8 +697,8 @@ class Overviews extends Fig {
     this.view = this.shape(0, 0, 1, 1, 0, { fill: false, stroke: 1.8 });
     this.bind(() => { this.view.color = P.fg; });
     this.text(X, Y - 10, 'one L8 cell, about 36 km across, on average', 'lab');
-    this.text(X, Y + S + 16, 'L6 cell · 285 km across · 16 L8 cells', 'lab');
-    this.text(X, Y + S + 32, 'L2 cell · 4,570 km · 4,096 L8 cells', 'lab');
+    this.text(X, Y + S + 16, 'L6 cell · 144 km across · 16 L8 cells', 'lab');
+    this.text(X, Y + S + 32, 'L2 cell · 2,305 km · 4,096 L8 cells', 'lab');
     this.viewText = this.text(X, Y + S + 48, '', 'lab');
     this.stripLabel = this.text(370, 44, '', 'lab');
     const cw = 616 / ZOOMS.length;
@@ -798,9 +798,10 @@ const SUBS = [
   'lock the collection row, so commits serialize',
   'base= check: 409 if the cell changed after s',
   'end the cell’s live chunks and samples',
-  'insert the chunk rows, samples and id run at snapshot s',
-  'publish the cell’s files',
-  'insert the snapshot and advance the collection',
+  'insert the chunk rows and samples at snapshot s',
+  'rebuild levels 6 and 2 for the ancestors from the samples below',
+  'insert the id run and snapshot, advance the collection',
+  'publish the cell’s files and commit',
 ];
 
 class Load extends Fig {
@@ -854,7 +855,7 @@ class Load extends Fig {
     const edge = this.shape(10, 352, 980, 126, 6, { fill: false, stroke: 1.2 });
     this.bind(() => { panel.color = P.fill; edge.color = P.line; });
     this.text(24, 374, 'COMMIT · one transaction, one snapshot', 'v');
-    this.subs = SUBS.map((s, j) => this.text(24, 393 + j * 15, `${j + 1}. ${s}`, 'v'));
+    this.subs = SUBS.map((s, j) => this.text(24, 389 + j * 14, `${j + 1}. ${s}`, 'v'));
     this.render();
   }
   activeStage() { return S.load.k === 0 ? -1 : S.load.k <= 6 ? S.load.k - 1 : 6; }
@@ -867,14 +868,14 @@ class Load extends Fig {
     const p = S.load.play;
     if (!p) return false;
     p.t += dt;
-    S.load.k = Math.min(12, 1 + Math.floor(p.t / 0.8));
-    if (S.load.k >= 12) S.load.play = null;
+    S.load.k = Math.min(13, 1 + Math.floor(p.t / 0.8));
+    if (S.load.k >= 13) S.load.play = null;
     return true;
   }
   act(name, arg) {
     const L = S.load;
     if (name === 'demo') { L.play = { t: 0 }; L.k = 1; }
-    if (name === 'step') { L.play = null; L.k = Math.min(12, Math.max(0, L.k + (arg || 1))); }
+    if (name === 'step') { L.play = null; L.k = Math.min(13, Math.max(0, L.k + (arg || 1))); }
     if (name === 'reset') { L.k = 0; L.play = null; }
   }
 }
@@ -1055,7 +1056,7 @@ const SIDE = {
     return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
       <input type="range" id="z-range" min="6" max="17" step="1" aria-label="Zoom level">
       <p>Level 8 is the ingest unit, and its samples are the coarse views: 256 kept in each partition, the features with the smallest hash. Level 6 keeps 256 in each of its cells, built from its 16 partitions, and level 2 from its 4,096. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
-      <p class="note">Detail is a key-range scan over the L8 chunks, not a stored level: the catalog is sorted by key, so a bbox names one contiguous range of chunks and only those are read. The row count stays bounded as the zoom rises.</p>
+      <p class="note">Detail is not stored: it reads the L8 chunks whose envelope meets the bbox, pruned from the key-ordered chunk list; an in-memory R-tree over the envelopes is planned. The row count stays bounded as the zoom rises.</p>
       <p class="note">Each zoom uses the finest option that fits one page. From the workload bar: the cell size is spread evenly over the view, and the page size is the budget. A larger page lets a fine view use detail sooner instead of a sparse sample.</p>
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
@@ -1098,7 +1099,7 @@ function syncLoad() {
   const st = STAGES[cur], c = costNow();
   set('#l-title', st.t);
   set('#l-text', st.text);
-  set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of 6: ${SUBS[k - 7]}.` : '');
+  set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of ${SUBS.length}: ${SUBS[k - 7]}.` : '');
   set('#status-load', k === 0 ? 'Demo runs one upload through its seven stages.' : `Stage ${cur + 1} of 7 · ${st.t}: ${st.l1(c)}, ${st.l2(c)}.`);
 }
 function syncReads() {

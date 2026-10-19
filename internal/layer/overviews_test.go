@@ -54,24 +54,32 @@ func TestOverviewLevelsKeepTheSmallestHashesPerCell(t *testing.T) {
 		t.Fatal(err)
 	}
 	detail := readAll(t, l, name, Query{Limit: 64})
-	for _, level := range []int{2, 4, 6, 8, 10} {
+	for _, level := range []int{2, 6, 8} {
 		checkTopPerCell(t, l, name, level, detail)
 	}
 }
 
-func TestDensePartitionsKeepLevelTwelve(t *testing.T) {
-	old := denseFeatures
-	denseFeatures = 0
-	t.Cleanup(func() { denseFeatures = old })
+func TestReloadRebuildsCoarseLevels(t *testing.T) {
 	l, ctx := openTest(t)
-	name := "layer_test_dense"
+	name := "layer_test_coarse"
 	dropCollection(t, l, name)
 	t.Cleanup(func() { dropCollection(t, l, name) })
-	features := slices.Concat(cityFeatures("paris", paris, 200, 64), cityFeatures("dhaka", dhaka, 200, 65))
-	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, features), nil); err != nil {
+	first := cityFeatures("paris", paris, 300, 66)
+	cells := cellsOf(t, first)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, first), cells); err != nil {
 		t.Fatal(err)
 	}
-	checkTopPerCell(t, l, name, denseLevel, readAll(t, l, name, Query{Limit: 64}))
+	second := cityFeatures("paris2", paris, 120, 67)
+	cells = slices.Concat(cellsOf(t, first), cellsOf(t, second))
+	slices.Sort(cells)
+	cells = slices.Compact(cells)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, second), cells); err != nil {
+		t.Fatal(err)
+	}
+	detail := readAll(t, l, name, Query{Limit: 64})
+	for _, level := range []int{2, 6} {
+		checkTopPerCell(t, l, name, level, detail)
+	}
 }
 
 func TestLoadIfUnchangedRejectsAStaleBase(t *testing.T) {
