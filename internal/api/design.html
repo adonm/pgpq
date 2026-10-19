@@ -445,7 +445,7 @@ const BOXES = [
   { key: 'loader', id: 'loader', x: 16, y: 36, w: 124, h: 66 }, { key: 'decode', id: 'decode', x: 180, y: 36, w: 124, h: 66 },
   { key: 'validate', id: 'validate', x: 344, y: 36, w: 124, h: 66 }, { key: 'sort', id: 'sort', x: 508, y: 36, w: 124, h: 66 },
   { key: 'encode', id: 'encode', x: 672, y: 36, w: 124, h: 66 }, { key: 'commit', id: 'commit', x: 836, y: 36, w: 124, h: 66 },
-  { key: 'blobsW', id: 'blobs', x: 410, y: 146, w: 214, h: 66 }, { key: 'idsW', id: 'idRuns', x: 672, y: 146, w: 124, h: 66 },
+  { key: 'blobsW', id: 'blobs', x: 634, y: 146, w: 200, h: 66 }, { key: 'idsW', id: 'idRuns', x: 344, y: 146, w: 124, h: 66 },
   { key: 'catalogW', id: 'catalog', x: 836, y: 146, w: 124, h: 66 },
   { key: 'catalogR', id: 'catalog', x: 154, y: 284, w: 116, h: 66 }, { key: 'blobsR', id: 'blobs', label: 'blobs', x: 434, y: 284, w: 116, h: 66 },
   { key: 'idsR', id: 'idRuns', x: 854, y: 284, w: 116, h: 66 },
@@ -508,15 +508,15 @@ const MODEL = {
     text: 'One transaction: lock the collection row, delete the cell’s old files, insert the new file rows, rebuild levels 6 and 2 for its ancestors, replace the cell’s id index rows, bump the version. A reader that listed a file just before it was deleted retries once. Cost grows with the cell.',
     layout: ['files replaced in place'], index: [] },
   blobs: { t: 'blobs & files', kind: 'db', size: c => c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes + c.Wr.sampleBytes,
-    l1: c => `${fmtBytes(c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes + c.Wr.sampleBytes)} of blocks`, l2: c => `${fmt(c.Wr.files)} files`,
+    l1: c => `${fmtBytes(c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes + c.Wr.sampleBytes)} per cell`, l2: c => `${fmtBytes(typeTotals(W.f).stored)} total`,
     text: `One virtual FlatGeobuf per partition, sliced into ${fmt(K.block)}-byte uncompressed pieces and zstd-compressed into block rows, one per heap page. Its R-tree, key fence and column sidecar are stored the same way. The files table lists each file and its kind.`,
     layout: ['blocks: file_id bigint, n int, data bytea (storage plain)', 'files: file_id identity, collection_id smallint, kind, bytes, published, created'], index: ['blocks pk (file_id, n)', 'files pk (file_id)'] },
   idRuns: { t: 'id index', kind: 'db', size: c => c.Wr.f * K.idxRow,
-    l1: c => `${fmt(c.Wr.f)} rows`, l2: c => `${fmtBytes(c.Wr.f * K.idxRow)} on disk`,
+    l1: c => `${fmt(c.Wr.f)} rows/cell`, l2: c => `${fmtBytes(W.n * K.idxRow)} total`,
     text: 'One row per feature: the hash of its id and the key that locates it. A lookup reads the rows for a hash, jumps to the key in the partition file through its fence, and checks the id exactly. The rows are replaced with the cell on every upload.',
     layout: ['ids: collection_id smallint, hash, key', 'one row per feature'], index: ['pk (collection_id, hash, key)'] },
   catalog: { t: 'catalog', kind: 'db', size: c => c.Wr.files * K.meta,
-    l1: c => `${fmt(c.Wr.files)} file rows`, l2: c => `${fmtBytes(c.Wr.files * K.meta)} of rows`,
+    l1: c => `${fmt(c.Wr.files)} rows/cell`, l2: c => `${fmt(Math.ceil(W.n / W.f) * c.Wr.files)} rows total`,
     text: 'One row per stored file: a partition’s detail file or an overview sample, with its key range, envelope and sizes, keyed by the 2-byte collection id. The collections row holds the name, version and column list, so a worker can tell a cached file list from a stale one. A commit replaces a cell’s files and bumps the version.',
     layout: ['files: file_id identity pk, collection_id smallint, cell, level, first_key, last_key, minx, miny, maxx, maxy, features, fgb_file, fence_file, col_file, bytes', 'collections: id smallint pk, name unique, version, id_column, columns_json', 'ids: collection_id smallint, hash, key'],
     index: ['files (collection_id, cell, level)', 'collections pk (id), unique (name)', 'ids pk (collection_id, hash, key)'] },
@@ -582,8 +582,13 @@ class Model extends Fig {
       const lane = this.shape(0, y, 1000, h, 0, { fill: true, stroke: false });
       this.bind(() => { lane.color = P[fill]; });
       this.text(14, ty, label, 't');
+    if (y === 0) this.totalText = this.text(986, 22, '', 'lab', 'end');
     }
     const divider = this.line([[0, 240], [1000, 240]], 1);
+    this.bind(() => {
+      const T = typeTotals(W.f);
+      this.totalText.textContent = `${fmtBig(W.n)} · ${fmt(T.cells)} cells · ${fmtBytes(T.stored)} stored`;
+    });
 this.bind(() => { divider.color = P.line; });
     for (const [id, from, fs, to, ts, dash] of EDGES) {
       const pts = [anchor(from, fs), anchor(to, ts)];
@@ -1063,7 +1068,7 @@ const SIDE = {
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   load() {
-    return `<h2 id="l-title"></h2><p id="l-text"></p><p class="note" id="l-sub"></p>
+    return `<h2 id="l-title"></h2><p id="l-text"></p><p class="note" id="l-sub"></p><p class="note" id="l-totals"></p>
       <div class="ctl"><button class="btn" data-act="demo">Demo (D)</button><button class="btn" data-act="step">Step (→)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   reads() {
@@ -1133,6 +1138,8 @@ function syncLoad() {
   set('#l-title', st.t);
   set('#l-text', st.text);
   set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of ${SUBS.length}: ${SUBS[k - 7]}.` : '');
+  const T = typeTotals(W.f);
+  set('#l-totals', `At ${fmtBig(W.n)}: ${fmt(T.cells)} uploads, ${fmtBytes(T.upload)} up, ${fmtBytes(T.stored)} stored, ${fmtTime(T.time)} end to end.`);
   set('#status-load', k === 0 ? 'Demo runs one upload through its seven stages.' : `Stage ${cur + 1} of 7 · ${st.t}: ${st.l1(c)}, ${st.l2(c)}.`);
 }
 function syncReads() {
