@@ -605,7 +605,7 @@ const km2 = a => (a < 10 ? a.toFixed(1) : fmt(a));
 const withinOf = L => fmt(4 ** (8 - L));
 const fmtCount = n => (n >= 0.05 ? (n < 1 ? n.toFixed(1) : fmt(n)) : '< 0.1');
 const detailAt = z => (W.f / cellKm2(8)) * 12 * kmTile(z) ** 2;
-const rungName = k => (k === 'detail' ? 'detail' : `L${k}`);
+const rungName = k => (k === 'detail' ? 'L8' : `L${k}`);
 function rungCounts(z) {
   const area = 12 * kmTile(z) ** 2, detail = detailAt(z);
   return RUNGS.map(k => ({ k, n: k === 'detail' ? detail : Math.min(detail, (CAPS[k] * area) / cellKm2(k)) }));
@@ -662,21 +662,21 @@ class Overviews {
       this.view.setAttribute('width', g.w); this.view.setAttribute('height', g.h);
     } else this.view.setAttribute('visibility', 'hidden');
     this.viewtext.textContent = `view at zoom ${z}: ${km2(4 * t)} × ${km2(3 * t)} km · detail would be ${fmtCount(detail)} features`;
-    this.striplabel.textContent = `level served at each zoom · cell ${fmt(W.f)} features · page ${fmt(W.page)}`;
+    this.striplabel.textContent = `level served at each zoom · L8 = detail FGB · page ${fmt(W.page)}`;
     this.cells.forEach(c => {
       const zz = +c.dataset.z, p = pickAt(zz);
       c.classList.toggle('on', zz === z);
       c.querySelector('text.v').textContent = p ? rungName(p.k) : 'none';
     });
-    this.rowslabel.textContent = `features on screen at zoom ${z} · line marks one page of ${fmt(W.page)}`;
+    this.rowslabel.textContent = `features in view at zoom ${z} · one page marked · detail via the L8 FGB R-tree`;
     this.budget.setAttribute('x', (600 + 230 * logFrac(W.page, 0, 9)).toFixed(1));
     this.rows.forEach((r, i) => {
       const row = rows[i], chosen = !!pick && pick.k === row.k;
       r.classList.toggle('pick', chosen);
       r.querySelector('.bar').setAttribute('width', (230 * logFrac(row.n, 0, 9)).toFixed(1));
-      r.querySelector('.nm').textContent = `${chosen ? '→ ' : ''}${row.k === 'detail' ? 'detail · R-tree ranges' : `${rungName(row.k)} · ${km2(cellKm2(row.k))} km² cell`}`;
-      r.querySelector('.sb').textContent = `${row.k === 'detail' ? 'no sample cap · R-tree ranges' : `${CAPS[row.k]} per cell`} · ${bandText(row.k, bands)}`;
-      r.querySelector('.vl').textContent = `${fmtCount(row.n)} · ${fmtBytes(row.n * K.zst)}`;
+      r.querySelector('.nm').textContent = `${chosen ? '→ ' : ''}${row.k === 'detail' ? 'L8 detail · FGB R-tree' : `${rungName(row.k)} · ${km2(cellKm2(row.k))} km² cell`}`;
+      r.querySelector('.sb').textContent = `${row.k === 'detail' ? 'no cap · R-tree' : `${CAPS[row.k]} per cell`} · ${bandText(row.k, bands)}`;
+      r.querySelector('.vl').textContent = row.k === 'detail' ? `${fmtCount(row.n)} · R-tree + ${fmtBytes(Math.min(row.n, W.page) * K.zst)}` : `${fmtCount(row.n)} · ${fmtBytes(Math.min(row.n, W.page) * K.zst)}`;
     });
   }
   show() { this.render(); }
@@ -921,7 +921,7 @@ const SIDE = {
       <p>L8 is the detail file, not a sample. Level 6 keeps 2,048 features in each of its 16 L8 cells; level 4 keeps 2,048 in each of its 16 L6 cells; level 2 keeps 2,048 from its 16 L4 cells. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
       <p class="note">Before ranking, the zoomed-out samples drop areal and linear features smaller than one pixel: about 1.6 km for L2, 400 m for L4 and 100 m for L6 at 48°N. Points stay. L8 detail keeps everything. The survivors are still smallest-hash, not largest-bbox, so visible features stay uniform rather than big-feature-biased.</p>
       <p class="note">L2 is rebuilt in the background: a commit queues its parent, and a worker rebuilds it after 5 s of quiet or 60 s at most. Detail, L6 and L4 are current.</p>
-      <p class="note">Detail is the L8 file itself: its R-tree names the byte ranges a bbox needs, so only those blocks are read. There is no detail sample above L8.</p>
+      <p class="note">L8 is the detail FGB file itself. Its packed R-tree is the spatial index: it names the byte ranges a bbox needs, so a page reads only the matching blocks, not the whole cell. There is no sample above L8.</p>
       <p class="note">Below z11 each zoom picks the sample whose count is closest to one page on a log scale; from z11 detail is used. A level can overshoot and the page limit trims it; under-filled samples are marked. From the workload bar: the cell size is spread evenly over the view, and the page size is the budget.</p>
       <p class="note" id="ov-counts"></p>
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
@@ -987,11 +987,11 @@ function syncOverviews() {
     set('#status-overviews', `Zoom ${z}: no level fits one page of ${fmt(W.page)}.`);
     return;
   }
-  const want = pick.k === 'detail' ? 'detail' : `overview=${pick.k}`;
+  const want = pick.k === 'detail' ? 'L8 detail' : `overview=${pick.k}`;
   const sparse = pick.k !== 'detail' && pick.n < W.page / 2 ? ` The sample under-fills the page; add L4 or read detail with a page of about ${fmt(Math.ceil(detail))}.` : '';
   const shown = Math.min(pick.n, W.page);
-  set('#z-pick', `Ask for ${want}: ${fmtCount(pick.n)} features, ${fmtBytes(shown * K.zst)} over the link (${fmtTime((shown * K.zst) / W.link)}). Detail would be ${fmtCount(detail)} features.${sparse}`);
-  set('#status-overviews', `Zoom ${z}: ask for ${want}, ${fmtCount(pick.n)} features. Detail: ${fmtCount(detail)}.`);
+  set('#z-pick', pick.k === 'detail' ? `Ask for L8 detail: ${fmtCount(pick.n)} features; the FGB R-tree reads only the blocks in view (${fmtBytes(shown * K.zst)}, ${fmtTime((shown * K.zst) / W.link)}).` : `Ask for ${want}: ${fmtCount(pick.n)} features, ${fmtBytes(shown * K.zst)} over the link (${fmtTime((shown * K.zst) / W.link)}). L8 detail would be ${fmtCount(detail)} features.${sparse}`);
+  set('#status-overviews', pick.k === 'detail' ? `Zoom ${z}: L8 detail via the FGB R-tree, ${fmtCount(pick.n)} features.` : `Zoom ${z}: ask for ${want}, ${fmtCount(pick.n)} features. L8 detail: ${fmtCount(detail)}.`);
 }
 
 function syncLoad() {
