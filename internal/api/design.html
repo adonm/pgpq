@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>postfgb v2 design</title>
+<style>
+:root { --ink:#1d2430; --muted:#5b6575; --line:#d9dee7; --bg:#f6f7f9; --built:#2f7d32; --next:#b26a00; --cut:#6b7280; --accent:#2f6fc2; }
+* { box-sizing:border-box; }
+body { margin:0; font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+header { background:#fff; border-bottom:1px solid var(--line); padding:26px 32px; }
+header h1 { margin:0 0 6px; font-size:26px; }
+main { padding:8px 16px 40px; }
+section { background:#fff; border:1px solid var(--line); border-radius:10px; padding:20px 24px; margin:16px auto; max-width:1120px; }
+h2 { margin:0 0 10px; font-size:19px; }
+.sub { color:var(--muted); margin:6px 0; }
+code { background:#eef1f5; padding:0 5px; border-radius:4px; font-size:13px; }
+.chip { display:inline-block; padding:1px 9px; border-radius:99px; font-size:12px; font-weight:600; color:#fff; white-space:nowrap; }
+.built { background:var(--built); } .next { background:var(--next); } .cut { background:var(--cut); }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+.card { border:1px solid var(--line); border-radius:8px; padding:13px 15px; background:#fcfdfe; }
+.card b { display:block; margin-bottom:3px; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+.flow { display:flex; flex-wrap:wrap; gap:8px; align-items:stretch; }
+.step { flex:1 1 180px; border:1px solid var(--line); border-radius:8px; padding:11px 13px; background:#fcfdfe; }
+.step .n { color:var(--accent); font-weight:700; font-size:12px; letter-spacing:.04em; }
+.arrow { align-self:center; color:var(--muted); font-size:20px; }
+.ladder .row { display:grid; grid-template-columns:86px 1fr 380px; gap:14px; align-items:center; padding:9px 0; border-bottom:1px solid var(--line); }
+.track { background:#eef1f5; border-radius:6px; height:24px; overflow:hidden; }
+.bar { height:100%; background:linear-gradient(90deg,#a9c3ea,#2f6fc2); border-radius:6px; }
+.meter { height:18px; background:#eef1f5; border-radius:99px; overflow:hidden; margin:6px 0 2px; }
+.meter > span { display:block; height:100%; background:var(--accent); }
+footer { color:var(--muted); font-size:13px; text-align:center; padding:12px; }
+@media (max-width:760px) { .ladder .row { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+<h1>postfgb v2: the design on one page</h1>
+<p class="sub">Review copy of <code>DESIGN-next.md</code>, state at commit <code>9c97846</code>. Served at <code>/design</code>, next to <code>/viewer</code>.</p>
+<p><span class="chip built">built</span> <span class="chip next">next</span> <span class="chip cut">cut</span></p>
+</header>
+
+<main>
+
+<section>
+<h2>The model in three ideas</h2>
+<div class="grid">
+<div class="card"><b>Everything is immutable.</b>Features live in FlatGeobuf chunks, one catalog row per chunk. A load writes new files and new rows, and never edits old ones.</div>
+<div class="card"><b>Partitions are the unit.</b>Every feature belongs to one S2 level-8 cell, about 36 km across. Loads and replacements work on whole partitions. Reads find chunks by key range.</div>
+<div class="card"><b>Overviews are capped samples.</b>A cell keeps at most 256 features: the ones with the smallest hash of their id. Coarser levels are built from finer ones, so one rule holds at every zoom.</div>
+</div>
+</section>
+
+<section>
+<h2>Level ladder</h2>
+<p class="sub">Bar length follows log cell size. Each level keeps at most 256 features per cell, so a finer level shows more features on screen.</p>
+<div class="ladder">
+<div class="row"><div><b>L12</b> <small>~2.3 km</small></div><div class="track"><div class="bar" style="width:18%"></div></div><div>Dense partitions only (above 100,000 features). Up to 256 per cell. <span class="chip built">built</span></div></div>
+<div class="row"><div><b>L10</b> <small>~9 km</small></div><div class="track"><div class="bar" style="width:35%"></div></div><div>Every partition. Up to 256 per cell, so up to 4,096 per partition. <span class="chip built">built</span></div></div>
+<div class="row"><div><b>L8</b> <small>~36 km</small></div><div class="track"><div class="bar" style="width:51%"></div></div><div>Every partition, which is also the storage unit. 256 per partition. <span class="chip built">built</span></div></div>
+<div class="row"><div><b>L6</b> <small>~145 km</small></div><div class="track"><div class="bar" style="width:67%"></div></div><div>Coarse. Built from the level-8 samples in the same commit as each load. <span class="chip built">built</span></div></div>
+<div class="row"><div><b>L4</b> <small>~580 km</small></div><div class="track"><div class="bar" style="width:84%"></div></div><div>Coarse. Built from level 6. <span class="chip built">built</span></div></div>
+<div class="row"><div><b>L2</b> <small>~2,300 km</small></div><div class="track"><div class="bar" style="width:100%"></div></div><div>Coarse. Built from level 4. Continent and world views. <span class="chip built">built</span></div></div>
+</div>
+<p class="sub">Detail (every feature) sits below the finest level, in chunks. The client picks a level with <code>overview=N</code>. The server does not map zoom to level.</p>
+</section>
+
+<section>
+<h2>Why level 12 exists</h2>
+<p class="sub">Estimates for a dense partition (about 1,900 features per km², from the design's density figures) on a 1024×768 screen at 48°N. Measure on <code>buildings_fr</code> before trusting the numbers.</p>
+<table>
+<tr><th>Zoom</th><th>Detail in view</th><th>Level 8 sample</th><th>Level 10 sample</th><th>Level 12 sample</th></tr>
+<tr><td>13</td><td>~240k</td><td>~26</td><td>~400</td><td>~6k</td></tr>
+<tr><td>14</td><td>~60k</td><td>~6</td><td>~100</td><td>~1,600</td></tr>
+<tr><td>15</td><td>~15k</td><td>~2</td><td>~25</td><td>~400</td></tr>
+</table>
+<p class="sub">Detail is too large to draw at these zooms, and level 10 alone is too sparse at 14 and 15. Level 12 covers that gap, and only for dense partitions, so the storage cost stays small.</p>
+</section>
+
+<section>
+<h2>Load: one request, one snapshot</h2>
+<div class="flow">
+<div class="step"><div class="n">1 · STREAM</div>Read the body. Canonical ids and geometry checks. 422 for duplicate ids, bad geometry, or features outside the listed cells.</div>
+<div class="arrow">→</div>
+<div class="step"><div class="n">2 · BUCKET</div>Group features by level-8 partition, in memory. Spilling to disk is not built.</div>
+<div class="arrow">→</div>
+<div class="step"><div class="n">3 · WRITE BLOBS</div>In parallel: detail chunks, samples at levels 8 and 10, level 12 for dense partitions, and the id run. Blobs are immutable and written before the commit.</div>
+<div class="arrow">→</div>
+<div class="step"><div class="n">4 · COMMIT</div>One transaction: lock the collection, end replaced rows, insert new rows at snapshot s, rebuild levels 6, 4 and 2 from the children at s, publish the files.</div>
+</div>
+<p class="sub"><code>PUT ?base=s</code> fails with 409 if any listed partition changed after snapshot s.</p>
+</section>
+
+<section>
+<h2>Read: which path serves a request</h2>
+<table>
+<tr><th>Request</th><th>Path</th><th>Cost driver</th><th>Status</th></tr>
+<tr><td><code>items?bbox=</code></td><td>Catalog for the snapshot, cached. Chunks whose envelope meets the bbox. FlatGeobuf search. Paged by (key, id).</td><td>Chunks touched</td><td><span class="chip built">built</span></td></tr>
+<tr><td><code>items?filter=</code></td><td>Zone maps prune chunks. Column sidecars evaluate the predicate. Only matched features are read.</td><td>Column scan of unpruned chunks</td><td><span class="chip built">built</span> <small>no postings</small></td></tr>
+<tr><td><code>numberMatched=true</code></td><td>Sidecars are counted. No geometry is read.</td><td>As the filter</td><td><span class="chip built">built</span> <small>omitted with a bbox</small></td></tr>
+<tr><td><code>items?overview=N&amp;bbox=</code></td><td>Samples at level N that meet the bbox. Paged. No filter.</td><td>Features in view</td><td><span class="chip built">built</span> <small>N = 2, 4, 6, 8, 10, 12</small></td></tr>
+<tr><td><code>items/{id}</code></td><td>Id runs give candidate keys. Each key names a partition. The chunk covering the key is read and the id verified. 404 for none, 409 for more than one.</td><td>Live runs, no merge yet</td><td><span class="chip built">built</span></td></tr>
+</table>
+</section>
+
+<section>
+<h2>Storage</h2>
+<div class="grid">
+<div class="card"><b>files, blocks</b>Immutable files in 8,120-byte rows, in schema <code>pfgb</code>.</div>
+<div class="card"><b>chunks</b>One row per chunk: partition, level, seq, first and last (key, id), envelope, rows, file ids, zone map JSON, begin and end snapshot.</div>
+<div class="card"><b>partitions</b>Last changed snapshot per partition. Used by <code>base=</code>.</div>
+<div class="card"><b>id_runs</b>One run per load: sorted (hash of id, key) pairs. Live until a whole load replaces it.</div>
+<div class="card"><b>snapshots, collections</b>Snapshot times, for 72 h retention. Current snapshot and schema per collection.</div>
+<div class="card"><b>Caches</b>Three LRUs per worker, 256 MiB each: file bytes, chunk lists per snapshot, decoded id runs.</div>
+</div>
+</section>
+
+<section>
+<h2>Decisions</h2>
+<table>
+<tr><th>Topic</th><th>Choice</th><th>Why</th><th>Status</th></tr>
+<tr><td>Partition unit</td><td>S2 level 8</td><td>Fixed grid, no per-collection setting</td><td><span class="chip built">built</span></td></tr>
+<tr><td>Chunk size</td><td>2 MiB or 50,000 features</td><td>Kept; retune only after measuring</td><td><span class="chip built">built</span></td></tr>
+<tr><td>Packing sparse partitions</td><td>No. Every populated partition keeps at least one chunk</td><td>Simplest; the per-chunk overhead is accepted</td><td><span class="chip built">built</span></td></tr>
+<tr><td>Overview levels</td><td>8 and 10 per partition; 12 for dense partitions; 6, 4 and 2 per cell; cap 256</td><td>Coarse levels cost about 1% of samples</td><td><span class="chip built">built</span></td></tr>
+<tr><td>Simplification</td><td>None. Samples keep full geometry</td><td>Saves a Douglas–Peucker step. Use orb later if sizes need it</td><td><span class="chip built">built</span></td></tr>
+<tr><td>Zoom mapping</td><td>None on the server. The client sends <code>overview=N</code></td><td>No zoom logic to build or test</td><td><span class="chip built">built</span></td></tr>
+<tr><td>Snapshots per load</td><td>One. Coarse levels commit with the load</td><td>Simple numbering; exact <code>base=</code> checks</td><td><span class="chip built">built</span></td></tr>
+<tr><td>Conditional loads</td><td><code>base=s</code> returns 409 if a listed partition changed</td><td>A few lines</td><td><span class="chip built">built</span></td></tr>
+<tr><td>Postings</td><td>Cut</td><td>About 250 lines. Zone maps and sidecars answer filters. Revisit if a filter on a dense partition takes over 1 s cold</td><td><span class="chip cut">cut</span></td></tr>
+<tr><td>Id-run Bloom filters</td><td>Cut</td><td>A binary search over at most 64 runs is cheap</td><td><span class="chip cut">cut</span></td></tr>
+<tr><td>Id-run merge</td><td>When a collection has more than 64 live runs, rebuild one run from the live chunks</td><td>Bounds lookups. About 40 lines</td><td><span class="chip next">next</span></td></tr>
+<tr><td>Reaping</td><td>Keep 72 h retention. Delete rows and files that no retained snapshot can see</td><td>Bounds storage. About 40 lines</td><td><span class="chip next">next</span></td></tr>
+</table>
+</section>
+
+<section>
+<h2>Code budget</h2>
+<p class="sub">Target: 4,000 lines of production Go for the full v2 implementation.</p>
+<p><b>Production Go, v2, now:</b> 2,752 lines (69%)</p>
+<div class="meter"><span style="width:69%"></span></div>
+<p><b>With id-run merge and reaping (about 80 lines):</b> about 2,830 lines (71%)</p>
+<div class="meter"><span style="width:71%"></span></div>
+<p class="sub">Outside the budget: about 1,050 lines of tests, and 66 lines of SQL in migrations 0031 to 0034.</p>
+</section>
+
+<section>
+<h2>Risks and next steps</h2>
+<table>
+<tr><th>Item</th><th>Note</th></tr>
+<tr><td>Coarse rebuild cost</td><td>A load reads every sibling's level-8 sample. Fine at test sizes. Measure at 10 million features before trusting it.</td></tr>
+<tr><td>Dense cities at zoom 13</td><td>Detail is about 240k features per screen. The client should use overviews until detail is small, around zoom 16.</td></tr>
+<tr><td>Overview payloads</td><td>Samples keep full geometry, so pages can be large. Simplification is the lever if they are.</td></tr>
+<tr><td>Filters on dense partitions</td><td>Column sidecars are scanned until postings exist.</td></tr>
+<tr><td>Older collections</td><td>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</td></tr>
+<tr><td>Next, in order</td><td>1. Id-run merge. 2. Reaping. 3. Measure at 10 million features: coarse rebuild, lookup, filter latency.</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Glossary</h2>
+<div class="grid">
+<div class="card"><b>Key</b>The S2 level-30 cell of a feature's bbox centre. Sets the storage order.</div>
+<div class="card"><b>Partition</b>An S2 level-8 cell. The unit of load and replacement.</div>
+<div class="card"><b>Chunk</b>An immutable FlatGeobuf (zstd) with a column sidecar and a zone map, and one catalog row.</div>
+<div class="card"><b>Sample</b>The 256 smallest-hash features of a cell, stored as chunks with <code>level = N</code>.</div>
+<div class="card"><b>Zone map</b>Per-column min, max and null count for a chunk. Prunes filters.</div>
+<div class="card"><b>Id run</b>Sorted (hash of id, key) pairs written with each load. Used by lookups.</div>
+<div class="card"><b>Snapshot</b>One load's commit. A row is visible at snapshot s when begin ≤ s &lt; end.</div>
+<div class="card"><b>base=</b>The snapshot a loader read. The load fails if a listed partition changed since.</div>
+</div>
+</section>
+
+</main>
+<footer>Static review page. Edit <code>internal/api/design.html</code>; no build step.</footer>
+</body>
+</html>

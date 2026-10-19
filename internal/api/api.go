@@ -95,6 +95,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /stac/collections/{id}", s.stacCollection)
 	mux.HandleFunc("GET /viewer", s.viewer)
 	mux.HandleFunc("GET /viewer.rgis", s.viewerProject)
+	mux.HandleFunc("GET /design", s.design)
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		body, err := api.OpenAPI().Downgrade()
 		if err != nil {
