@@ -139,7 +139,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <h3>Tradeoffs</h3>
       <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once.</p>
       <p><b>Three levels, more scanning.</b> Levels 8, 6 and 2 are stored. At high zoom a read scans the level-8 chunks in view: in a dense cell a page can scan a few hundred thousand features. Coarse views use the samples instead.</p>
-      <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one cell’s chunks, well under 1 MB. Count the row and its primary-key entry and it costs about 90 B per feature, or about 84 GB at 1e9. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
+      <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one cell’s chunks, well under 1 MB. Count the row and its primary-key entry and it costs about 80 B per feature, or about 75 GB at 1e9. Every table keys on a 2-byte collection id, and the name lives once in collections. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
       <p><b>One chunk per populated cell.</b> A sparse cell still costs a chunk and its header; dense cells are unaffected.</p>
     </div>
     <div class="box">
@@ -161,7 +161,8 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag built">built</span><b>Caches</b><br><span>Two LRUs per worker, <span id="f-cache"></span> each: file bytes and the chunk list.</span></li>
           <li><span class="tag decided">decided</span><b>Upload</b><br><span>One .fgb.zst per L8 cell. No streaming, bucketing or spill. Not built: the /v2 load still takes multi-cell bodies.</span></li>
           <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the current rows, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
-          <li><span class="tag built">built</span><b>Id index</b><br><span>One row per feature: its id hash and cell. Replaced with the cell on every upload. No runs, merges or Bloom filters.</span></li>
+          <li><span class="tag built">built</span><b>Id index</b><br><span>One row per feature: its id hash and key. Replaced with the cell on every upload. No runs, merges or Bloom filters.</span></li>
+          <li><span class="tag decided">decided</span><b>Collection id</b><br><span>A smallint id in every table; the name lives only in collections. That caps collections at 32,767, and int is the fallback beyond it. Not built: the code still uses the bigint uid.</span></li>
           <li><span class="tag built">built</span><b>Cleanup</b><br><span>Replaced rows and files are deleted in the same commit as the new ones. A read that raced a commit retries once.</span></li>
         </ul>
       </div>
@@ -203,7 +204,7 @@ const PAL = {
 };
 let P = PAL.dark;
 
-const K = { raw: 940, zst: 200, col: 40, run: 30, idxRow: 90, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 940, zst: 200, col: 40, run: 30, idxRow: 80, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
 const fmtMiB = b => `${+(b / 1048576).toFixed(1)} MiB`;
 
@@ -496,12 +497,12 @@ const MODEL = {
   idRuns: { t: 'id index', kind: 'db', size: c => c.Wr.f * K.idxRow,
     l1: c => `${fmt(c.Wr.f)} rows`, l2: c => `${fmtBytes(c.Wr.f * K.idxRow)} on disk`,
     text: 'One row per feature: the hash of its id and the cell that holds it. A lookup reads the rows for a hash, then that cell’s chunks, and checks the id exactly. The rows are replaced with the cell on every upload, so there are no runs to merge.',
-    layout: ['ids: collection_uid, hash, key', 'one row per feature'], index: ['pk (collection_uid, hash, key)'] },
+    layout: ['ids: collection_id smallint, hash, key', 'one row per feature'], index: ['pk (collection_id, hash, key)'] },
   catalog: { t: 'catalog', kind: 'db', size: c => c.Wr.chunkBytes,
     l1: c => `${fmt(c.Wr.chunks)} chunk rows`, l2: c => `${fmtBytes(c.Wr.chunkBytes)} of FGB`,
-    text: 'The chunk rows for the collection as it is now: key range, envelope, zone map and the file they point to. The collections row holds the version and column list, so a worker can tell a cached chunk list from a stale one. A commit replaces a cell’s rows in one transaction and bumps the version.',
-    layout: ['chunks: chunk_id identity pk, collection, cell, seq, first and last key and id', 'chunks: minx, miny, maxx, maxy, features, file_id, col_file, zone (JSON text), level', 'collections: name pk, uid, version, id_column, columns_json', 'ids: collection_uid, hash, key'],
-    index: ['chunks (collection, cell, level)', 'collections pk (name)', 'ids pk (collection_uid, hash, key)'] },
+    text: 'The chunk rows for the collection as it is now: key range, envelope, zone map and the file they point to, keyed by the 2-byte collection id. The collections row holds the name, version and column list, so a worker can tell a cached chunk list from a stale one. A commit replaces a cell’s rows in one transaction and bumps the version.',
+    layout: ['chunks: chunk_id identity pk, collection_id smallint, cell, seq, first and last key and id', 'chunks: minx, miny, maxx, maxy, features, file_id, col_file, zone (JSON text), level', 'collections: id smallint pk, name unique, version, id_column, columns_json', 'ids: collection_id smallint, hash, key'],
+    index: ['chunks (collection_id, cell, level)', 'collections pk (id), unique (name)', 'ids pk (collection_id, hash, key)'] },
   reader: { t: 'Reader', kind: 'mut', role: 'client', l1: c => `${fmt(c.page)} features`, l2: () => 'one request',
     text: 'A request: items with bbox, filter or overview=N; items/{id}; or numberMatched. Each page reads the current rows.',
     layout: [], index: [] },
