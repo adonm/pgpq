@@ -82,7 +82,6 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <button role="tab" data-tab="overviews" aria-selected="false">Overviews</button>
       <button role="tab" data-tab="load" aria-selected="false">Load</button>
       <button role="tab" data-tab="reads" aria-selected="false">Reads</button>
-      <button role="tab" data-tab="costs" aria-selected="false">Costs</button>
       <button role="tab" data-tab="decide" aria-selected="false">Decisions</button>
     </nav>
     <button id="theme" class="btn">theme: dark</button>
@@ -97,11 +96,6 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <button class="btn" data-f="2500000">2.5M dense</button>
     </div>
     <div class="wl">
-      <span class="k">Link</span>
-      <button class="btn" data-link="125000000">1 Gbit/s</button>
-      <button class="btn" data-link="12500000">100 Mbit/s</button>
-    </div>
-    <div class="wl">
       <span class="k">Page</span>
       <button class="btn" data-page="1000">1k</button>
       <button class="btn" data-page="10000">10k</button>
@@ -114,7 +108,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <span><i style="background:var(--db)"></i>Postgres I/O</span>
       <span><i style="background:var(--mut)"></i>memory or in-process</span>
       <span>line thickness = bytes moved (log scale)</span>
-      <span>box meter = share of its flow's time · Costs bars = bytes (log scale)</span>
+      <span>box meter = share of its flow's time</span>
       <span>dashed line = Postgres access</span>
       <span>shape: capsule = network · square = Postgres · rounded = worker, cache or client · glyph = table, cache, flow, screen, commit or CPU</span>
     </div>
@@ -148,24 +142,15 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     <aside class="side" id="side-reads"></aside>
   </section>
 
-  <section class="tab" id="tab-costs">
-    <div class="stage" id="fig-costs" role="img" aria-label="Bytes moved per action for a typical cell and a dense cell"><canvas></canvas><svg></svg></div>
-    <table aria-label="Cost of each action">
-      <thead>
-        <tr><th rowspan="2">action</th><th class="grp" colspan="3">typical cell (<span id="f-typical"></span> features)</th><th class="grp" colspan="3">dense cell (<span id="f-dense2"></span> features)</th></tr>
-        <tr><th>network</th><th>Postgres</th><th>CPU</th><th>network</th><th>Postgres</th><th>CPU</th></tr>
-      </thead>
-      <tbody id="cost-body"></tbody>
-    </table>
-    <p class="note" id="cost-note"></p>
-    <h3>Model inputs</h3>
-    <table aria-label="Cost model inputs">
-      <thead><tr><th>input</th><th>value</th><th>source</th></tr></thead>
-      <tbody id="input-body"></tbody>
-    </table>
-  </section>
 
   <section class="tab" id="tab-decide">
+    <div class="box">
+      <h3>Tradeoffs</h3>
+      <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once.</p>
+      <p><b>Three levels, more scanning.</b> Levels 8, 6 and 2 are stored. At high zoom a read scans the level-8 chunks in view: in a dense cell a page can scan a few hundred thousand features. Coarse views use the samples instead.</p>
+      <p><b>Id rows, not runs.</b> One index row per feature makes a lookup a table read plus one cell’s chunks, at about 30 B per feature.</p>
+      <p><b>One chunk per populated cell.</b> A sparse cell still costs a chunk and its header; dense cells are unaffected.</p>
+    </div>
     <div class="box">
       <h3>Code budget · production Go for v2</h3>
       <div class="stage" id="fig-budget" style="aspect-ratio:1000/40;border:0;background:none"><canvas></canvas><svg></svg></div>
@@ -193,7 +178,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
         <h3>Risks</h3>
         <ul>
           <li>Loads are held in memory and nothing spills. The densest cell (about <span id="f-dense"></span> features) decodes to about <span id="f-densemem"></span> and sets the worker’s memory.</li>
-          <li>A filter on a dense cell reads every chunk until postings exist: about <span id="f-filter"></span> per request in the worst case (see Costs).</li>
+          <li>A filter on a dense cell reads every chunk until postings exist: about <span id="f-filter"></span> per request in the worst case (see Risks).</li>
           <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one read.</li>
           <li>The id index holds one row per feature. At <span id="f-billion"></span> features that is about <span id="f-idx1e9"></span> in Postgres, and a lookup reads one hash’s rows plus a cell’s chunks.</li>
           <li>A read can list a chunk just before a commit deletes it. It retries once against the new list, so under a heavy write rate some requests are slower.</li>
@@ -202,23 +187,12 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>Overview responses carry full geometry, so they can be large.</li>
           <li>Collections loaded before migration 0035 need a reload: the row layout changed and snapshots are gone.</li>
         </ul>
-        <h3>Terms</h3>
-        <ul>
-          <li><b>Key</b>: the S2 level-30 cell of a feature’s bbox centre. Sets the storage order.</li>
-          <li><b>Partition</b>: an S2 level-8 cell, the unit of upload, load and replacement.</li>
-          <li><b>Chunk</b>: an immutable FlatGeobuf with a column file and a zone map, and one catalog row.</li>
-          <li><b>Sample</b>: the <span id="f-cap"></span> smallest-hash features of a cell, stored as chunks with level = N.</li>
-          <li><b>Id index</b>: one row per feature, mapping the hash of its id to its cell.</li>
-          <li><b>Version</b>: a counter on the collection, bumped by every commit. A worker caches the chunk list under it, so a commit makes the cache stale rather than wrong.</li>
-          <li><b>Cursor</b>: the (key, id) of the last feature a page returned. Each page reads the current rows.</li>
-          <li><b>Virtual file</b>: a file’s bytes stored as block rows, read back through the file-bytes overlay.</li>
-        </ul>
       </div>
     </div>
   </section>
 </main>
 
-<footer>1–6 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are estimates from OSM Layercake data; the CPU split and Postgres speed are also estimates (see Costs)</footer>
+<footer>1–5 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are estimates from OSM Layercake data; the CPU split and Postgres speed are too</footer>
 
 <script src="https://unpkg.com/zdog@1.1.3/dist/zdog.dist.min.js"></script>
 <script>
@@ -231,25 +205,7 @@ let P = PAL.dark;
 const K = { raw: 940, zst: 200, col: 40, run: 30, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
 const fmtMiB = b => `${+(b / 1048576).toFixed(1)} MiB`;
-const fmtRate = b => (b >= 1e9 ? `${+(b / 1e9).toFixed(b % 1e9 ? 1 : 0)} GB/s` : `${Math.round(b / 1e6)} MB/s`);
-const INPUTS = [
-  ['Raw FGB per feature', () => `${K.raw} B`, 'estimate, OSM Layercake'],
-  ['Stored FGB per feature, zstd', () => `${K.zst} B`, 'estimate, OSM Layercake'],
-  ['Column files per feature', () => `${K.col} B`, 'estimate, OSM Layercake'],
-  ['Id index row', () => `${K.run} B`, 'estimate, one row per feature'],
-  ['Chunk', () => `${fmtMiB(K.chunk)} uncompressed, about ${fmt(PER_CHUNK)} features`, 'target'],
-  ['Chunk catalog row', () => `${K.meta} B`, 'estimate'],
-  ['Samples per cell', () => `${CAP}`, 'design'],
-  ['Ingest CPU', () => `${fmtTime(K.sec)} per feature`, 'measured: 27–32 s per million on 6 cores'],
-  ['CPU split in an upload', () => `${pct(CPU_SHARE.decode)} decode · ${pct(CPU_SHARE.validate)} validate · ${pct(CPU_SHARE.sort)} sort · ${pct(CPU_SHARE.encode)} encode`, 'estimate'],
-  ['Commit', () => fmtTime(K.fixed), 'estimate'],
-  ['Postgres throughput', () => fmtRate(K.db), 'estimate'],
-  ['Decode: zstd', () => fmtRate(K.dec), 'estimate'],
-  ['Block row', () => `${fmt(K.block)} B, one per ${K.pageBytes / 1024} KB page`, 'schema'],
-  ['Worker cache, each', () => fmtMiB(K.cache), 'setting'],
-  ['Network', () => (W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'), 'workload bar'],
-  ['Page', () => fmt(W.page), 'workload bar'],
-];
+
 const PER_CHUNK = Math.floor(K.chunk / K.raw);
 const CPU_SHARE = { decode: 0.25, validate: 0.05, sort: 0.1, encode: 0.6 };
 const TYPICAL = 12000, DENSE = 2500000;
@@ -354,19 +310,6 @@ function readId(f, link) {
 }
 function costNow() {
   return { f: W.f, link: W.link, page: W.page, Wr: writeCost(W.f, W.link), Rd: readBBox(W.f, W.page, W.link) };
-}
-function actions(f) {
-  const Wr = writeCost(f, W.link), B = readBBox(f, W.page, W.link), F = readFilter(f, W.page, W.link);
-  const C = readCount(f, W.link), I = readId(f, W.link), O = readOverview(W.page, W.link);
-  return [
-    { name: 'Upload one cell', net: Wr.upload, db: 0, cpu: Wr.cpu },
-    { name: 'Ingest writes to Postgres', net: 0, db: Wr.db, cpu: 0 },
-    { name: `bbox page of ${fmt(Math.min(W.page, f))}`, net: B.net, db: B.db, cpu: B.cpu },
-    { name: 'Filter, worst case', net: F.net, db: F.db, cpu: F.cpu },
-    { name: 'numberMatched with filter', net: C.net, db: C.db, cpu: C.cpu },
-    { name: 'Id lookup, uncached', net: I.net, db: I.db, cpu: I.cpu },
-    { name: `Overview page of ${fmt(W.page)}`, net: O.net, db: O.db, cpu: O.cpu },
-  ];
 }
 
 class Fig {
@@ -1072,31 +1015,6 @@ class Reads extends Fig {
   }
 }
 
-class Costs extends Fig {
-  constructor() {
-    super('fig-costs', 1000, 440);
-    this.text(10, 22, `bytes moved (network + Postgres), log scale · upper bar = typical cell ${fmtBig(TYPICAL)}, lower bar = dense cell ${fmtBig(DENSE)}`, 'lab');
-    actions(TYPICAL).forEach((_, i) => {
-      const y = 40 + i * 48;
-      const name = this.text(10, y + 19, '', 'v');
-      [0, 1].forEach(k => {
-        const by = y + 2 + k * 20;
-        const bar = this.shape(330, by, 1, 14, 0, { fill: true, stroke: false });
-        const val = this.text(330, by + 11, '', 's');
-        this.bind(() => {
-          const r = actions(k ? DENSE : TYPICAL)[i], bytes = r.net + r.db;
-          this.place(bar, 330, by, 540 * logFrac(bytes, 2, 10), 14);
-          bar.color = k ? P.fg : P.mut;
-          val.setAttribute('x', 330 + 540 * logFrac(bytes, 2, 10) + 8);
-          val.textContent = fmtBytes(bytes);
-        });
-      });
-      this.bind(() => { name.textContent = actions(TYPICAL)[i].name; });
-    });
-    this.render();
-  }
-}
-
 class Budget extends Fig {
   constructor() {
     super('fig-budget', 1000, 40);
@@ -1176,15 +1094,6 @@ function syncReads() {
   set('#status-reads', `${R.label}: reads ${fmtBytes(run.db)} for ${fmtBytes(run.net)} returned.`);
   document.querySelectorAll('#chips button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === Q.req)));
 }
-function syncCosts() {
-  const typ = actions(TYPICAL), den = actions(DENSE);
-  $('#cost-body').innerHTML = typ.map((t, i) => {
-    const d = den[i];
-    return `<tr><td>${esc(t.name)}</td><td>${fmtBytes(t.net)}</td><td>${fmtBytes(t.db)}</td><td>${t.cpu ? fmtTime(t.cpu) : '—'}</td><td>${fmtBytes(d.net)}</td><td>${fmtBytes(d.db)}</td><td>${d.cpu ? fmtTime(d.cpu) : '—'}</td></tr>`;
-  }).join('');
-  set('#cost-note', `Link ${W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'} and page of ${fmt(W.page)} come from the workload bar. Estimated: sizes per feature (OSM Layercake) and ingest at ${fmtTime(K.sec)} per feature on 6 cores. Estimated: the CPU split inside an upload, Postgres at ${fmtRate(K.db)}, decoding at ${fmtRate(K.dec)}, and a ${fmtTime(K.fixed)} commit. The bars, the table and the inputs below read the same numbers.`);
-  $('#input-body').innerHTML = INPUTS.map(([name, value, src]) => `<tr><td>${esc(name)}</td><td>${esc(value())}</td><td>${esc(src)}</td></tr>`).join('');
-}
 function syncFacts() {
   const d13 = detailFor(DENSE, 13), d7 = detailFor(DENSE, 7);
   const coarse = ZOOMS.find(z => { const p = pickFor(DENSE, z); return p && p.k === 8; });
@@ -1195,7 +1104,6 @@ function syncFacts() {
   set('#f-cap', fmt(CAP));
   set('#f-cap2', fmt(CAP));
   set('#f-dense', fmtBig(DENSE));
-  set('#f-dense2', fmtBig(DENSE));
   set('#f-densemem', fmtBytes(DENSE * K.raw));
   set('#f-filter', fmtBytes(readFilter(DENSE, W.page, W.link).db));
   set('#f-billion', fmtBig(1e9));
@@ -1206,14 +1114,12 @@ function syncFacts() {
   set('#f-z13n', fmt(d13));
   set('#f-z13b', fmtBytes(d13 * K.zst));
   set('#f-zdense', fine === undefined ? '—' : fine);
-  set('#f-typical', fmtBig(TYPICAL));
 }
 function sync() {
   if (S.tab === 'model') syncModel();
   if (S.tab === 'overviews') syncOverviews();
   if (S.tab === 'load') syncLoad();
   if (S.tab === 'reads') syncReads();
-  if (S.tab === 'costs') syncCosts();
 }
 function refresh() {
   const el = $('#side-' + S.tab);
@@ -1240,7 +1146,6 @@ function show(tab) {
   history.replaceState(null, '', '#' + tab);
 }
 function setPressed() {
-  document.querySelectorAll('[data-link]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.link === W.link)));
   document.querySelectorAll('[data-page]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.page === W.page)));
   document.querySelectorAll('[data-f]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.f === W.f)));
 }
@@ -1275,7 +1180,6 @@ document.querySelectorAll('nav button').forEach(b => b.addEventListener('click',
 $('#theme').addEventListener('click', () => setTheme(P === PAL.dark ? 'light' : 'dark'));
 $('#f-range').addEventListener('input', e => { W.f = Math.max(1, Math.round(10 ** +e.target.value)); workloadChanged(); });
 document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { W.f = +b.dataset.f; $('#f-range').value = Math.log10(W.f).toFixed(2); workloadChanged(); }));
-document.querySelectorAll('[data-link]').forEach(b => b.addEventListener('click', () => { W.link = +b.dataset.link; workloadChanged(); }));
 document.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', () => { W.page = +b.dataset.page; workloadChanged(); }));
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
@@ -1287,8 +1191,8 @@ document.addEventListener('input', e => {
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const order = ['model', 'overviews', 'load', 'reads', 'costs', 'decide'];
-  if (/^[1-6]$/.test(k)) show(order[+k - 1]);
+  const order = ['model', 'overviews', 'load', 'reads', 'decide'];
+  if (/^[1-5]$/.test(k)) show(order[+k - 1]);
   else if (k === 't') setTheme(P === PAL.dark ? 'light' : 'dark');
   else if (k === 'd') act(S.tab, 'demo');
   else if (k === 'e' && S.tab === 'model') act('model', 'read');
@@ -1303,7 +1207,6 @@ const FIG_MAKERS = {
   overviews: () => new Overviews(),
   load: () => new Load(),
   reads: () => new Reads(),
-  costs: () => new Costs(),
   decide: () => new Budget(),
 };
 function figure(tab) {
@@ -1326,7 +1229,7 @@ function loop(now) {
   if (animating()) schedule();
 }
 const start = location.hash.slice(1);
-show(['model', 'overviews', 'load', 'reads', 'costs', 'decide'].includes(start) ? start : 'model');
+show(['model', 'overviews', 'load', 'reads', 'decide'].includes(start) ? start : 'model');
 </script>
 </body>
 </html>

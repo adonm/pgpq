@@ -25,18 +25,19 @@ func (l *Layer) Lookup(ctx context.Context, name, id string) (Hit, error) {
 	if err != nil {
 		return Hit{}, err
 	}
-	rows, err := l.pool.Query(ctx, `select cell from pfgb.ids where collection = $1 and hash = $2`, name, int64(idHash(id)))
+	rows, err := l.pool.Query(ctx, `select cell, key from pfgb.ids where collection = $1 and hash = $2`, name, int64(idHash(id)))
 	if err != nil {
 		return Hit{}, err
 	}
-	var cells []uint64
+	type probe struct{ cell, key uint64 }
+	var probes []probe
 	for rows.Next() {
-		var cell int64
-		if err := rows.Scan(&cell); err != nil {
+		var cell, key int64
+		if err := rows.Scan(&cell, &key); err != nil {
 			rows.Close()
 			return Hit{}, err
 		}
-		cells = append(cells, spatial.FromOrdered(cell))
+		probes = append(probes, probe{cell: spatial.FromOrdered(cell), key: spatial.FromOrdered(key)})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -45,8 +46,8 @@ func (l *Layer) Lookup(ctx context.Context, name, id string) (Hit, error) {
 	rows.Close()
 	seen := map[int64]bool{}
 	var hits []Hit
-	for _, cell := range cells {
-		found, err := l.findInChunks(ctx, coll, cell, id)
+	for _, p := range probes {
+		found, err := l.findInChunks(ctx, coll, p.cell, p.key, id)
 		if err != nil {
 			return Hit{}, err
 		}
@@ -66,8 +67,8 @@ func (l *Layer) Lookup(ctx context.Context, name, id string) (Hit, error) {
 	return Hit{}, fmt.Errorf("id %q: %w", id, ErrDuplicate)
 }
 
-func (l *Layer) findInChunks(ctx context.Context, coll Collection, cell uint64, id string) ([]foundHit, error) {
-	rows, err := l.pool.Query(ctx, `select file_id from pfgb.chunks where collection = $1 and cell = $2 and level = 0`, coll.Name, spatial.ToOrdered(cell))
+func (l *Layer) findInChunks(ctx context.Context, coll Collection, cell, key uint64, id string) ([]foundHit, error) {
+	rows, err := l.pool.Query(ctx, `select file_id from pfgb.chunks where collection = $1 and cell = $2 and first_key <= $3 and last_key >= $3 and level = 0`, coll.Name, spatial.ToOrdered(cell), spatial.ToOrdered(key))
 	if err != nil {
 		return nil, err
 	}

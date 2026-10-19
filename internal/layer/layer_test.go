@@ -262,6 +262,31 @@ func TestLayerLoadPagesAndReplacesPartitions(t *testing.T) {
 	}
 }
 
+func TestWholeLoadRemovesDroppedCells(t *testing.T) {
+	l, ctx := openTest(t)
+	name := "layer_test_whole"
+	dropCollection(t, l, name)
+	t.Cleanup(func() { dropCollection(t, l, name) })
+	both := slices.Concat(cityFeatures("paris", paris, 20, 81), cityFeatures("dhaka", dhaka, 20, 82))
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, both), nil); err != nil {
+		t.Fatal(err)
+	}
+	parisOnly := cityFeatures("paris", paris, 20, 83)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, parisOnly), nil); err != nil {
+		t.Fatal(err)
+	}
+	if hits := readAll(t, l, name, Query{Limit: 64}); len(hits) != 20 {
+		t.Fatalf("whole reload left %d features, want 20", len(hits))
+	}
+	if _, err := l.Lookup(ctx, name, "dhaka-0000"); !errors.Is(err, ErrFeatureNotFound) {
+		t.Fatalf("dropped cell still resolves: %v", err)
+	}
+	var rows int
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.ids where collection = $1`, name).Scan(&rows); err != nil || rows != 20 {
+		t.Fatalf("id index rows after a whole reload = %d (%v)", rows, err)
+	}
+}
+
 func TestDecodeCursorRoundTrip(t *testing.T) {
 	want := Cursor{UID: 7, Level: 8, Key: 1<<63 + 5, ID: "a.b.c"}
 	got, err := DecodeCursor(want.String())

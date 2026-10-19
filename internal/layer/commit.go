@@ -70,7 +70,11 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 	}
 	slices.Sort(replace)
 	replace = slices.Compact(replace)
-	if err := deleteCells(ctx, tx, name, replace); err != nil {
+	if whole {
+		if err := deleteAll(ctx, tx, name); err != nil {
+			return LoadResult{}, err
+		}
+	} else if err := deleteCells(ctx, tx, name, replace); err != nil {
 		return LoadResult{}, err
 	}
 	rows := make([][]any, len(chunks))
@@ -145,27 +149,61 @@ func deleteCells(ctx context.Context, tx pgx.Tx, name string, cells []uint64) er
 	return err
 }
 
+func deleteAll(ctx context.Context, tx pgx.Tx, name string) error {
+	rows, err := tx.Query(ctx, `select file_id, col_file from pfgb.chunks where collection = $1`, name)
+	if err != nil {
+		return err
+	}
+	var files []int64
+	for rows.Next() {
+		var fgb, cols int64
+		if err := rows.Scan(&fgb, &cols); err != nil {
+			rows.Close()
+			return err
+		}
+		files = append(files, fgb, cols)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(files) > 0 {
+		if _, err := tx.Exec(ctx, `delete from pfgb.blocks where file_id = any($1)`, files); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `delete from pfgb.files where file_id = any($1)`, files); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `delete from pfgb.chunks where collection = $1`, name); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `delete from pfgb.ids where collection = $1`, name)
+	return err
+}
+
 func replaceIDs(ctx context.Context, tx pgx.Tx, name string, cells []uint64, entries []entry) error {
 	if len(cells) > 0 {
 		if _, err := tx.Exec(ctx, `delete from pfgb.ids where collection = $1 and cell = any($2)`, name, orderedCells(cells)); err != nil {
 			return err
 		}
 	}
-	seen := make(map[[2]int64]bool, len(entries))
+	seen := make(map[[3]int64]bool, len(entries))
 	rows := make([][]any, 0, len(entries))
 	for _, e := range entries {
-		h, cell := int64(idHash(e.id)), spatial.ToOrdered(e.cell)
-		key := [2]int64{h, cell}
-		if seen[key] {
+		h, cell, key := int64(idHash(e.id)), spatial.ToOrdered(e.cell), spatial.ToOrdered(e.key)
+		k := [3]int64{h, cell, key}
+		if seen[k] {
 			continue
 		}
-		seen[key] = true
-		rows = append(rows, []any{name, h, cell})
+		seen[k] = true
+		rows = append(rows, []any{name, h, cell, key})
 	}
 	if len(rows) == 0 {
 		return nil
 	}
-	_, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "ids"}, []string{"collection", "hash", "cell"}, pgx.CopyFromRows(rows))
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "ids"}, []string{"collection", "hash", "cell", "key"}, pgx.CopyFromRows(rows))
 	return err
 }
 
