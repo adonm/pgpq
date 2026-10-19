@@ -2,6 +2,22 @@
 
 Status: proposal from the October 2026 design discussion; not implemented. When built, it replaces the storage, ingest and read-path contract in [DESIGN.md](DESIGN.md), and the two documents are reconciled in the same commit as the code.
 
+## Implementation status
+
+Build step 1 is in progress under `/v2`, alongside the current contract. DESIGN.md is unchanged until cutover.
+
+- **Built:** S2 keys and level-8 partitions (`internal/spatial`); pgvfs-layout blocks in schema `pfgb` (`internal/blocks`, migration 0031); key-ordered chunks with catalog and snapshots; whole-collection and partition-scoped replace loads with 422 validation and per-collection commit serialization (`internal/layer`); snapshot-pinned bbox paging with 72 h cursor expiry; GeoJSON and FlatGeobuf responses on `PUT /v2/collections/{id}` and `GET /v2/collections/{id}/items`.
+- **Not yet:** column files and zone maps (step 2); id runs and cross-partition uniqueness (step 3, so a duplicate id in another partition is not detected yet); postings and overviews (steps 4 and 5); conditional `base=` loads, reaping and expired-snapshot cleanup (step 6); spill-to-disk for loads larger than memory (requests are held in memory); a worker block cache (every read fetches its blocks); an R-tree (bbox pruning is a range query on chunk envelopes).
+- **Measured on `warm_100k`** (100k features spread thinly across ~7,600 level-8 cells):
+
+  | | chunks | logical bytes | load | bbox (-5,40,10,50) |
+  | --- | --- | --- | --- | --- |
+  | v1 | 19 | 8.9 MB | 3.4 s | 15,047 features, 0.46 s |
+  | v2 | 7,614 (13 features each) | 15 MB | 5.9 s | 15,047 features, 1.0 s |
+
+  GDAL `ogrinfo` reads the v2 FlatGeobuf output (100,000 features, same extent as v1).
+- **Finding:** a fixed level-8 partition costs one chunk per populated cell, and each chunk carries about 0.8 KB of FlatGeobuf header and index. Dense partitions are unaffected. Sparse data pays heavily: here 1.7× the storage and 400× the chunk rows. The fix to decide is to pack adjacent sparse partitions into shared chunks up to the chunk target. A replace then reads back at most one chunk's worth of neighbouring rows, and dense partitions still load alone.
+
 ## Goal
 
 OGC API Features and FlatGeobuf over PostgreSQL, for billions of features at national and global scale, loaded by area of interest (AOI).
@@ -79,7 +95,7 @@ Empty partitions have no rows at all.
    - create the new snapshot, end-snapshot the partitions' old chunk, postings and overview rows, and insert the new ones;
    - append the id run, and enqueue the partitions' level-6 ancestors.
 
-Cost is proportional to the loaded partitions, never to the collection. Loads of different partitions commit concurrently; two loads of the same partition serialize on its row.
+Cost is proportional to the loaded partitions, never to the collection. Blocks for concurrent loads are written in parallel. Commits serialize per collection, which is what keeps a snapshot's contents fixed once it is visible: a reader pinned to snapshot `s` must never see a snapshot `s' < s` commit after it. The commit transaction is milliseconds, because all bulk work happens before it.
 
 ## Postings
 

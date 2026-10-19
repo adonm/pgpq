@@ -19,6 +19,7 @@ import (
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
 	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/layer"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -30,6 +31,7 @@ type Server struct {
 	metrics   *metrics
 	virtuals  *virtualCache
 	chunks    *chunkByteCache
+	layers    *layer.Layer
 }
 
 type Config struct {
@@ -62,6 +64,9 @@ func NewWithConfig(cfg Config) http.Handler {
 		Store: cfg.Store, MaxChunks: 64, MaxBytes: cfg.MaxBytes,
 		ReadOnly: cfg.ReadOnly, metrics: newMetrics(), virtuals: newVirtualCache(), chunks: newChunkByteCache(),
 	}
+	if cfg.Store != nil {
+		s.layers = layer.New(cfg.Store.Pool)
+	}
 	s.register(api)
 	mux.HandleFunc("GET /{$}", s.landingPage)
 	mux.HandleFunc("GET /healthz", s.healthz)
@@ -82,7 +87,9 @@ func NewWithConfig(cfg Config) http.Handler {
 	if !s.ReadOnly {
 		mux.HandleFunc("PUT /collections/{id}", s.putCollection)
 		mux.HandleFunc("DELETE /collections/{id}", s.deleteCollection)
+		mux.HandleFunc("PUT /v2/collections/{id}", s.putLayer)
 	}
+	mux.HandleFunc("GET /v2/collections/{id}/items", s.layerItems)
 	mux.HandleFunc("GET /stac/collections", s.stacCollections)
 	mux.HandleFunc("GET /stac/collections/{id}", s.stacCollection)
 	mux.HandleFunc("GET /viewer", s.viewer)
