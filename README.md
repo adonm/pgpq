@@ -1,30 +1,33 @@
 # postfgb
 
-OGC API Features over PostgreSQL, backed by FlatGeobuf chunks and per-chunk statistics.
+OGC API Features over PostgreSQL, backed by FlatGeobuf chunks stored as database blocks.
 
-Goal: the smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pushing filtering into per-chunk statistics.
+Goal: the smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pruning reads with per-chunk statistics.
 
 The target deployment is [RustGIS](https://rustgis.app/): reads are served over HTTP at maximum speed, while writes are batch-oriented and free to sort and rewrite chunks.
 
-Design decisions are recorded in the design page served at `/design` (`internal/api/design.html`), which is the source of truth.
+Design decisions are recorded in the design page served at `/design` (`internal/api/design.html`), which is the source of truth. The repository is mid-migration to that v2 design: only the v2 read and write routes below are served today.
+
+## Current surface
+
+| Path | Content |
+| --- | --- |
+| `PUT /v2/collections/{id}` (writable) | create or replace a collection from a FlatGeobuf body, reprojected to WGS84; an id column is required (`id`, `fid`, `gid`, `ogc_fid`, or `id_column=`); JSON columns are flattened into typed columns by default (`flatten=off` disables); `cells=` scopes a load to the listed level-8 cells |
+| `GET /v2/collections/{id}/items` | features with `bbox`, property filters, CQL2-text `filter=`, `limit`, opaque `cursor` paging with `links rel=next`, `overview=0\|2\|6\|8`, `numberMatched=true` (without a bbox), and `f=flatgeobuf` or `Accept: application/flatgeobuf` |
+| `GET /v2/collections/{id}/items/{featureID}` | one feature by its stored id |
+| `/healthz`, `/readyz`, `/metrics` | probes and Prometheus metrics |
+| `/design` | the design page |
+
+`postfgb serve` is writable; `postfgb serve --readonly` registers only the read routes. There is no authentication in the server: run it behind your own auth layer, expose readonly workers publicly, and keep writable workers internal. Requests log one structured line with route, status, duration and bytes.
 
 ## How it works
 
-- A view is a collection whose metadata lists members (`members`, or `postfgb:members` in the STAC collection document): members must be native collections with an identical schema (flattened columns included), and the view serves one range-readable `.fgb` that concatenates their feature streams under a header whose geometry type is the members' shared type, or Unknown when they differ. The members' chunks are referenced, not copied — the only added storage is the view's own header and packed R-tree (~40 B/feature, exactly what a collection's own index costs) — and its extents and counts are the union of the members'. A member ingest rebuilds every view that contains it inside the same transaction, bumping the view's version, so a view never serves stale bytes. Dropping a member does the same, and a view left with no members is dropped. A view serves the whole OGC Features surface: `/items` streams the members in order with paging, bbox and filter parameters (identical schemas make the same predicates valid for every member), `/items/{id}` resolves across members, `numberMatched`, `queryables` and the generated `f=flatgeobuf` export answer for the union, and `/items.fgb` serves the composed file. A view cannot be a member of another view.
-- JSON columns are detected at ingest and flattened one level into columns: string values that hold JSON become structured (arrays, objects), and the keys of object values become their own columns named `<parent>_<key>` (`names_it`, `diets_vegan`, `foods_pizza`, …). Scalar keys become typed columns (string, long, double, bool) and array-valued keys keep their JSON in a column, so all of them show up in `/queryables`, in the FlatGeobuf schema and in the filter path; the parent column stays as uploaded. Keys seen in at least two features are flattened, at most 24 per parent and 64 per collection, chosen by support so a re-ingest produces the same schema. `flatten=off` disables it. Flattened keys are ordinary columns: the property-filter path and the chunk statistics that prune candidate chunks treat them like any other column, so both equality and range filters work without declaring anything.
-- Features are encoded into FlatGeobuf chunks (packed Hilbert R-tree included) sized to ~2 MiB by a self-calibrating estimator, Hilbert-sorted into coherent chunks at ingest, zstd-compressed in Go, and stored as `bytea` rows in per-collection partitions with per-collection indexes; the same ingest assembles the collection-level R-tree for the range-readable file. A chunk is capped at 50,000 features and at a hard maximum of 8 MiB: a batch that encodes larger is split in half and re-encoded until every chunk fits, so an overshooting estimate cannot weaken chunk-level pruning. Each chunk also carries a cumulative `feature_base` (the feature index at which it starts within its tier's stream), indexed so `(collection, tier, feature_base)` resolves an offset in one probe.
-- Chunk bounds are plain float columns with a GiST index on each chunk's bounding box; one box-overlap predicate prunes candidate chunks, and features are then tested exactly in Go.
-- The database only compares boxes built from those floats: no geometry parsing, no PostGIS. Real spatial work happens in memory, over the FlatGeobuf Hilbert R-trees.
-- Ingest builds overview tiers, sampled today by a global ordinal stride (10% and 1%), Douglas-Peucker simplified, with small non-point features dropped (tiers add ~11% storage on the demo set). They exist to be asked for: `overview=auto` (the default) serves full detail, `overview=1|2` serves a tier, which is how the viewer's zoom-constrained layers work. Decided: the tier count will derive from the feature count so the coarsest tier lands at about 10,000 features, and tiers will be picked per chunk rather than by a global stride so every tier covers the whole extent evenly; the viewer's layer names will follow a tier's actual sample percentage. Filtered requests and exports always use full detail, and a filtered request that asks for a tier (`overview=1|2`) answers 400 (implemented); a filter, a property filter or a datetime makes a request filtered, while a bbox alone does not. Unfiltered requests still select the tier, and a view always serves tier 0.
-- Attribute filters run on per-chunk statistics (`chunk_stats`, `collections.stats_version`): any non-reserved query parameter (or CQL2 `filter=`) becomes a predicate that prunes candidate chunks from tiny per-column summaries — a Bloom filter for string, boolean and JSON columns and min/max for numeric and time columns — and every feature of the surviving chunks is then evaluated exactly in Go. Statistics are written at ingest in the same transaction as the chunks, so they are mandatory: a newer worker backfills any collection whose `stats_version` differs from its `version` at startup under an advisory lock before it serves, and a collection that still has no current statistics answers 500 naming the collection instead of falling back to a scan (there is no sidecar and no SQL attribute scan anymore).
-- Responses page with `links` (`rel=next`), so GDAL and other OGC clients walk the entire collection. The `next` link carries an opaque cursor (urlsafe base64 of the collection `uid` and `version`, the tier, the member, the `chunk_id` and `feature_ord`, and a fingerprint of the query); following it resumes by keyset in one indexed probe. A request may still send `offset` instead, and a request that sends both a cursor and an offset, a cursor for another collection or version, or a cursor for a different query answers 400.
-- FlatGeobuf is also served as one range-readable file per collection: `/collections/{id}/items.fgb` answers `Range` requests with 206 and slices the chunks that the asked-for bytes fall in, so clients like GDAL and RustGIS read windows in place instead of downloading a whole export. The collection header and its packed R-tree are assembled **during ingest** (the header declares the geometry type all chunks share, Unknown when they differ, and each chunk's index leaves are rebased as the chunk is written) and stored in ~1 MiB `virtual_segment` rows keyed by collection version, with each chunk's feature-region length in `chunks.feature_bytes`; reads load only the segments and chunks a request overlaps, so no worker builds or holds an index of its own; decompressed chunks are kept in a small worker-side cache so repeated window reads are memory hits.
-- Each collection's layers sit next to each other in the viewer's layer tree and switch by zoom: the coarse tiers draw when zoomed out, full detail when zoomed in (RustGIS reads a visible layer even while its zoom range hides it, so leave the heavy ones hidden for light world views).
-- Writes (ingest and delete) are part of the writable surface only; readonly workers serve just the OGC and STAC read paths. There are no raw chunk endpoints: features are read only through items and `items.fgb`, which apply filters server-side. The server does no authentication — run it behind your own auth layer (Kubernetes Gateway API, reverse proxy, service mesh). Filtered FlatGeobuf is served as an alternate encoding of items, so clients cannot bypass filters.
-- CQL2-text `filter=` is the only filter language. It supports comparisons, `IN`, `BETWEEN`, `LIKE`, `IS NULL` and `AND`/`OR`/`NOT`, and any other `filter-lang` (CQL2-JSON included) answers 400. The parser builds a predicate tree; the chunk statistics prune candidate chunks in SQL and every surviving feature is evaluated exactly in Go. Spatial functions such as `S_INTERSECTS` are not supported and answer 400: `bbox` is the spatial filter.
-- The server is one small Go binary: huma for the OGC metadata endpoints, streaming handlers for items and the range-readable file.
+- Uploads stream one FlatGeobuf file. Each feature is assigned to a level-8 S2 cell, sorted within the cell by Hilbert key and id, and encoded into FlatGeobuf chunks of about 2 MiB. Chunks are zstd-compressed and stored as 8120-byte rows in `pfgb.blocks`, catalogued by `pfgb.chunks`; ids live in `pfgb.ids`, and overview levels are sampled from full detail.
+- Reads load the collection's cell catalog from PostgreSQL, prune cells by bounding box and per-chunk zones, then evaluate filters exactly in Go over the stored column files. Cursors resume by `(cell, key, id)`.
+- PostgreSQL only stores blocks and scalar catalog columns; there is no PostGIS dependency, and the core path needs no PostgreSQL extensions.
+- JSON columns are detected and flattened one level into typed columns at ingest. Scalar keys become ordinary columns; array-valued keys stay JSON. Key selection is deterministic for the same input.
 
-The core path needs zero PostgreSQL extensions and runs on plain Amazon Aurora PostgreSQL (16–18); nothing probes for extensions at startup.
+Not in this pass: collection metadata/listing, STAC, the RustGIS viewer, views, range-readable `items.fgb`, and the generated OpenAPI document. The append-only migrations that created the legacy v1 tables are still applied, but no v1 route serves them.
 
 ## Quickstart
 
@@ -32,97 +35,23 @@ Requires [mise](https://mise.jdx.dev) (installs Go, just and hk) and Docker.
 
 ```sh
 mise install
-hk install --mise   # pre-commit hooks: gofmt, go vet, go mod tidy, go test
-just demo           # PostgreSQL 18 via Docker plus OSM fixture layers (Layercake)
-just serve          # http://localhost:8080
+hk install --mise
+just pg-up
+just serve
 ```
 
-Workers run in two modes. `postfgb serve` is writable: ingest and delete. `postfgb serve --readonly` (or `POSTFGB_READONLY=true`) is the serving mode: only the OGC and STAC read surface is registered — writes answer 404 — and migrations are skipped unless `--migrate` is passed explicitly. Workers are stateless (`--addr` sets the listen address and defaults to `127.0.0.1:8080`, so nothing is exposed unless you ask; `--max-conns`/`--min-conns` tune the PostgreSQL pool, `--max-chunk-bytes` bounds the per-request chunk fetch budget) and all speak to the same PostgreSQL, so scale out with as many readonly replicas as you like. SIGTERM drains in-flight requests and shuts down cleanly; `/healthz`, `/readyz` and `/metrics` cover probes and monitoring, and one structured log line per request carries route, status, duration and bytes.
-
-The server never authenticates requests. Put it behind your own auth layer — Kubernetes Gateway API, an ingress with path rules, a reverse proxy or a service mesh — and expose only the readonly workers publicly; keep the writable ones (which can ingest and delete) on an internal route. The read surface sends permissive CORS headers (`Access-Control-Allow-Origin: *`, ETag/Content-Crs exposed) so browser clients — the RustGIS web app that `/viewer` opens, or a RustGIS build anywhere else — can query a deployment directly. Readonly workers serve the same OGC and STAC read surface, without the write endpoints.
+Load a FlatGeobuf file and read it back:
 
 ```sh
-curl localhost:8080/collections
-curl "localhost:8080/collections/bench/items?bbox=-10,45,10,55&limit=100"
-curl "localhost:8080/collections/bench/items?name=feature-42&limit=10"
-curl -G "localhost:8080/collections/bench/items" --data-urlencode "filter=i between 5 and 7 and name like 'feature-6%'"
-curl -T features.fgb -H "Content-Type: application/flatgeobuf" "localhost:8080/collections/demo"
-curl -X PUT -H "Content-Type: application/json" -d '{"title":"Demo features"}' "localhost:8080/collections/demo"
-```
-
-## Endpoints
-
-| Path | Content |
-| --- | --- |
-| `/` | landing page |
-| `/conformance` | conformance classes |
-| `/collections` | collections with extents |
-| `/collections/{id}` | collection detail |
-| `/collections/{id}/items?bbox=&limit=&offset=&filter=&{property}=&f=` | features: bbox, CQL2-text filters (spatial functions and other `filter-lang` values answer 400), paged by `limit` and `offset` (100,000 default, up to 1,000,000; `offset` counts matching features, with `bbox` the exact matches; `next` links carry an opaque cursor and a request resumes from it with one keyset probe, while a request that carries both a cursor and an offset, or a cursor for another collection, version or query, answers 400); `overview=auto|0|1|2` picks a tier (`auto` and `0` are full detail, and views always are; a filtered request that asks for a tier answers 400, and a bbox alone is not a filter); `numberMatched=true` adds the match count (omitted when `bbox` is set); `f=flatgeobuf` or `Accept: application/flatgeobuf` streams the filtered result as one FlatGeobuf; `sortby` and `q` answer 400 (not supported); `crs` and `bbox-crs` accept only CRS84 (GeoJSON responses to `crs` carry `Content-Crs`), other values answer 400; a chunk that cannot be read answers 500, never a short page |
-| `/collections/{id}/items.fgb` | with no filter parameter: the whole collection as one FlatGeobuf across the chunk feature streams (R-tree rebuilt from the chunk indexes), served with `Accept-Ranges` and 206 range responses so clients read windows in place; `overview=1\|2` serves a tier instead of full detail. With any filter parameter: the generated export, capped at 100k features with a `Link: rel=next` when there is more |
-| `/collections/{id}/items/{featureId}` | single feature, always full detail; ids come from an id-like property (`id`, `fid`, ...) or the synthetic `chunkID-ord` |
-| `/collections/{id}/queryables` | JSON Schema of the filterable properties |
-| `PUT /collections/{id}?id_column=&time_column=&flatten=` (writable) | create-or-replace the collection from a whole FlatGeobuf body (any non-JSON content type); transactional, reprojected to WGS84, readers keep the old version until the swap; statistics are built for every column automatically, so a request that sends `sortable` answers 400 |
-| `PUT /collections/{id}` (JSON body, writable) | write the STAC collection document: `title`, `description`, `license`, `keywords` and free-form STAC fields are stored and echoed by the STAC facade; `members` (or `postfgb:members`) instead creates or replaces a view over those collections |
-| `DELETE /collections/{id}` (writable) | drop a collection and its partitions |
-| `/stac/collections`, `/stac/collections/{id}` | STAC collection documents, as stored by `PUT /collections/{id}` (read-only echo; no catalog, items or search) |
-| `/api` | OpenAPI 3.0 definition (OGC content type) |
-| `/viewer` | 302 redirect to the RustGIS web app (`web.rustgis.app/?embed&project=…`), which opens the generated `/viewer.rgis` project: per collection, one range-readable FlatGeobuf layer per overview tier plus full detail, each constrained to its own zoom range, all hidden by default |
-| `/viewer.rgis` | RustGIS project JSON built from the catalog on every request (`format: 1`, the OGC API service group, and per collection a zoom-constrained layer set — full detail with `min_scale` so it only draws zoomed in, the 10% tier in the middle band, the 1% tier with `max_scale` so it only draws zoomed out — all `visible: false`) |
-| `/healthz` | liveness probe, always 200 |
-| `/readyz` | readiness probe: PostgreSQL ping plus migration check |
-| `/metrics` | Prometheus text metrics: requests, durations, bytes, ingest counters (features and chunks) and pool gauges |
-
-Collection ids are 1 to 48 characters: a letter or digit, then letters, digits, `_`, `-` or `.`. Other ids answer 422 on PUT and DELETE.
-
-## Real data (OSM Layer Cake)
-
-[Layercake](https://layercake.openstreetmap.us) publishes OpenStreetMap as planet-wide GeoParquet layers with HTTP range access. GDAL (sidecar container) reads them with row-group pruning, converts to FlatGeobuf and streams it straight into a PUT — no temporary files on the host:
-
-```sh
-just layercake settlements "-74.05 40.65 -73.92 40.82"   # NYC, ~3 s
-just layercake buildings "7.40 43.72 7.44 43.76"         # Monaco, ~10 s
-```
-
-The arguments map to `https://data.openstreetmap.us/layercake/<layer>.parquet` and an optional `-spat` bbox; omit the bbox to stream an entire layer (settlements is 188 MiB, pois is 62.3M features / 4.4 GiB, buildings 709.8M features / 42.9 GiB planet-wide). Uploads stream with `curl -T` (or `-T -` for a pipe from `ogr2ogr`): the body never sits in curl's memory — `--data-binary` buffers the whole upload in RAM, which kills multi-gigabyte loads. Every scalar attribute crosses intact, JSON-subtype columns (`names`, `official_names`, …) keep their JSON, and list-valued tags (`name`, `cuisine`, `alt_name`, …) arrive as JSON arrays — FlatGeobuf itself has no list type, so the recipe maps lists to JSON text and ingest promotes JSON-shaped columns back to structured values that the API returns as arrays and equality filters match by member. Layer types are normalized with `-nlt GEOMETRY` by default so mixed-geometry layers (highways, POIs) load as-is, and `CPL_VSIL_CURL_CHUNK_SIZE` is raised to 4 MiB so big extracts spend fewer round trips on the source. Layers land with their real tags, OSM timestamps (time filtering and `extent.temporal` come along) and polygon geometry. A load that dies mid-stream — a killed extractor, or aggressive `GDAL_HTTP_TIMEOUT` on a slow source — shows up as `422` (the body is not a whole FlatGeobuf); nothing is replaced, so just load again. `just fixtures` loads the six main layers over one shared bbox.
-
-## Benchmarks
-
-`bench/run.sh` uses GDAL as an OGC client:
-
-- `ogrinfo "OAPIF:http://localhost:8080"` — collection listing
-- `ogrinfo -so -al "OAPIF:http://localhost:8080" bench` — full scan
-- `ogrinfo -so -al -spat -10 45 10 55 "OAPIF:http://localhost:8080" bench` — server-side bbox filter
-- `ogrinfo -so -al "/vsicurl/http://localhost:8080/collections/bench/items.fgb"` — reads the FlatGeobuf in place through range requests
-
-`just pg-stats` watches a bulk load from the database side: database size, `temp_files`/`temp_bytes`, session states and oldest transaction, per-collection chunk storage and the WAL directory size. `temp_bytes` is the one that matters during big loads — index builds spill into Postgres temp files that are unlinked immediately, so `df` shows the space consumed while `du`, `pg_database_size` and `docker system df` cannot; a jump there means index-build spill, answered by raising `maintenance_work_mem` (or loading in tiles).
-
-## Exports
-
-Bulk data leaves the server as FlatGeobuf and nothing else — clients convert locally with GDAL, like any other file:
-
-```sh
-curl -s "localhost:8080/collections/bench/items?f=flatgeobuf&filter=i%3E999990" -o filtered.fgb
-ogr2ogr filtered.gpkg filtered.fgb
-```
-
-The `just export` recipe runs that OAPIF-to-OGR conversion client-side in one step. GDAL stays a sidecar container; the server remains cgo-free:
-
-```sh
-just export demo FlatGeobuf demo.fgb    # OAPIF -> any OGR format: GPKG, KML, Shapefile, GeoParquet, ...
-just export bench GPKG bench.gpkg
-```
-
-
-Keep filtering on the server side: GDAL evaluates `-where` clauses against OAPIF sources client-side (it downloads the whole collection), while server-side `filter=` prunes chunks with the per-chunk statistics and evaluates the survivors exactly. Ask for `f=flatgeobuf` and the server assembles one filtered FlatGeobuf (spatial index included) that GDAL reads directly:
-
-```sh
-ogr2ogr filtered.gpkg "/vsicurl_streaming/http://localhost:8080/collections/bench/items?f=flatgeobuf&filter=i%3E999990"
+curl -T features.fgb -H "Content-Type: application/flatgeobuf" \
+  "http://localhost:8080/v2/collections/demo?id_column=id"
+curl "http://localhost:8080/v2/collections/demo/items?limit=10"
+curl "http://localhost:8080/v2/collections/demo/items?bbox=-10,45,10,55&filter=name LIKE 'feature-6%'"
 ```
 
 ## Status
 
-Pre-alpha. Working today: chunk encode/decode, HTTP FlatGeobuf ingest (content-negotiated create-or-replace PUT, staged loads swapped in at commit, reprojected to WGS84, per-chunk statistics built at ingest) with 10%/1% overview tiers, zstd-compressed ~2 MiB chunks in per-collection partitions, OGC API Features with windowed next-link paging (100,000 default) and `overview=` overrides, single-feature, queryables and `numberMatched` endpoints, GiST bounding-box chunk pruning, attribute filters from per-chunk statistics with exact evaluation in Go, CQL2-text filters (no CQL2-JSON or spatial functions), range-readable FlatGeobuf per collection and per view (206 slices of the chunk feature streams, built-into-storage indexes, tier selection with `overview=`), JSON columns flattened into queryable typed columns, views over same-schema collections with index-only storage, per-request chunk byte budget, zstd or gzip on JSON, FlatGeobuf downloads for local conversion, STAC collection documents facade, a generated RustGIS project at `/viewer.rgis` (with `/viewer` redirecting into the RustGIS web app), permissive CORS for browser clients, writable/readonly worker modes, `/healthz`/`/readyz`/`/metrics`, graceful shutdown, structured request logs, PostgreSQL-backed integration tests in CI, hk git hooks. Benchmarked with GDAL as an OGC client on 1M features: full paged scan ~69s, single FlatGeobuf export 7s, bbox page ~2s,  a 50M-feature staged load runs in ~45 min with reads on other collections staying under 25 ms throughout. Next: the build order on the design page (deeper performance work).
+Pre-alpha. Working today: FlatGeobuf ingest and storage as PostgreSQL blocks, cell-ordered chunk catalogs with id indexes, overview levels, bbox and attribute-filter pruning with exact evaluation in Go, cursor paging, FlatGeobuf pages, readonly/writable worker modes, probes, metrics and the design page. The design page records the remaining build order, including the v2 schema alignment.
 
 ## License
 

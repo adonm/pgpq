@@ -7,13 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
-	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/adonm/postfgb/internal/fgb"
 )
 
 //go:embed migrations/*.sql
@@ -21,79 +17,8 @@ var migrations embed.FS
 
 var ErrNotFound = errors.New("store: not found")
 
-var ErrConflict = errors.New("store: conflict")
-
 type Store struct {
 	Pool *pgxpool.Pool
-}
-
-type Payload struct {
-	Data         []byte
-	Size         int
-	Count        int
-	Tier         int
-	MinX, MinY   float64
-	MaxX, MaxY   float64
-	Checksum     string
-	Columns      string
-	FeatureBytes int
-	HeaderBlob   []byte
-	Leaves       []fgb.Leaf
-}
-
-type ChunkRow struct {
-	Data []byte
-	Tier int
-}
-
-type ChunkMeta struct {
-	ID           int64
-	FeatureCount int
-	FeatureBase  int64
-	MinX, MinY   float64
-	MaxX, MaxY   float64
-	SizeBytes    int
-	Columns      []byte
-}
-
-type CollectionInfo struct {
-	Name         string
-	UID          int64
-	Kind         string
-	Members      []byte
-	Version      int64
-	StatsVersion int64
-	ChunkCount   int64
-	FeatureCount int64
-	MinX, MinY   *float64
-	MaxX, MaxY   *float64
-	TimeMin      *time.Time
-	TimeMax      *time.Time
-	IDColumn     *string
-	TimeColumn   *string
-	Title        *string
-	Description  *string
-	License      *string
-	Keywords     []string
-	Stac         []byte
-}
-
-type CollectionMeta struct {
-	Title       *string
-	Description *string
-	License     *string
-	Keywords    *[]string
-}
-
-type FeatureMatch struct {
-	ChunkID int64
-	Ord     int
-}
-
-type db interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 type PoolOptions struct {
@@ -204,16 +129,4 @@ var collectionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$`)
 
 func ValidName(name string) bool {
 	return collectionName.MatchString(name)
-}
-
-func ident(name string) string {
-	return pgx.Identifier{name}.Sanitize()
-}
-
-func queryAll[T any](ctx context.Context, conn db, scan pgx.RowToFunc[T], sql string, args ...any) ([]T, error) {
-	rows, err := conn.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, scan)
 }

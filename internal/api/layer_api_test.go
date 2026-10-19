@@ -8,7 +8,9 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"testing"
 
@@ -19,6 +21,34 @@ import (
 	"github.com/adonm/postfgb/internal/spatial"
 	"github.com/adonm/postfgb/internal/store"
 )
+
+func integrationStore(t *testing.T) *store.Store {
+	t.Helper()
+	dsn := os.Getenv("POSTFGB_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTFGB_TEST_DSN is not set")
+	}
+	ctx := context.Background()
+	st, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+	return st
+}
+
+func call(h http.Handler, method, path, contentType string, body []byte) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
 
 func layerBody(t *testing.T, name string, lng, lat float64, n int) []byte {
 	t.Helper()

@@ -2,13 +2,13 @@
 
 ## Goal
 
-The smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pushing filtering into per-chunk statistics.
+The smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pruning reads with per-chunk statistics.
 
 Design decisions live in the design page (`internal/api/design.html`, served at `/design`); the agent guide is [AGENTS.md](AGENTS.md).
 
 ## Development setup
 
-Requirements: [mise](https://mise.jdx.dev) (installs Go, just, hk and ko per `mise.toml`) and Docker. Benchmarks use GDAL: a local install, or the bench script pulls `ghcr.io/osgeo/gdal:alpine-small-latest`.
+Requirements: [mise](https://mise.jdx.dev) (installs Go, just, hk and ko per `mise.toml`) and Docker.
 
 ```sh
 mise install
@@ -27,44 +27,30 @@ Run `just` for the full list. The common ones:
 | --- | --- |
 | `just ci` | gofmt check, vet, unit tests |
 | `just pg-up` / `just pg-down` | PostgreSQL 18 via docker compose |
-| `just fixtures` | load a small multi-layer OSM set (Layercake) for development |
-| `just layercake <layer> <bbox>` | stream any OSM Layercake GeoParquet layer into a collection over HTTP |
-| `just serve` | run the OGC API server on `:8080` |
+| `just serve` | run the server on `:8080` |
+| `just serve-readonly` | run the read-only worker on `:8080` |
+| `just test-integration` | integration tests against `POSTFGB_TEST_DSN` |
 | `just image-tar` | build the container image with ko |
-| `just demo` | pg-up + OSM fixture layers |
-| `just bench` | GDAL client benchmark against a running server |
-| `just layercake <layer> <bbox>` | stream an OSM Layercake GeoParquet layer into a collection over HTTP |
 
 ## Code style
 
 - No comments. Names and small functions carry the meaning.
 - Smallest reasonable implementation; stdlib first, one dependency must justify itself.
-- The core path uses no PostgreSQL extensions: chunk pruning is a bounding-box overlap on a GiST index plus scalar float comparisons. Never push geometry parsing or spatial library functions into the query path — real spatial work happens in Go over FlatGeobuf chunks. Do not add optional extension accelerators (`pg_roaringbitmap`, `hll`, `pg_trgm`, ...): nothing probes for them, and the core path must never need one.
+- The core path uses no PostgreSQL extensions. Do not add optional extension accelerators (`pg_roaringbitmap`, `hll`, `pg_trgm`, ...): nothing probes for them, and the core path must never need one.
 - Chunk sizing, property encoding, and the FlatGeobuf wire format must stay interoperable with GDAL, QGIS, and the reference implementations. When in doubt, verify with `ogrinfo`.
 
 ## Testing
 
-- Unit: `go test ./...` covers chunk round-trip (encode, search, property decode) and reads the upstream `poly_landmarks.fgb` fixture.
-- Integration: `just pg-up && just demo && just serve`, then query the OGC endpoints.
-- Benchmarks: `just bench` drives GDAL as an OGC client:
-  - OAPIF via `ogrinfo "OAPIF:$URL"` — collection listing, full scan (`-so -al`), and server-side bbox filtering (`-spat`).
-  - In-place FlatGeobuf reads via `ogrinfo -so -al "/vsicurl/$URL/collections/.../items.fgb"`.
-- Record benchmark numbers (feature count, chunk count, wall times) for any change that touches chunking, storage, query, or encoding.
-
-## Benchmark methodology
-
-`just layercake <layer> <bbox>` streams real OSM layers through the GDAL sidecar (whole layers by leaving the bbox out — settlements is 4.6M points). The scaling claim to defend: as feature count grows, Postgres row count, chunk pruning cost, and query latency stay near constant. Report:
-- features and chunks ingested,
-- OAPIF full-scan wall time from GDAL,
-- OAPIF `-spat` wall time,
-- Range-read wall time (`items.fgb`).
+- Unit: `go test ./...` covers FlatGeobuf chunk round-trips, attribute encoding, CQL evaluation, spatial indexing and ingest flattening.
+- Integration: `just pg-up && just test-integration` runs the database-backed layers and API tests against the migrations in `internal/store/migrations/`.
+- The v2 routes are `PUT /v2/collections/{id}` and `GET /v2/collections/{id}/items...`; there is no OAPIF collection listing yet, so GDAL verification is limited to FlatGeobuf pages.
 
 ## Pull requests
 
 - `just ci` must pass.
 - One logical change per PR.
 - Performance-affecting changes include benchmark output.
-- Schema changes only in `internal/store/migrations/` as a new numbered file.
+- Schema changes only in `internal/store/migrations/` as a new numbered file; migrations are append-only.
 
 ## License
 

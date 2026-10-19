@@ -2,8 +2,6 @@ package ingest
 
 import (
 	"encoding/json"
-	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
@@ -120,35 +118,5 @@ func TestFlattenJSONColumns(t *testing.T) {
 	flat.apply(later)
 	if got := string(later[0].Properties["names_pop"]); got != "119000" {
 		t.Fatalf("a later window names_pop = %s, want 119000", got)
-	}
-}
-
-func TestChunkByteCapSplits(t *testing.T) {
-	cols := []chunk.Column{{Name: "name", Type: flattypes.ColumnTypeString}}
-	batch := make([]chunk.InputFeature, 0, 200)
-	for i := 0; i < 200; i++ {
-		coords, err := json.Marshal([]float64{float64(i), 0})
-		if err != nil {
-			t.Fatal(err)
-		}
-		batch = append(batch, chunk.InputFeature{
-			Geometry:   chunk.RawGeometry{Type: "Point", Coordinates: coords},
-			Properties: map[string]json.RawMessage{"name": json.RawMessage(fmt.Sprintf("%q", strings.Repeat("x", 200)))},
-		})
-	}
-	var sizes []int
-	if err := encodeChunks("cap", cols, batch, 4096, nil, func(data []byte) error {
-		sizes = append(sizes, len(data))
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(sizes) < 2 {
-		t.Fatalf("cap produced %d chunks, want the stream split", len(sizes))
-	}
-	for _, size := range sizes {
-		if size > 4096 {
-			t.Fatalf("chunk of %d bytes exceeds the %d byte cap", size, 4096)
-		}
 	}
 }

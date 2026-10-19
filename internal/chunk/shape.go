@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
-	"github.com/paulmach/orb"
 )
 
 func ParseFlat(header *flattypes.Header, f *flattypes.Feature) (*ParsedGeometry, error) {
@@ -73,38 +72,6 @@ func ParseFlat(header *flattypes.Header, f *flattypes.Feature) (*ParsedGeometry,
 	return nil, nil
 }
 
-func FromOrb(g orb.Geometry) (*ParsedGeometry, bool) {
-	switch geom := g.(type) {
-	case orb.Point:
-		return &ParsedGeometry{typ: flattypes.GeometryTypePoint, xy: []float64{geom[0], geom[1]}}, true
-	case orb.MultiPoint:
-		xy := make([]float64, 0, len(geom)*2)
-		for _, p := range geom {
-			xy = append(xy, p[0], p[1])
-		}
-		return &ParsedGeometry{typ: flattypes.GeometryTypeMultiPoint, xy: xy}, true
-	case orb.LineString:
-		return &ParsedGeometry{typ: flattypes.GeometryTypeLineString, xy: lineXY(geom)}, true
-	case orb.MultiLineString:
-		parts := make([]ParsedGeometry, 0, len(geom))
-		for _, line := range geom {
-			parts = append(parts, ParsedGeometry{xy: lineXY(line)})
-		}
-		return &ParsedGeometry{typ: flattypes.GeometryTypeMultiLineString, parts: parts}, true
-	case orb.Polygon:
-		xy, ends := polyXY(geom)
-		return &ParsedGeometry{typ: flattypes.GeometryTypePolygon, xy: xy, ends: ends}, true
-	case orb.MultiPolygon:
-		parts := make([]ParsedGeometry, 0, len(geom))
-		for _, poly := range geom {
-			xy, ends := polyXY(poly)
-			parts = append(parts, ParsedGeometry{xy: xy, ends: ends})
-		}
-		return &ParsedGeometry{typ: flattypes.GeometryTypeMultiPolygon, parts: parts}, true
-	}
-	return nil, false
-}
-
 func (p *ParsedGeometry) Transform(fn func(x, y, z float64) (float64, float64, float64, error)) error {
 	for i := 0; i+1 < len(p.xy); i += 2 {
 		x, y, _, err := fn(p.xy[i], p.xy[i+1], 0)
@@ -147,24 +114,4 @@ func flatEnds(g *flattypes.Geometry, total int) []uint32 {
 		ends = append(ends, g.Ends(i))
 	}
 	return ends
-}
-
-func lineXY(line orb.LineString) []float64 {
-	xy := make([]float64, 0, len(line)*2)
-	for _, p := range line {
-		xy = append(xy, p[0], p[1])
-	}
-	return xy
-}
-
-func polyXY(poly orb.Polygon) ([]float64, []uint32) {
-	var xy []float64
-	ends := make([]uint32, 0, len(poly))
-	var count uint32
-	for _, ring := range poly {
-		xy = append(xy, lineXY(orb.LineString(ring))...)
-		count += uint32(len(ring))
-		ends = append(ends, count)
-	}
-	return xy, ends
 }

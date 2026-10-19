@@ -12,7 +12,7 @@ The design page (`internal/api/design.html`, served at `/design`) is the contrac
 ## Environment
 
 - mise provides Go, just, hk and ko. Docker provides PostgreSQL and GDAL for verification.
-- Verify with GDAL as an OGC client before calling any read-path work done: `ogrinfo`/`ogr2ogr` against `OAPIF:http://localhost:8080` and against `/vsicurl/http://localhost:8080/collections/{id}/items.fgb` for in-place FlatGeobuf reads.
+- Verify FlatGeobuf output with GDAL before calling any read-path work done: save `/v2/collections/{id}/items?f=flatgeobuf` and read it with `ogrinfo`. No OAPIF collection listing is served in the v2-only surface.
 
 ## Rules
 

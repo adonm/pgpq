@@ -2,15 +2,9 @@ package fgb
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
-	"math"
-
-	"github.com/flatgeobuf/flatgeobuf/src/go/index"
-	"github.com/flatgeobuf/flatgeobuf/src/go/writer"
-	flatbuffers "github.com/google/flatbuffers/go"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 )
@@ -85,151 +79,10 @@ func treeSize(numItems uint64, nodeSize uint16) uint64 {
 	if nodeSize < 2 || numItems == 0 {
 		return 0
 	}
-	return Nodes(numItems, nodeSize) * 40
-}
-
-func Regions(data []byte, header *flattypes.Header) (featuresAt int, featuresLen int, err error) {
-	headerLen := 4 + int(flatbuffers.GetUOffsetT(data[8:]))
-	if headerLen <= 4 || headerLen > len(data) {
-		return 0, 0, errors.New("fgb: invalid header length")
-	}
-	indexLen := int(treeSize(header.FeaturesCount(), header.IndexNodeSize()))
-	featuresAt = 8 + headerLen + indexLen
-	featuresLen = len(data) - featuresAt
-	if featuresLen < 0 {
-		return 0, 0, errors.New("fgb: truncated chunk")
-	}
-	return featuresAt, featuresLen, nil
-}
-
-const (
-	NodeSize     uint16 = 16
-	SegmentBytes int64  = 1 << 20
-)
-
-type Leaf struct {
-	BBox   [4]float64
-	Offset uint64
-}
-
-func Nodes(count uint64, nodeSize uint16) uint64 {
-	nodes := count
-	for n := count; n > 1; {
+	nodes := numItems
+	for n := numItems; n > 1; {
 		n = (n + uint64(nodeSize) - 1) / uint64(nodeSize)
 		nodes += n
 	}
-	return nodes
-}
-
-func Leaves(data []byte, count uint64, nodeSize uint16) ([]Leaf, bool) {
-	if count == 0 || nodeSize < 2 {
-		return nil, false
-	}
-	leaves := make([]Leaf, 0, count)
-	for i := uint64(0); i < count; i++ {
-		at := int((Nodes(count, nodeSize) - count + i) * 40)
-		if at+40 > len(data) {
-			return nil, false
-		}
-		leaves = append(leaves, Leaf{
-			BBox: [4]float64{
-				math.Float64frombits(binary.LittleEndian.Uint64(data[at:])),
-				math.Float64frombits(binary.LittleEndian.Uint64(data[at+8:])),
-				math.Float64frombits(binary.LittleEndian.Uint64(data[at+16:])),
-				math.Float64frombits(binary.LittleEndian.Uint64(data[at+24:])),
-			},
-			Offset: binary.LittleEndian.Uint64(data[at+32:]),
-		})
-	}
-	return leaves, true
-}
-
-func Layout(data []byte, header *flattypes.Header) (headerBlob []byte, leaves []Leaf, featureBytes int, ok bool) {
-	featuresAt, featuresLen, err := Regions(data, header)
-	if err != nil {
-		return nil, nil, 0, false
-	}
-	indexStart := featuresAt - int(Nodes(header.FeaturesCount(), header.IndexNodeSize()))*40
-	if indexStart <= 8 || featuresAt > len(data) {
-		return nil, nil, 0, false
-	}
-	leaves, ok = Leaves(data[indexStart:featuresAt], header.FeaturesCount(), header.IndexNodeSize())
-	if !ok {
-		return nil, nil, 0, false
-	}
-	return data[8:indexStart], leaves, featuresLen, true
-}
-
-type item struct {
-	offset uint64
-	bbox   [4]float64
-}
-
-func (i item) NodeItem() index.NodeItem {
-	return index.NewNodeItemWithCoordinates(i.offset, i.bbox[0], i.bbox[1], i.bbox[2], i.bbox[3])
-}
-
-func Index(chunks [][]Leaf, lengths []int64, nodeSize uint16) ([]byte, [4]float64, bool) {
-	total := 0
-	for _, leaves := range chunks {
-		total += len(leaves)
-	}
-	if total == 0 {
-		return nil, [4]float64{}, false
-	}
-	items := make([]index.Item, 0, total)
-	var base int64
-	for i, leaves := range chunks {
-		for _, leaf := range leaves {
-			items = append(items, item{offset: uint64(base) + leaf.Offset, bbox: leaf.BBox})
-		}
-		if i < len(lengths) {
-			base += lengths[i]
-		}
-	}
-	extent := index.CalcExtentForItems(items)
-	var buf bytes.Buffer
-	if _, err := index.NewPackedRTreeWithItems(items, extent, nodeSize).Write(&buf); err != nil {
-		return nil, [4]float64{}, false
-	}
-	slice := extent.ToSlice()
-	return buf.Bytes(), [4]float64{slice[0], slice[1], slice[2], slice[3]}, true
-}
-
-func GeometryOf(blob []byte) flattypes.GeometryType {
-	return flattypes.GetSizePrefixedRootAsHeader(blob, 0).GeometryType()
-}
-
-func Header(name string, blob []byte, count uint64, envelope [4]float64, geometry flattypes.GeometryType) ([]byte, bool) {
-	src := flattypes.GetSizePrefixedRootAsHeader(blob, 0)
-	if src == nil {
-		return nil, false
-	}
-	builder := flatbuffers.NewBuilder(0)
-	header := writer.NewHeader(builder).
-		SetName(name).
-		SetEnvelope([]float64{envelope[0], envelope[1], envelope[2], envelope[3]}).
-		SetGeometryType(geometry).
-		SetHasZ(src.HasZ()).
-		SetHasM(src.HasM()).
-		SetFeaturesCount(count).
-		SetIndexNodeSize(NodeSize)
-	columns := make([]*writer.Column, src.ColumnsLength())
-	for i := range columns {
-		var column flattypes.Column
-		src.Columns(&column, i)
-		columns[i] = writer.NewColumn(builder).SetName(string(column.Name())).SetType(column.Type())
-	}
-	header.SetColumns(columns)
-	var crs flattypes.Crs
-	if src.Crs(&crs) != nil {
-		header.SetCrs(writer.NewCrs(builder).
-			SetOrg(string(crs.Org())).
-			SetCode(crs.Code()).
-			SetName(string(crs.Name())).
-			SetCodeString(string(crs.CodeString())))
-	}
-	offset := header.Build()
-	builder.FinishSizePrefixed(offset)
-	return builder.FinishedBytes(), true
+	return nodes * 40
 }

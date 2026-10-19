@@ -3,13 +3,11 @@ module github.com/adonm/postfgb
 go 1.27
 
 require (
-	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/flatgeobuf/flatgeobuf/src/go v0.0.0-20261010111732-d8b6d6afcfe2
 	github.com/golang/geo v0.0.0-20260928092222-7d12f68cfadb
 	github.com/google/flatbuffers v25.12.19+incompatible
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/klauspost/compress v1.20.3
-	github.com/paulmach/orb v0.13.0
 	github.com/wroge/wgs84/v2 v2.0.0-alpha.20
 	golang.org/x/sync v0.22.0
 )

@@ -23,8 +23,6 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		serve(os.Args[2:])
-	case "backfill-stats":
-		backfillStats(os.Args[2:])
 	default:
 		usage()
 	}
@@ -32,7 +30,6 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: postfgb serve [flags]")
-	fmt.Fprintln(os.Stderr, "       postfgb backfill-stats [flags] [collection]")
 	os.Exit(2)
 }
 
@@ -47,7 +44,6 @@ func serve(args []string) {
 	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
 	maxConns := fs.Int("max-conns", 0, "maximum PostgreSQL pool connections (0 keeps the driver default)")
 	minConns := fs.Int("min-conns", 0, "minimum idle PostgreSQL pool connections (0 keeps the driver default)")
-	maxChunkBytes := fs.Int("max-chunk-bytes", 32<<20, "per-request chunk fetch budget in bytes")
 	readonly := fs.Bool("readonly", envBool("POSTFGB_READONLY"), "serve the read-only surface: no ingest and no delete")
 	migrate := fs.Bool("migrate", true, "run migrations at startup (skipped by default in --readonly)")
 	fs.Parse(args)
@@ -66,17 +62,10 @@ func serve(args []string) {
 	}
 	if *readonly {
 		slog.Info("read-only worker")
-	} else {
-		start := time.Now()
-		results, err := st.BackfillStaleStats(ctx)
-		if err != nil {
-			fatal(err)
-		}
-		slog.Info("statistics ready", "collections", len(results), "elapsed", time.Since(start).Round(time.Millisecond).String())
 	}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly, MaxBytes: *maxChunkBytes}),
+		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errCh := make(chan error, 1)
@@ -100,31 +89,4 @@ func serve(args []string) {
 func envBool(name string) bool {
 	value, err := strconv.ParseBool(os.Getenv(name))
 	return err == nil && value
-}
-
-func backfillStats(args []string) {
-	fs := flag.NewFlagSet("backfill-stats", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
-	fs.Parse(args)
-	if fs.NArg() > 1 {
-		fmt.Fprintln(os.Stderr, "usage: postfgb backfill-stats [flags] [collection]")
-		os.Exit(2)
-	}
-	ctx := context.Background()
-	st, err := store.Open(ctx, *dsn)
-	if err != nil {
-		fatal(err)
-	}
-	defer st.Close()
-	if err := st.Migrate(ctx); err != nil {
-		fatal(err)
-	}
-	results, err := st.BackfillStats(ctx, fs.Arg(0))
-	if err != nil {
-		fatal(err)
-	}
-	for _, result := range results {
-		slog.Info("backfilled statistics", "collection", result.Collection, "chunks", result.Chunks,
-			"rows", result.Rows, "bloom_bytes", result.Bytes)
-	}
 }

@@ -1,11 +1,8 @@
 bin/
-bench/*.geojson
-bench/*.fgb
 *.test
 *.gpkg
 *.mbtiles
 *.parquet
-export.fgb
 postfgb-image.tar
 .env
 tmpgen/
