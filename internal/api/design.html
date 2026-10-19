@@ -148,7 +148,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <h3>Tradeoffs</h3>
       <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once.</p>
       <p><b>Three levels, more scanning.</b> Levels 8, 6 and 2 are stored. At high zoom a read scans the level-8 chunks in view: in a dense cell a page can scan a few hundred thousand features. Coarse views use the samples instead.</p>
-      <p><b>Id rows, not runs.</b> One index row per feature makes a lookup a table read plus one cell’s chunks, at about 30 B per feature.</p>
+      <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one cell’s chunks, well under 1 MB. Count the row and its primary-key entry and it costs about 100 B per feature, or about 100 GB at 1e9. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
       <p><b>One chunk per populated cell.</b> A sparse cell still costs a chunk and its header; dense cells are unaffected.</p>
     </div>
     <div class="box">
@@ -202,7 +202,7 @@ const PAL = {
 };
 let P = PAL.dark;
 
-const K = { raw: 940, zst: 200, col: 40, run: 30, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 940, zst: 200, col: 40, run: 30, idxRow: 100, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
 const fmtMiB = b => `${+(b / 1048576).toFixed(1)} MiB`;
 
@@ -492,8 +492,8 @@ const MODEL = {
     l1: c => `${fmtBytes(c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes)} of blocks`, l2: c => `${fmt(c.Wr.files)} files`,
     text: `Virtual files: each file is stored as ${fmt(K.block)}-byte rows, one per ${K.pageBytes / 1024} KB heap page, inline and without TOAST. The files table lists each file (fgb or cols), its size and whether it is published. One COPY per file writes the rows before the commit; the read path reads them back through the file-bytes overlay.`,
     layout: ['blocks: file_id bigint, n int, data bytea (storage plain)', 'files: file_id identity, collection, kind, bytes, published, created'], index: ['blocks pk (file_id, n)', 'files pk (file_id)'] },
-  idRuns: { t: 'id index', kind: 'db', size: c => c.Wr.runBytes,
-    l1: c => `${fmt(c.Wr.f)} rows`, l2: c => `${fmtBytes(c.Wr.runBytes)} of rows`,
+  idRuns: { t: 'id index', kind: 'db', size: c => c.Wr.f * K.idxRow,
+    l1: c => `${fmt(c.Wr.f)} rows`, l2: c => `${fmtBytes(c.Wr.f * K.idxRow)} on disk`,
     text: 'One row per feature: the hash of its id and the cell that holds it. A lookup reads the rows for a hash, then that cell’s chunks, and checks the id exactly. The rows are replaced with the cell on every upload, so there are no runs to merge.',
     layout: ['ids: collection, hash, cell', 'one row per feature'], index: ['pk (collection, hash, cell)'] },
   catalog: { t: 'catalog', kind: 'db', size: c => c.Wr.chunkBytes,
@@ -1107,7 +1107,7 @@ function syncFacts() {
   set('#f-densemem', fmtBytes(DENSE * K.raw));
   set('#f-filter', fmtBytes(readFilter(DENSE, W.page, W.link).db));
   set('#f-billion', fmtBig(1e9));
-  set('#f-idx1e9', fmtBytes(1e9 * K.run));
+  set('#f-idx1e9', fmtBytes(1e9 * K.idxRow));
   set('#f-coarsezoom', coarse === undefined ? '—' : coarse);
   set('#f-page', fmt(W.page));
   set('#f-z7n', fmtBig(d7));
