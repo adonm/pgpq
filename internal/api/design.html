@@ -237,7 +237,7 @@ const TYPICAL = 12000, DENSE = 2500000;
 const W = { f: 12000, link: 125e6, page: 1000 };
 const S = {
   tab: 'model',
-  model: { sel: 'chunks', lit: new Set(), demo: null },
+  model: { sel: 'catalog', lit: new Set(), demo: null },
   ladder: { z: 13, sweep: null },
   load: { k: 0, sel: 0, play: null },
   snaps: { s: 1, sel: -1, play: null },
@@ -421,33 +421,36 @@ class Fig {
   step() { return false; }
 }
 
-const MED = { e1: 'net', e2: 'mut', e3: 'mut', e4: 'mut', e5: 'db', e6: 'mut', e7: 'db', r1: 'net', r2: 'db', r3: 'mut', r4: 'mut', r5: 'db', r6: 'db', r7: 'net', r8: 'db' };
+const MED = { w1: 'net', w2: 'mut', w3: 'mut', w4: 'mut', w5: 'mut', w6: 'db', w7: 'db', w8: 'db', r1: 'mut', r2: 'mut', r3: 'mut', r4: 'mut', r5: 'net', r6: 'db', r7: 'db', r8: 'db' };
 const EDGES = [
-  ['e1', 'loader', 'decode', false], ['e2', 'decode', 'validate', false], ['e3', 'validate', 'sort', false],
-  ['e4', 'sort', 'encode', false], ['e5', 'encode', 'blocks', true, 118], ['e6', 'encode', 'commit', false],
-  ['e7', 'commit', 'chunks', true, 136],
-  ['r1', 'reader', 'catalog', false], ['r2', 'chunks', 'catalog', true], ['r3', 'catalog', 'prune', false],
-  ['r4', 'prune', 'fileov', false], ['r5', 'blocks', 'fileov', true], ['r6', 'fileov', 'fgb', false],
-  ['r7', 'fgb', 'response', false], ['r8', 'id_runs', 'idov', true],
+  ['w1', 'loader', 'r', 'decode', 'l', false], ['w2', 'decode', 'r', 'validate', 'l', false],
+  ['w3', 'validate', 'r', 'sort', 'l', false], ['w4', 'sort', 'r', 'encode', 'l', false],
+  ['w5', 'encode', 'r', 'commit', 'l', false], ['w6', 'encode', 'b', 'blobsW', 't', true],
+  ['w7', 'encode', 'b', 'idsW', 't', true], ['w8', 'commit', 'b', 'catalogW', 't', true],
+  ['r1', 'reader', 'r', 'catalogOv', 'l', false], ['r2', 'catalogOv', 'r', 'prune', 'l', false],
+  ['r3', 'prune', 'r', 'fileOv', 'l', false], ['r4', 'fileOv', 'r', 'fgb', 'l', false],
+  ['r5', 'fgb', 'r', 'response', 'l', false], ['r6', 'catalogR', 'b', 'catalogOv', 't', true],
+  ['r7', 'blobsR', 'b', 'fileOv', 't', true], ['r8', 'idsR', 'b', 'idOv', 't', true],
 ];
-const EDGE = id => EDGES.find(e => e[0] === id);
-const EDGE_BYTES = c => ({ e1: c.Wr.upload, e2: c.Wr.memory, e3: c.Wr.memory, e4: c.Wr.memory, e5: c.Wr.db, e6: c.Wr.meta, e7: c.Wr.meta, r1: 256, r2: c.Rd.steps[0].db, r3: 256, r4: 256, r5: c.Rd.steps[2].db, r6: c.Rd.steps[2].db, r7: c.Rd.steps[4].net, r8: c.Wr.runBytes });
-const BANDS = { w: { y: 32, w: 124, step: 164, x0: 16 }, p: { y: 174, w: 116, step: 140, x0: 14 }, r: { y: 322, w: 116, step: 140, x0: 14 } };
-const boxOf = id => {
-  const n = MODEL[id], g = BANDS[n.band];
-  return { x: g.x0 + n.col * g.step, y: g.y, w: g.w, h: 68 };
+const EDGE_BY = Object.fromEntries(EDGES.map(([id, from, fs, to, ts, dash]) => [id, { from, fs, to, ts, dash }]));
+const BOXES = [
+  { key: 'loader', id: 'loader', x: 16, y: 30, w: 124, h: 66 }, { key: 'decode', id: 'decode', x: 180, y: 30, w: 124, h: 66 },
+  { key: 'validate', id: 'validate', x: 344, y: 30, w: 124, h: 66 }, { key: 'sort', id: 'sort', x: 508, y: 30, w: 124, h: 66 },
+  { key: 'encode', id: 'encode', x: 672, y: 30, w: 124, h: 66 }, { key: 'commit', id: 'commit', x: 836, y: 30, w: 124, h: 66 },
+  { key: 'blobsW', id: 'blobs', x: 410, y: 136, w: 214, h: 66 }, { key: 'idsW', id: 'idRuns', x: 672, y: 136, w: 124, h: 66 },
+  { key: 'catalogW', id: 'catalog', x: 836, y: 136, w: 124, h: 66 },
+  { key: 'catalogR', id: 'catalog', x: 154, y: 262, w: 116, h: 66 }, { key: 'blobsR', id: 'blobs', x: 434, y: 262, w: 116, h: 66 },
+  { key: 'idsR', id: 'idRuns', x: 854, y: 262, w: 116, h: 66 },
+  { key: 'reader', id: 'reader', x: 14, y: 360, w: 116, h: 66 }, { key: 'catalogOv', id: 'catalogOv', x: 154, y: 360, w: 116, h: 66 },
+  { key: 'prune', id: 'prune', x: 294, y: 360, w: 116, h: 66 }, { key: 'fileOv', id: 'fileOv', x: 434, y: 360, w: 116, h: 66 },
+  { key: 'fgb', id: 'fgb', x: 574, y: 360, w: 116, h: 66 }, { key: 'response', id: 'response', x: 714, y: 360, w: 116, h: 66 },
+  { key: 'idOv', id: 'idOv', x: 854, y: 360, w: 116, h: 66 },
+];
+const BOX = Object.fromEntries(BOXES.map(b => [b.key, b]));
+const anchor = (key, side) => {
+  const b = BOX[key];
+  return { r: [b.x + b.w, b.y + b.h / 2], l: [b.x, b.y + b.h / 2], t: [b.x + b.w / 2, b.y], b: [b.x + b.w / 2, b.y + b.h] }[side];
 };
-function route(a, b, mid) {
-  const ax = a.x + a.w / 2, bx = b.x + b.w / 2;
-  if (a.y === b.y) {
-    const y = a.y + a.h / 2;
-    return a.x < b.x ? [[a.x + a.w, y], [b.x, y]] : [[a.x, y], [b.x + b.w, y]];
-  }
-  const y1 = a.y + a.h, y2 = b.y;
-  if (ax === bx) return [[ax, y1], [bx, y2]];
-  const m = mid ?? (y1 + y2) / 2;
-  return [[ax, y1], [ax, m], [bx, m], [bx, y2]];
-}
 function along(pts, t) {
   const segs = [];
   let total = 0;
@@ -466,122 +469,116 @@ function along(pts, t) {
   }
   return pts[0];
 }
+const EDGE_BYTES = c => ({
+  w1: c.Wr.upload, w2: c.Wr.memory, w3: c.Wr.memory, w4: c.Wr.memory, w5: c.Wr.meta, w6: c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes, w7: c.Wr.runBytes, w8: c.Wr.meta,
+  r1: 256, r2: 256, r3: 256, r4: c.Rd.steps[2].db, r5: c.Rd.steps[4].net, r6: c.Rd.steps[0].db, r7: c.Rd.steps[2].db, r8: c.Wr.runBytes,
+});
 
 const MODEL = {
-  loader: { band: 'w', col: 0, t: 'Loader', kind: 'net', share: c => c.Wr.tUp / c.Wr.total,
+  loader: { t: 'Loader', kind: 'net', share: c => c.Wr.tUp / c.Wr.total,
     l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
     text: 'Uploads one zstd-compressed FlatGeobuf per level-8 cell, about 100 B per feature (measured on buildings_fr). Every feature in the file falls in that cell, so a reload is one upload per cell. The meter is the share of network time.',
     layout: ['body: zstd FlatGeobuf, one cell', 'upload bytes = features × 100 B'], index: [] },
-  decode: { band: 'w', col: 1, t: 'Decode', kind: 'cpu', share: c => c.Wr.stage.decode / c.Wr.total,
+  decode: { t: 'Decode', kind: 'cpu', share: c => c.Wr.stage.decode / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.decode)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
     text: 'Decompresses the whole file into memory and parses it once. The decoded file costs about 470 B per feature of memory, the largest memory cost of an upload.',
     layout: ['no streaming, bucketing or spill', 'peak memory ≈ features × 470 B'], index: [] },
-  validate: { band: 'w', col: 2, t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total,
+  validate: { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
     text: 'Checks that every feature is inside the cell, that ids are unique in the file, and that geometry is usable.',
     layout: [], index: [] },
-  sort: { band: 'w', col: 3, t: 'Sort & cut', kind: 'cpu', share: c => c.Wr.stage.sort / c.Wr.total,
+  sort: { t: 'Sort & cut', kind: 'cpu', share: c => c.Wr.stage.sort / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.sort)} CPU`, l2: c => `${fmt(c.Wr.chunks)} chunks`,
     text: 'Sorts by (key, id), then cuts chunks of about 2 MiB of uncompressed FGB, roughly 4,400 buildings each.',
     layout: ['chunk = contiguous key range', 'cut at 2 MiB or 50,000 features'], index: [] },
-  encode: { band: 'w', col: 4, t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total,
+  encode: { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} written`,
-    text: 'Encodes each chunk (FGB, zstd), its column file and zone map, then the samples (levels 8 and 10, and 12 above 100,000 features) and the id run. The largest CPU share.',
+    text: 'Encodes each chunk (FGB and zstd), its column file and zone map, then the samples (levels 8 and 10, and 12 above 100,000 features) and the id run. This is the largest CPU share. Its files go to blobs and id runs; its chunk rows go to the commit.',
     layout: ['files: fgb, cols, idrun', 'rows written unpublished, by COPY'], index: [] },
-  commit: { band: 'w', col: 5, t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total,
+  commit: { t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total,
     l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
-    text: 'One transaction: lock the collection row, check base=s, end the cell’s live chunks, insert the new rows, rebuild levels 6, 4 and 2, insert the snapshot, publish the files. Its cost does not grow with the cell.',
+    text: 'One transaction: lock the collection row, check base=s, end the cell’s live chunks, insert the new chunk rows, rebuild levels 6, 4 and 2, insert the snapshot, publish the files. Its cost does not grow with the cell.',
     layout: ['one snapshot per upload'], index: [] },
-  collections: { band: 'p', col: 0, t: 'collections', kind: 'db', size: () => 300,
-    l1: () => '1 row', l2: () => 'per collection',
-    text: 'One row per collection. The commit locks it FOR UPDATE, so commits serialize per collection.',
-    layout: ['name text pk', 'uid bigint identity', 'current_snapshot, id_column', 'columns_json jsonb'], index: ['pk (name)'] },
-  chunks: { band: 'p', col: 1, t: 'chunks', kind: 'db', size: c => c.Wr.chunkBytes,
-    l1: c => `${fmt(c.Wr.chunks)} rows/cell`, l2: c => `${fmtBytes(c.Wr.chunkBytes)} of FGB`,
-    text: 'One row per chunk. A chunk is visible at snapshot s when begin ≤ s and s < end. The zone map is stored as JSON text.',
-    layout: ['chunk_id pk, collection, cell, seq', 'first and last key and id', 'minx, miny, maxx, maxy, features', 'file_id, col_file, zone, level', 'begin_snapshot, end_snapshot'],
-    index: ['(collection, begin_snapshot)', '(collection, cell) where end_snapshot is null'] },
-  partitions: { band: 'p', col: 2, t: 'partitions', kind: 'db', size: () => 300,
-    l1: () => '1 row per cell', l2: () => 'changed snapshot',
-    text: 'The last snapshot that changed each cell. base=s answers 409 when a listed cell changed after s.',
-    layout: ['collection, cell, changed'], index: ['pk (collection, cell)'] },
-  blocks: { band: 'p', col: 3, t: 'blocks', kind: 'db', size: c => c.Wr.db,
-    l1: c => `${fmtBytes(c.Wr.db)} of rows`, l2: () => '8,120 B per row',
-    text: 'Virtual files: each file is split into 8,120-byte rows, one per 8 KB heap page, stored inline without TOAST. Written by COPY before the commit.',
-    layout: ['file_id bigint', 'n int', 'data bytea, storage plain'], index: ['pk (file_id, n)'] },
-  files: { band: 'p', col: 4, t: 'files', kind: 'db', size: () => 300,
-    l1: c => `${fmt(c.Wr.files)} files`, l2: () => 'fgb, cols, idrun',
-    text: 'One row per virtual file. A file becomes readable when the commit sets published.',
-    layout: ['file_id identity pk', 'collection, kind, bytes', 'published, created'], index: ['pk (file_id)'] },
-  snapshots: { band: 'p', col: 5, t: 'snapshots', kind: 'db', size: () => 300,
-    l1: () => '1 row per upload', l2: () => 'begin, end',
-    text: 'One row per upload’s commit. Pages read the latest one. Rows it replaces stay 15 minutes, for requests already running.',
-    layout: ['collection, id', 'created'], index: ['pk (collection, id)'] },
-  id_runs: { band: 'p', col: 6, t: 'id_runs', kind: 'db', size: c => c.Wr.runBytes,
-    l1: c => `${fmtBytes(c.Wr.runBytes)} of runs`, l2: () => '1 row per upload',
-    text: 'One row per id run, one per upload. An upload does not end older runs; a background merge drops their stale entries.',
-    layout: ['file_id pk, collection', 'entries, begin_snapshot, end_snapshot'], index: ['(collection) where end_snapshot is null'] },
-  reader: { band: 'r', col: 0, t: 'Reader', kind: 'mut',
-    l1: c => `${fmt(c.page)} features`, l2: () => 'one page request',
-    text: 'A request: items with bbox, filter or overview=N; items/{id}; numberMatched; or PUT ?base=s.',
+  blobs: { t: 'blobs & files', kind: 'db', size: c => c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes,
+    l1: c => `${fmtBytes(c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes)} of blocks`, l2: c => `${fmt(c.Wr.files)} files`,
+    text: 'Virtual files: each file is stored as 8,120-byte rows, one per 8 KB heap page, inline and without TOAST. The files table lists each file (fgb, cols or idrun), its size and whether it is published. One COPY per file writes the rows before the commit; the read path reads them back through the file-bytes overlay.',
+    layout: ['blocks: file_id bigint, n int, data bytea (storage plain)', 'files: file_id identity, collection, kind, bytes, published, created'], index: ['blocks pk (file_id, n)', 'files pk (file_id)'] },
+  idRuns: { t: 'id runs', kind: 'db', size: c => c.Wr.runBytes,
+    l1: c => `${fmtBytes(c.Wr.runBytes)} of runs`, l2: () => 'one per upload',
+    text: 'One sorted run per upload: (hash of id, key) pairs, written by the encode step and published by the commit. An upload does not end older runs; a background merge drops their stale entries. Lookups search every live run.',
+    layout: ['id_runs: file_id pk, collection, entries, begin_snapshot, end_snapshot'], index: ['(collection) where end_snapshot is null'] },
+  catalog: { t: 'catalog', kind: 'db', size: c => c.Wr.chunkBytes,
+    l1: c => `${fmt(c.Wr.chunks)} chunk rows`, l2: c => `${fmtBytes(c.Wr.chunkBytes)} of FGB`,
+    text: 'The chunk rows that make up each snapshot: key range, envelope, zone map and the file they point to, with a snapshot range. Partitions record the snapshot that last changed each cell, collections the current snapshot and column list, and snapshots each commit. Rows an upload replaces stay 15 minutes for requests already running.',
+    layout: ['chunks: chunk_id identity pk, collection, cell, seq, first and last key and id', 'chunks: minx, miny, maxx, maxy, features, file_id, col_file, zone (JSON text), level, begin_snapshot, end_snapshot', 'partitions: collection, cell, changed', 'collections: name pk, uid, current_snapshot, id_column, columns_json', 'snapshots: collection, id, created'],
+    index: ['chunks (collection, begin_snapshot)', 'chunks (collection, cell) where end_snapshot is null', 'partitions pk (collection, cell)', 'collections pk (name)', 'snapshots pk (collection, id)'] },
+  reader: { t: 'Reader', kind: 'mut', l1: c => `${fmt(c.page)} features`, l2: () => 'one request',
+    text: 'A request: items with bbox, filter or overview=N; items/{id}; numberMatched; or PUT ?base=s. Each page reads the latest snapshot.',
     layout: [], index: [] },
-  catalog: { band: 'r', col: 1, t: 'Catalog', kind: 'db', share: c => c.Rd.steps[0].t / c.Rd.total,
-    l1: c => `${fmtBytes(c.Rd.steps[0].db)} metadata`, l2: () => 'once per snap',
-    text: 'Overlay on the chunks table. One query loads the chunk list of the latest snapshot, kept in a 256 MiB LRU per worker.',
-    layout: ['where collection = $1', 'and begin_snapshot ≤ s', 'and (end_snapshot is null or > s)'], index: ['uses (collection, begin_snapshot)'] },
-  prune: { band: 'r', col: 2, t: 'Prune', kind: 'cpu', share: c => c.Rd.steps[1].t / c.Rd.total,
-    l1: c => `${fmtTime(c.Rd.steps[1].cpu)} CPU`, l2: () => 'envelope, zones',
+  catalogOv: { t: 'Catalog', kind: 'db', share: c => c.Rd.steps[0].t / c.Rd.total,
+    l1: () => 'overlay · LRU', l2: c => `${fmtBytes(c.Rd.steps[0].db)} metadata`,
+    text: 'Overlay on the catalog. One query per snapshot loads the chunk list: the chunks whose snapshot range covers it. A page reads the latest snapshot, so it uses the current list.',
+    layout: ['where collection = $1', 'and begin_snapshot ≤ s', 'and (end_snapshot is null or end_snapshot > s)'], index: ['uses (collection, begin_snapshot)'] },
+  prune: { t: 'Prune', kind: 'cpu', share: c => c.Rd.steps[1].t / c.Rd.total,
+    l1: c => `${fmtTime(c.Rd.steps[1].cpu)} CPU`, l2: () => 'envelopes',
     text: 'In memory: the bbox is tested against chunk envelopes, and filters against zone maps. The list is scanned; there is no R-tree yet.',
     layout: [], index: [] },
-  fileov: { band: 'r', col: 3, t: 'File bytes', kind: 'db', share: c => c.Rd.steps[2].t / c.Rd.total,
-    l1: c => `${fmtBytes(c.Rd.steps[2].db)} read`, l2: () => 'whole chunks',
+  fileOv: { t: 'File bytes', kind: 'db', share: c => c.Rd.steps[2].t / c.Rd.total,
+    l1: () => 'overlay · LRU', l2: c => `${fmtBytes(c.Rd.steps[2].db)} read`,
     text: 'Overlay on blocks. A miss reads the file’s block rows in (file_id, n) order and keeps the bytes; a hit costs no query. A bbox page still reads every chunk it lands in.',
     layout: ['select n, data from blocks', 'where file_id = $1 order by n'], index: ['pk (file_id, n)'] },
-  fgb: { band: 'r', col: 4, t: 'FGB search', kind: 'cpu', share: c => c.Rd.steps[3].t / c.Rd.total,
+  fgb: { t: 'FGB search', kind: 'cpu', share: c => c.Rd.steps[3].t / c.Rd.total,
     l1: c => `${fmtTime(c.Rd.steps[3].cpu)} CPU`, l2: () => 'decode, search',
     text: 'Decompresses each touched chunk and searches its packed R-tree. Most of the CPU is decompression.',
     layout: [], index: [] },
-  response: { band: 'r', col: 5, t: 'Response', kind: 'net', share: c => c.Rd.steps[4].t / c.Rd.total,
-    l1: c => `${fmtBytes(c.Rd.steps[4].net)} out`, l2: c => `${fmtTime(c.Rd.steps[4].net / c.link)} on the link`,
-    text: 'Features stream out in (key, id) order, as zstd when the client accepts it. The cursor carries only the last (key, id), so each page reads the latest snapshot and an upload between pages shows in the rest of the walk. Cursors never expire.',
+  response: { t: 'Response', kind: 'net', share: c => c.Rd.steps[4].t / c.Rd.total,
+    l1: c => `${fmtBytes(c.Rd.steps[4].net)} out`, l2: c => `${fmtTime(c.Rd.steps[4].net / c.link)} to send`,
+    text: 'Features stream out in (key, id) order, as zstd when the client accepts it. The cursor carries only the last (key, id): each page reads the latest snapshot, so an upload between pages shows in the rest of the walk. Cursors never expire.',
     layout: [], index: [] },
-  idov: { band: 'r', col: 6, t: 'Id runs', kind: 'db', size: c => c.Wr.runBytes,
-    l1: c => `${fmtBytes(c.Wr.runBytes)} if uncached`, l2: () => 'decodes the run',
-    text: 'Overlay on id_runs: decoded runs kept in a 256 MiB LRU. A lookup binary-searches every live run, then reads the candidate chunk to verify the id. A cold lookup decodes all of a run’s bytes.',
-    layout: ['a miss decodes the whole run'], index: ['(collection) where end_snapshot is null'] },
+  idOv: { t: 'Id lookup', kind: 'db', size: c => c.Wr.runBytes,
+    l1: () => 'overlay · LRU', l2: () => 'decodes the runs',
+    text: 'Overlay on id runs: decoded runs in a 256 MiB LRU. A lookup binary-searches every live run, then reads the candidate chunk to verify the id. A cold lookup decodes all of a run’s bytes.',
+    layout: ['a miss decodes the whole run'], index: [] },
 };
-const MODEL_ORDER = Object.keys(MODEL);
 
 function seqFor(kind, c) {
   const { Wr, Rd, link } = c;
   if (kind === 'write') return [
-    { e: 'e1', t: Wr.tUp, b: Wr.upload }, { box: 'decode', t: Wr.stage.decode }, { box: 'validate', t: Wr.stage.validate },
-    { box: 'sort', t: Wr.stage.sort }, { box: 'encode', t: Wr.stage.encode }, { e: 'e5', t: Wr.tDb, b: Wr.db },
-    { box: 'commit', t: K.fixed }, { e: 'e7', t: 0.001, b: Wr.meta },
+    { box: 'loader', t: Wr.tUp }, { e: 'w1', t: 0.001, b: Wr.upload },
+    { box: 'decode', t: Wr.stage.decode }, { e: 'w2', t: 0.001, b: Wr.memory },
+    { box: 'validate', t: Wr.stage.validate }, { e: 'w3', t: 0.001, b: Wr.memory },
+    { box: 'sort', t: Wr.stage.sort }, { e: 'w4', t: 0.001, b: Wr.memory },
+    { box: 'encode', t: Wr.stage.encode }, { e: 'w6', t: Wr.tDb, b: Wr.chunkBytes + Wr.colBytes + Wr.sampleBytes },
+    { e: 'w7', t: 0.001, b: Wr.runBytes }, { e: 'w5', t: 0.001, b: Wr.meta },
+    { box: 'commit', t: K.fixed }, { e: 'w8', t: 0.001, b: Wr.meta },
   ];
   return [
-    { e: 'r1', t: 0.0005, b: 256 }, { e: 'r2', t: Rd.steps[0].db / K.db, b: Rd.steps[0].db }, { box: 'prune', t: Rd.steps[1].cpu },
-    { e: 'r5', t: Rd.steps[2].db / K.db, b: Rd.steps[2].db }, { box: 'fgb', t: Rd.steps[3].cpu }, { e: 'r7', t: Rd.steps[4].net / link, b: Rd.steps[4].net },
+    { box: 'reader', t: 0.0005 }, { e: 'r1', t: 0.001, b: 256 },
+    { e: 'r6', t: Rd.steps[0].db / K.db, b: Rd.steps[0].db }, { box: 'catalogOv', t: Rd.steps[0].t },
+    { e: 'r2', t: 0.001, b: 256 }, { box: 'prune', t: Rd.steps[1].cpu },
+    { e: 'r3', t: 0.001, b: 256 }, { e: 'r7', t: Rd.steps[2].db / K.db, b: Rd.steps[2].db }, { box: 'fileOv', t: Rd.steps[2].t },
+    { e: 'r4', t: 0.001, b: Rd.steps[2].db }, { box: 'fgb', t: Rd.steps[3].cpu },
+    { e: 'r5', t: Rd.steps[4].net / link, b: Rd.steps[4].net }, { box: 'response', t: 0.001 },
   ];
 }
 function playModel(kind) {
-  const seq = seqFor(kind, costNow());
-  const first = seq[0].e ? EDGE(seq[0].e)[1] : seq[0].box;
-  S.model.lit = new Set([first]);
-  S.model.demo = { seq, i: 0, t: 0, dur: null };
+  S.model.lit = new Set();
+  S.model.demo = { seq: seqFor(kind, costNow()), i: 0, t: 0, dur: null };
 }
 
 class Model extends Fig {
   constructor() {
-    super('fig-model', 1000, 396);
+    super('fig-model', 1000, 452);
     this.bytes = EDGE_BYTES(this.cur);
-    for (const [y, h, label, x, ty, anchor] of [[0, 112, 'write · one worker, one L8 cell per upload', 14, 18, 'start'], [136, 140, 'postgres · tables, and blocks as virtual files', 986, 166, 'end'], [288, 108, 'read · virtual overlays in worker memory', 14, 404, 'start']]) {
+    for (const [y, h, label, ty] of [[0, 214, 'upload · one worker, then the Postgres tables it writes', 18], [230, 222, 'read · Postgres tables, then worker overlays in memory, then the client', 248]]) {
       const lane = this.shape(0, y, 1000, h, 0, { fill: true, stroke: false });
       this.bind(() => { lane.color = P.lane; });
-      this.text(x, ty, label, 'lab', anchor);
+      this.text(14, ty, label, 'lab');
     }
-    for (const [id, from, to, dash, mid] of EDGES) {
-      const pts = route(boxOf(from), boxOf(to), mid);
+    const divider = this.line([[0, 222], [1000, 222]], 1);
+    this.bind(() => { divider.color = P.line; });
+    for (const [id, from, fs, to, ts, dash] of EDGES) {
+      const pts = [anchor(from, fs), anchor(to, ts)];
       const band = dash ? this.line(pts, 1) : null;
       const segs = dash ? this.dashes(pts) : [this.line(pts, 1)];
       const head = this.head(pts);
@@ -593,8 +590,8 @@ class Model extends Fig {
         head.color = col;
       });
     }
-    for (const id of MODEL_ORDER) {
-      const n = MODEL[id], b = boxOf(id);
+    for (const b of BOXES) {
+      const n = MODEL[b.id];
       const f = this.shape(b.x, b.y, b.w, b.h, 6, { fill: true, stroke: false });
       const o = this.shape(b.x, b.y, b.w, b.h, 6, { fill: false, stroke: 1.2 });
       const track = this.shape(b.x + 9, b.y + b.h - 9, b.w - 18, 4, 0, { fill: true, stroke: false });
@@ -602,15 +599,15 @@ class Model extends Fig {
       this.text(b.x + 9, b.y + 19, n.t, 't');
       const t2 = this.text(b.x + 9, b.y + 37, '', 's');
       const t3 = this.text(b.x + 9, b.y + 51, '', 's');
-      this.hit(b.x, b.y, b.w, b.h, () => { S.model.sel = id; this.render(); refresh(); });
+      this.hit(b.x, b.y, b.w, b.h, () => { S.model.sel = b.id; this.render(); refresh(); });
       this.bind(() => {
-        const c = this.cur, on = S.model.sel === id, lit = S.model.lit.has(id), cs = this.currentStep();
+        const c = this.cur, on = S.model.sel === b.id, lit = S.model.lit.has(b.key), cs = this.currentStep();
         f.color = lit ? P.fillLit : P.fill;
         o.color = on ? P.fg : P.line;
         o.stroke = on ? 2.2 : 1.2;
         track.color = P.track;
         const share = n.share ? n.share(c) : n.size ? logFrac(n.size(c), 2, 10) : 0;
-        const p = cs && cs.box === id ? S.model.demo.t / (S.model.demo.dur || 1) : 1;
+        const p = cs && cs.box === b.key ? S.model.demo.t / (S.model.demo.dur || 1) : 1;
         this.place(meter, b.x + 9, b.y + b.h - 9, (b.w - 18) * share * p, 4);
         meter.color = P[n.kind];
         t2.textContent = n.l1(c);
@@ -628,8 +625,8 @@ class Model extends Fig {
     const cs = this.currentStep(), d = S.model.demo;
     this.dot.visible = !!(cs && cs.e);
     if (cs && cs.e) {
-      const [, from, to, , mid] = EDGE(cs.e);
-      const [x, y] = along(route(boxOf(from), boxOf(to), mid), d.t / (d.dur || 1));
+      const e = EDGE_BY[cs.e];
+      const [x, y] = along([anchor(e.from, e.fs), anchor(e.to, e.ts)], d.t / (d.dur || 1));
       this.dot.diameter = 2 * wPacket(cs.b || 1);
       this.dot.updatePath();
       this.dot.color = P[MED[cs.e]];
@@ -644,7 +641,7 @@ class Model extends Fig {
     if (d.dur == null) d.dur = wDur(cs.t);
     d.t += dt;
     if (d.t >= d.dur) {
-      S.model.lit.add(cs.e ? EDGE(cs.e)[2] : cs.box);
+      S.model.lit.add(cs.e ? EDGE_BY[cs.e].to : cs.box);
       d.i++; d.t = 0; d.dur = null;
       if (d.i >= d.seq.length) S.model.demo = null;
     }
