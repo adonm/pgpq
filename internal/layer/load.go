@@ -32,13 +32,15 @@ type entry struct {
 }
 
 type chunkRow struct {
-	cell   uint64
-	seq    int
-	first  entry
-	last   entry
-	bounds [4]float64
-	rows   int
-	fileID int64
+	cell    uint64
+	seq     int
+	first   entry
+	last    entry
+	bounds  [4]float64
+	rows    int
+	fileID  int64
+	colFile int64
+	zone    string
 }
 
 type LoadResult struct {
@@ -60,11 +62,15 @@ func (l *Layer) Load(ctx context.Context, name string, ds ingest.Dataset, cells 
 	if err != nil {
 		return LoadResult{}, err
 	}
+	runFile, err := l.blocks.Put(ctx, name, "idrun", encodeRun(entries))
+	if err != nil {
+		return LoadResult{}, err
+	}
 	chunks, err := l.writeCells(ctx, name, ds, groupByCell(entries))
 	if err != nil {
 		return LoadResult{}, err
 	}
-	return l.commit(ctx, name, ds, cells, chunks, len(entries))
+	return l.commit(ctx, name, ds, cells, chunks, runFile, len(entries))
 }
 
 func indexFeatures(ds ingest.Dataset, cells []uint64) ([]entry, error) {
@@ -222,17 +228,35 @@ func (l *Layer) writeRange(ctx context.Context, name string, ds ingest.Dataset, 
 		}
 		return append(left, right...), nil
 	}
+	props := make([]map[string]json.RawMessage, len(batch))
+	for i := range batch {
+		props[i] = batch[i].Properties
+	}
+	columns, err := chunk.EncodeAttrs(ds.Columns, props)
+	if err != nil {
+		return nil, err
+	}
+	zone, err := encodeZone(columns)
+	if err != nil {
+		return nil, err
+	}
 	fileID, err := l.blocks.Put(ctx, name, "fgb", chunk.Compress(data))
 	if err != nil {
 		return nil, err
 	}
+	colFile, err := l.blocks.Put(ctx, name, "cols", columns)
+	if err != nil {
+		return nil, err
+	}
 	return []chunkRow{{
-		cell:   cell,
-		first:  entries[0],
-		last:   entries[len(entries)-1],
-		bounds: unionBounds(entries),
-		rows:   len(entries),
-		fileID: fileID,
+		cell:    cell,
+		first:   entries[0],
+		last:    entries[len(entries)-1],
+		bounds:  unionBounds(entries),
+		rows:    len(entries),
+		fileID:  fileID,
+		colFile: colFile,
+		zone:    zone,
 	}}, nil
 }
 

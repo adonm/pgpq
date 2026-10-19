@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
@@ -18,9 +19,11 @@ import (
 )
 
 var (
-	ErrInvalid   = ingest.ErrInvalid
-	ErrGone      = errors.New("snapshot expired")
-	ErrBadCursor = errors.New("cursor does not match the collection")
+	ErrInvalid         = ingest.ErrInvalid
+	ErrGone            = errors.New("snapshot expired")
+	ErrBadCursor       = errors.New("cursor does not match the collection")
+	ErrFeatureNotFound = errors.New("feature not found")
+	ErrDuplicate       = errors.New("more than one feature has this id; reload the partitions that hold it")
 )
 
 const Retention = 72 * time.Hour
@@ -28,10 +31,12 @@ const Retention = 72 * time.Hour
 type Layer struct {
 	pool   *pgxpool.Pool
 	blocks *blocks.Store
+	runMu  sync.Mutex
+	runs   map[int64]*idRun
 }
 
 func New(pool *pgxpool.Pool) *Layer {
-	return &Layer{pool: pool, blocks: blocks.New(pool)}
+	return &Layer{pool: pool, blocks: blocks.New(pool), runs: map[int64]*idRun{}}
 }
 
 type Collection struct {

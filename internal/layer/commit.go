@@ -10,7 +10,7 @@ import (
 	"github.com/adonm/postfgb/internal/spatial"
 )
 
-func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cells []uint64, chunks []chunkRow, features int) (LoadResult, error) {
+func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cells []uint64, chunks []chunkRow, runFile int64, features int) (LoadResult, error) {
 	columns, err := encodeColumns(ds.Columns)
 	if err != nil {
 		return LoadResult{}, err
@@ -50,6 +50,9 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 		if _, err := tx.Exec(ctx, `update pfgb.partitions set changed = $2 where collection = $1`, name, snapshot); err != nil {
 			return LoadResult{}, err
 		}
+		if _, err := tx.Exec(ctx, `update pfgb.id_runs set end_snapshot = $2 where collection = $1 and end_snapshot is null`, name, snapshot); err != nil {
+			return LoadResult{}, err
+		}
 		touched = nil
 		for _, c := range chunks {
 			touched = append(touched, c.cell)
@@ -72,25 +75,29 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 		}
 	}
 	rows := make([][]any, len(chunks))
-	fileIDs := make([]int64, len(chunks))
+	fileIDs := append(make([]int64, 0, len(chunks)+1), runFile)
 	for i, c := range chunks {
 		rows[i] = []any{
 			name, spatial.ToOrdered(c.cell), int32(c.seq),
 			spatial.ToOrdered(c.first.key), c.first.id,
 			spatial.ToOrdered(c.last.key), c.last.id,
 			c.bounds[0], c.bounds[1], c.bounds[2], c.bounds[3],
-			int32(c.rows), c.fileID, snapshot,
+			int32(c.rows), c.fileID, snapshot, c.colFile, c.zone,
 		}
-		fileIDs[i] = c.fileID
+		fileIDs = append(fileIDs, c.fileID, c.colFile)
 	}
 	if len(rows) > 0 {
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "chunks"},
-			[]string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "begin_snapshot"},
+			[]string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "begin_snapshot", "col_file", "zone"},
 			pgx.CopyFromRows(rows)); err != nil {
 			return LoadResult{}, err
 		}
 	}
 	if _, err := tx.Exec(ctx, `insert into pfgb.snapshots (collection, id) values ($1, $2)`, name, snapshot); err != nil {
+		return LoadResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `insert into pfgb.id_runs (file_id, collection, entries, begin_snapshot) values ($1, $2, $3, $4)`,
+		runFile, name, int64(features), snapshot); err != nil {
 		return LoadResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `update pfgb.collections set current_snapshot = $2, id_column = $3, columns_json = $4 where name = $1`,

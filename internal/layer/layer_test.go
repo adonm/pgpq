@@ -279,3 +279,67 @@ func TestDecodeCursorRoundTrip(t *testing.T) {
 		t.Fatalf("garbage cursor: %v", err)
 	}
 }
+
+func TestLookupFollowsLoadsAndFlagsDuplicates(t *testing.T) {
+	l, ctx := openTest(t)
+	name := "layer_test_lookup"
+	dropCollection(t, l, name)
+	t.Cleanup(func() { dropCollection(t, l, name) })
+
+	parisBase := cityFeatures("paris", paris, 200, 11)
+	dhakaBase := cityFeatures("dhaka", dhaka, 200, 12)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, slices.Concat(parisBase, dhakaBase)), nil); err != nil {
+		t.Fatal(err)
+	}
+	var live int
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.id_runs where collection = $1 and end_snapshot is null`, name).Scan(&live); err != nil || live != 1 {
+		t.Fatalf("live id runs after a whole load = %d (%v)", live, err)
+	}
+	if hit, err := l.Lookup(ctx, name, "paris-0007"); err != nil || hit.ID != "paris-0007" {
+		t.Fatalf("lookup paris-0007: %v", err)
+	}
+	if _, err := l.Lookup(ctx, name, "no-such-id"); !errors.Is(err, ErrFeatureNotFound) {
+		t.Fatalf("missing id: %v", err)
+	}
+
+	moveParis := cityFeatures("moved", paris, 1, 13)
+	moveDhaka := cityFeatures("moved", dhaka, 1, 13)
+	parisNow := slices.Concat(parisBase, moveParis)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, parisNow), cellsOf(t, parisNow)); err != nil {
+		t.Fatal(err)
+	}
+	hit, err := l.Lookup(ctx, name, "moved-0000")
+	if err != nil || spatial.Partition(hit.Key) != cellsOf(t, moveParis)[0] {
+		t.Fatalf("moved feature in paris: %v", err)
+	}
+
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, parisBase), cellsOf(t, parisNow)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Lookup(ctx, name, "moved-0000"); !errors.Is(err, ErrFeatureNotFound) {
+		t.Fatalf("removed feature still found: %v", err)
+	}
+
+	dhakaNow := slices.Concat(dhakaBase, moveDhaka)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, dhakaNow), cellsOf(t, dhakaNow)); err != nil {
+		t.Fatal(err)
+	}
+	hit, err = l.Lookup(ctx, name, "moved-0000")
+	if err != nil || spatial.Partition(hit.Key) != cellsOf(t, moveDhaka)[0] {
+		t.Fatalf("feature moved to dhaka: %v", err)
+	}
+
+	dupParis := cityFeatures("dup", paris, 1, 14)
+	parisDup := slices.Concat(parisBase, dupParis)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, parisDup), cellsOf(t, parisDup)); err != nil {
+		t.Fatal(err)
+	}
+	dupDhaka := cityFeatures("dup", dhaka, 1, 14)
+	dhakaDup := slices.Concat(dhakaNow, dupDhaka)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, dhakaDup), cellsOf(t, dhakaDup)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Lookup(ctx, name, "dup-0000"); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("a duplicate created by two partition loads: %v", err)
+	}
+}

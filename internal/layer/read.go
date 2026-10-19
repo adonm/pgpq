@@ -5,18 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/spatial"
 	"github.com/adonm/postfgb/internal/stats"
 )
 
 type Query struct {
 	BBox   *[4]float64
+	Filter cql.Expr
 	Limit  int
 	Cursor *Cursor
 }
@@ -36,9 +39,17 @@ type Page struct {
 }
 
 type chunkMeta struct {
-	fileID  int64
-	lastKey uint64
-	lastID  string
+	fileID   int64
+	colFile  int64
+	features int
+	zone     map[string]zoneColumn
+	lastKey  uint64
+	lastID   string
+}
+
+type located struct {
+	hit    Hit
+	bounds [4]float64
 }
 
 func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
@@ -63,7 +74,7 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 		}
 		snapshot = q.Cursor.Snapshot
 	}
-	metas, err := l.chunksAt(ctx, name, snapshot, q.BBox)
+	metas, err := l.chunksAt(ctx, name, snapshot, q.BBox, q.Filter != nil)
 	if err != nil {
 		return Page{}, err
 	}
@@ -73,6 +84,9 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 			break
 		}
 		if q.Cursor != nil && compareKeyID(meta.lastKey, meta.lastID, q.Cursor.Key, q.Cursor.ID) <= 0 {
+			continue
+		}
+		if q.Filter != nil && !mayMatch(q.Filter, meta.zone) {
 			continue
 		}
 		hits, err := l.matches(ctx, coll.IDColumn, meta, q)
@@ -93,6 +107,33 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	return page, nil
 }
 
+func (l *Layer) Count(ctx context.Context, name string, snapshot int64, filter cql.Expr) (int64, error) {
+	metas, err := l.chunksAt(ctx, name, snapshot, nil, filter != nil)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, meta := range metas {
+		if filter == nil {
+			total += int64(meta.features)
+			continue
+		}
+		if !mayMatch(filter, meta.zone) {
+			continue
+		}
+		keep, err := l.rowMask(ctx, meta, filter, meta.features)
+		if err != nil {
+			return 0, err
+		}
+		for _, ok := range keep {
+			if ok {
+				total++
+			}
+		}
+	}
+	return total, nil
+}
+
 func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q Query) ([]Hit, error) {
 	data, err := l.blocks.ReadAll(ctx, meta.fileID)
 	if err != nil {
@@ -103,7 +144,7 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 		return nil, err
 	}
 	var features []*flattypes.Feature
-	if q.BBox != nil {
+	if q.BBox != nil && q.Filter == nil {
 		features, err = c.Search(q.BBox[0], q.BBox[1], q.BBox[2], q.BBox[3])
 	} else {
 		features, err = c.SearchAll()
@@ -112,31 +153,103 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 		return nil, err
 	}
 	cols := c.Columns()
-	var hits []Hit
+	all := make([]located, 0, len(features))
 	for _, f := range features {
-		shape, err := chunk.ParseFlat(c.Header(), f)
+		bounds, err := featureBounds(c, f)
 		if err != nil {
 			return nil, err
 		}
-		if shape == nil {
-			return nil, errors.New("layer: stored feature has no geometry")
-		}
-		bounds, ok := shape.Bound()
-		if !ok {
-			return nil, errors.New("layer: stored feature has no extent")
-		}
-		key := spatial.Key(bounds)
 		id, err := storedID(f, cols, idColumn)
 		if err != nil {
 			return nil, err
 		}
-		if q.Cursor != nil && compareKeyID(key, id, q.Cursor.Key, q.Cursor.ID) <= 0 {
+		all = append(all, located{hit: Hit{Key: spatial.Key(bounds), ID: id, Chunk: c, Feature: f}, bounds: bounds})
+	}
+	slices.SortFunc(all, func(a, b located) int { return compareKeyID(a.hit.Key, a.hit.ID, b.hit.Key, b.hit.ID) })
+	var keep []bool
+	if q.Filter != nil {
+		keep, err = l.rowMask(ctx, meta, q.Filter, len(all))
+		if err != nil {
+			return nil, err
+		}
+	}
+	var hits []Hit
+	for i, item := range all {
+		if keep != nil && !keep[i] {
 			continue
 		}
-		hits = append(hits, Hit{Key: key, ID: id, Chunk: c, Feature: f})
+		if keep != nil && q.BBox != nil && !intersects(item.bounds, q.BBox) {
+			continue
+		}
+		if q.Cursor != nil && compareKeyID(item.hit.Key, item.hit.ID, q.Cursor.Key, q.Cursor.ID) <= 0 {
+			continue
+		}
+		hits = append(hits, item.hit)
 	}
-	slices.SortFunc(hits, func(a, b Hit) int { return compareKeyID(a.Key, a.ID, b.Key, b.ID) })
 	return hits, nil
+}
+
+func (l *Layer) rowMask(ctx context.Context, meta chunkMeta, filter cql.Expr, rows int) ([]bool, error) {
+	if meta.colFile == 0 {
+		return nil, errors.New("layer: chunk has no column file; reload the collection")
+	}
+	data, err := l.blocks.ReadAll(ctx, meta.colFile)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := chunk.OpenAttrs(data)
+	if !ok {
+		return nil, errors.New("layer: column file unreadable")
+	}
+	file := reader.File()
+	if file.Rows != rows {
+		return nil, fmt.Errorf("layer: column file has %d rows, chunk has %d", file.Rows, rows)
+	}
+	props := make([]map[string]any, rows)
+	for _, name := range cql.Properties(filter) {
+		if _, ok := file.Column(name); !ok {
+			continue
+		}
+		values, err := reader.Values(name)
+		if err != nil {
+			return nil, err
+		}
+		for i := range props {
+			value := values.Value(i)
+			if value == nil {
+				continue
+			}
+			if props[i] == nil {
+				props[i] = map[string]any{}
+			}
+			props[i][name] = value
+		}
+	}
+	columns := file.ColumnTypes()
+	keep := make([]bool, rows)
+	for i := range keep {
+		keep[i] = cql.Match(filter, props[i], columns)
+	}
+	return keep, nil
+}
+
+func featureBounds(c *chunk.Chunk, f *flattypes.Feature) ([4]float64, error) {
+	shape, err := chunk.ParseFlat(c.Header(), f)
+	if err != nil {
+		return [4]float64{}, err
+	}
+	if shape == nil {
+		return [4]float64{}, errors.New("layer: stored feature has no geometry")
+	}
+	bounds, ok := shape.Bound()
+	if !ok {
+		return [4]float64{}, errors.New("layer: stored feature has no extent")
+	}
+	return bounds, nil
+}
+
+func intersects(bounds [4]float64, bbox *[4]float64) bool {
+	return bounds[2] >= bbox[0] && bounds[0] <= bbox[2] && bounds[3] >= bbox[1] && bounds[1] <= bbox[3]
 }
 
 func storedID(f *flattypes.Feature, cols []chunk.Column, column string) (string, error) {
@@ -151,12 +264,16 @@ func storedID(f *flattypes.Feature, cols []chunk.Column, column string) (string,
 	return text, nil
 }
 
-func (l *Layer) chunksAt(ctx context.Context, name string, snapshot int64, bbox *[4]float64) ([]chunkMeta, error) {
-	sql := `select file_id, last_key, last_id from pfgb.chunks where collection = $1 and begin_snapshot <= $2 and (end_snapshot is null or end_snapshot > $2)`
+func (l *Layer) chunksAt(ctx context.Context, name string, snapshot int64, bbox *[4]float64, withZone bool) ([]chunkMeta, error) {
 	args := []any{name, snapshot}
+	arg := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	sql := `select file_id, col_file, features, last_key, last_id, case when ` + arg(withZone) + ` then zone else '' end` +
+		` from pfgb.chunks where collection = $1 and begin_snapshot <= $2 and (end_snapshot is null or end_snapshot > $2)`
 	if bbox != nil {
-		sql += ` and maxx >= $3 and minx <= $5 and maxy >= $4 and miny <= $6`
-		args = append(args, bbox[0], bbox[1], bbox[2], bbox[3])
+		sql += ` and maxx >= ` + arg(bbox[0]) + ` and minx <= ` + arg(bbox[2]) + ` and maxy >= ` + arg(bbox[1]) + ` and miny <= ` + arg(bbox[3])
 	}
 	sql += ` order by first_key, first_id collate "C"`
 	rows, err := l.pool.Query(ctx, sql, args...)
@@ -168,10 +285,14 @@ func (l *Layer) chunksAt(ctx context.Context, name string, snapshot int64, bbox 
 	for rows.Next() {
 		var m chunkMeta
 		var lastKey int64
-		if err := rows.Scan(&m.fileID, &lastKey, &m.lastID); err != nil {
+		var zone string
+		if err := rows.Scan(&m.fileID, &m.colFile, &m.features, &lastKey, &m.lastID, &zone); err != nil {
 			return nil, err
 		}
 		m.lastKey = spatial.FromOrdered(lastKey)
+		if m.zone, err = decodeZone(zone); err != nil {
+			return nil, err
+		}
 		metas = append(metas, m)
 	}
 	return metas, rows.Err()

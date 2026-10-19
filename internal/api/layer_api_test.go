@@ -178,6 +178,35 @@ func TestLayerRoutesRoundTrip(t *testing.T) {
 	if outside.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("paris features into a dhaka cell = %d: %s", outside.Code, outside.Body.String())
 	}
+	item := call(h, "GET", "/v2/collections/"+name+"/items/"+name+"-003", "", nil)
+	var feature struct {
+		ID string `json:"id"`
+	}
+	if item.Code != http.StatusOK || json.Unmarshal(item.Body.Bytes(), &feature) != nil || feature.ID != name+"-003" {
+		t.Fatalf("item lookup = %d: %s", item.Code, item.Body.String())
+	}
+	if gone := call(h, "GET", "/v2/collections/"+name+"/items/nope", "", nil); gone.Code != http.StatusNotFound {
+		t.Fatalf("missing item = %d", gone.Code)
+	}
+	byName := call(h, "GET", "/v2/collections/"+name+"/items?limit=5&numberMatched=true&name=feature", "", nil)
+	var filtered struct {
+		NumberMatched *int64            `json:"numberMatched"`
+		Features      []json.RawMessage `json:"features"`
+	}
+	if byName.Code != http.StatusOK || json.Unmarshal(byName.Body.Bytes(), &filtered) != nil || filtered.NumberMatched == nil || *filtered.NumberMatched != 40 || len(filtered.Features) != 5 {
+		t.Fatalf("property filter page = %d: %s", byName.Code, byName.Body.String())
+	}
+	one := call(h, "GET", "/v2/collections/"+name+"/items?numberMatched=true&filter="+url.QueryEscape("id = '"+name+"-003'"), "", nil)
+	if one.Code != http.StatusOK || !bytes.Contains(one.Body.Bytes(), []byte(`"numberMatched":1,`)) {
+		t.Fatalf("cql filter = %d: %s", one.Code, one.Body.String())
+	}
+	boxed := call(h, "GET", "/v2/collections/"+name+"/items?numberMatched=true&bbox=2,48,2.7,49.2", "", nil)
+	if boxed.Code != http.StatusOK || bytes.Contains(boxed.Body.Bytes(), []byte("numberMatched")) {
+		t.Fatalf("numberMatched with a bbox = %d: %s", boxed.Code, boxed.Body.String())
+	}
+	if broken := call(h, "GET", "/v2/collections/"+name+"/items?filter="+url.QueryEscape("id ="), "", nil); broken.Code != http.StatusBadRequest {
+		t.Fatalf("unparsable filter = %d", broken.Code)
+	}
 	missing := call(h, "GET", "/v2/collections/itest_v2_missing/items", "", nil)
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing collection = %d", missing.Code)

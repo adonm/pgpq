@@ -1,0 +1,99 @@
+package layer
+
+import (
+	"encoding/json"
+	"errors"
+
+	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/cql"
+)
+
+type zoneColumn struct {
+	Name  string   `json:"name"`
+	Nulls int      `json:"nulls"`
+	Min   *float64 `json:"min,omitempty"`
+	Max   *float64 `json:"max,omitempty"`
+}
+
+func encodeZone(columns []byte) (string, error) {
+	file, ok := chunk.ReadAttrHeader(columns)
+	if !ok {
+		return "", errors.New("layer: column file unreadable")
+	}
+	zone := make([]zoneColumn, len(file.Columns))
+	for i, column := range file.Columns {
+		zone[i] = zoneColumn{Name: column.Name, Nulls: column.Nulls, Min: column.Min, Max: column.Max}
+	}
+	out, err := json.Marshal(zone)
+	return string(out), err
+}
+
+func decodeZone(text string) (map[string]zoneColumn, error) {
+	if text == "" {
+		return nil, nil
+	}
+	var list []zoneColumn
+	if err := json.Unmarshal([]byte(text), &list); err != nil {
+		return nil, err
+	}
+	zone := make(map[string]zoneColumn, len(list))
+	for _, column := range list {
+		zone[column.Name] = column
+	}
+	return zone, nil
+}
+
+func mayMatch(filter cql.Expr, zone map[string]zoneColumn) bool {
+	return cql.MayMatch(filter, func(leaf cql.Expr) bool { return zoneLeaf(leaf, zone) })
+}
+
+func zoneLeaf(leaf cql.Expr, zone map[string]zoneColumn) bool {
+	switch x := leaf.(type) {
+	case *cql.Compare:
+		z, ok := zone[x.Prop]
+		v, numeric := numberOf(x.Value)
+		if !ok || !numeric || z.Min == nil || z.Max == nil {
+			return true
+		}
+		switch x.Op {
+		case "=":
+			return *z.Min <= v && v <= *z.Max
+		case "<", "<=":
+			return *z.Min <= v
+		case ">", ">=":
+			return *z.Max >= v
+		}
+	case *cql.Between:
+		z, ok := zone[x.Prop]
+		lo, okLo := numberOf(x.Lo)
+		hi, okHi := numberOf(x.Hi)
+		if x.Not || !ok || !okLo || !okHi || z.Min == nil || z.Max == nil {
+			return true
+		}
+		return *z.Min <= hi && *z.Max >= lo
+	case *cql.In:
+		if x.Not {
+			return true
+		}
+		for _, value := range x.Values {
+			if zoneLeaf(&cql.Compare{Prop: x.Prop, Op: "=", Value: value}, zone) {
+				return true
+			}
+		}
+		return false
+	case *cql.IsNull:
+		z, ok := zone[x.Prop]
+		return x.Not || !ok || z.Nulls > 0
+	}
+	return true
+}
+
+func numberOf(v any) (float64, bool) {
+	switch x := v.(type) {
+	case int64:
+		return float64(x), true
+	case float64:
+		return x, true
+	}
+	return 0, false
+}
