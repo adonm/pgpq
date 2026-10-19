@@ -94,7 +94,6 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <button class="btn" data-n="100000000">100M</button>
       <button class="btn" data-n="1000000000">1B</button>
       <span class="k">Cell</span>
-      <button class="btn" data-f="1000">1k</button>
       <button class="btn" data-f="12000">12k</button>
       <button class="btn" data-f="2500000">2.5M</button>
       <span class="k">Page</span>
@@ -120,7 +119,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <thead><tr><th>cell</th><th>cells</th><th>upload / cell</th><th>upload total</th><th>stored</th><th>ingest</th></tr></thead>
       <tbody id="totals"></tbody>
     </table>
-    <p class="note">Upload bytes scale with features, so every class totals the same. Stored bytes and ingest time scale with the cell count: a 1k cell writes three 256-feature samples and pays one commit of its own.</p>
+    <p class="note">Upload bytes scale with features, so both classes total the same. Stored bytes and ingest time scale with the cell count: 83k mean cells pay 83k commits and three sample files each, while 400 dense cells pay 400 large commits.</p>
     <aside class="side" id="side-model"></aside>
   </section>
 
@@ -228,7 +227,7 @@ const rtreeBytes = f => Math.ceil(f / 16) * 1.07 * K.node;
 const fenceBytes = f => Math.ceil(f / K.fenceEvery) * K.fence;
 const TYPICAL = 12000, DENSE = 2500000;
 const W = { n: 1000000000, f: 12000, link: 125e6, page: 1000 };
-const TYPES = [{ name: 'sparse', f: 1000 }, { name: 'mean', f: 12000 }, { name: 'dense', f: 2500000 }];
+const TYPES = [{ name: 'mean', f: 12000 }, { name: 'dense', f: 2500000 }];
 const S = {
   tab: 'model',
   model: { sel: 'catalog', lit: new Set(), demo: null },
