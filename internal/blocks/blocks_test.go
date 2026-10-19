@@ -30,7 +30,7 @@ func openTest(t *testing.T) (*store.Store, context.Context) {
 
 func TestBlocksRoundTrip(t *testing.T) {
 	st, ctx := openTest(t)
-	s := New(st.Pool)
+	s := New(st.Pool, 0)
 	for _, size := range []int{0, 1, Size - 1, Size, Size + 1, 250000} {
 		data := make([]byte, size)
 		rand.New(rand.NewSource(int64(size))).Read(data)
@@ -51,5 +51,39 @@ func TestBlocksRoundTrip(t *testing.T) {
 	}
 	if _, err := st.Pool.Exec(ctx, `delete from pfgb.files where collection = 'blocks_test'`); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadAllServesRepeatReadsFromCache(t *testing.T) {
+	st, ctx := openTest(t)
+	const collection = "blocks_cache_test"
+	t.Cleanup(func() {
+		if _, err := st.Pool.Exec(context.Background(), `delete from pfgb.blocks where file_id in (select file_id from pfgb.files where collection = $1)`, collection); err != nil {
+			t.Error(err)
+		}
+		if _, err := st.Pool.Exec(context.Background(), `delete from pfgb.files where collection = $1`, collection); err != nil {
+			t.Error(err)
+		}
+	})
+	data := make([]byte, 3*Size+7)
+	rand.New(rand.NewSource(7)).Read(data)
+	cached := New(st.Pool, 1<<20)
+	uncached := New(st.Pool, 0)
+	id, err := cached.Put(ctx, collection, "test", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cached.ReadAll(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pool.Exec(ctx, `delete from pfgb.blocks where file_id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uncached.ReadAll(ctx, id); err == nil {
+		t.Fatal("an uncached read of removed blocks should fail")
+	}
+	got, err := cached.ReadAll(ctx, id)
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("repeat read after the blocks were removed: %v", err)
 	}
 }

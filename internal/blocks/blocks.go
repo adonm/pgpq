@@ -3,19 +3,27 @@ package blocks
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/singleflight"
 )
 
 const Size = 8120
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	cache *cache
+	loads singleflight.Group
 }
 
-func New(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func New(pool *pgxpool.Pool, cacheBytes int64) *Store {
+	s := &Store{pool: pool}
+	if cacheBytes > 0 {
+		s.cache = newCache(cacheBytes)
+	}
+	return s
 }
 
 func (s *Store) Put(ctx context.Context, collection, kind string, data []byte) (int64, error) {
@@ -51,6 +59,25 @@ func (s *Store) Publish(ctx context.Context, tx pgx.Tx, fileIDs []int64) error {
 }
 
 func (s *Store) ReadAll(ctx context.Context, fileID int64) ([]byte, error) {
+	if s.cache != nil {
+		if data, ok := s.cache.get(fileID); ok {
+			return data, nil
+		}
+	}
+	shared, err, _ := s.loads.Do(strconv.FormatInt(fileID, 10), func() (any, error) {
+		data, err := s.read(context.WithoutCancel(ctx), fileID)
+		if err == nil && s.cache != nil {
+			s.cache.add(fileID, data)
+		}
+		return data, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return shared.([]byte), nil
+}
+
+func (s *Store) read(ctx context.Context, fileID int64) ([]byte, error) {
 	var size int64
 	if err := s.pool.QueryRow(ctx, `select bytes from pfgb.files where file_id = $1`, fileID).Scan(&size); err != nil {
 		return nil, err

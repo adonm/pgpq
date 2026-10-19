@@ -28,6 +28,8 @@ var (
 
 const Retention = 72 * time.Hour
 
+const blockCacheBytes = 256 << 20
+
 type Layer struct {
 	pool   *pgxpool.Pool
 	blocks *blocks.Store
@@ -36,7 +38,7 @@ type Layer struct {
 }
 
 func New(pool *pgxpool.Pool) *Layer {
-	return &Layer{pool: pool, blocks: blocks.New(pool), runs: map[int64]*idRun{}}
+	return &Layer{pool: pool, blocks: blocks.New(pool, blockCacheBytes), runs: map[int64]*idRun{}}
 }
 
 type Collection struct {

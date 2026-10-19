@@ -9,11 +9,12 @@ Steps 1 to 3 are built under `/v2`, alongside the current contract. DESIGN.md is
 - **Built in step 1:** S2 keys and level-8 partitions (`internal/spatial`); pgvfs-layout blocks in schema `pfgb` (`internal/blocks`, migration 0031); key-ordered chunks with catalog and snapshots; whole-collection and partition-scoped replace loads with 422 validation and per-collection commit serialization (`internal/layer`); snapshot-pinned bbox paging with 72 h cursor expiry; GeoJSON and FlatGeobuf responses on `PUT /v2/collections/{id}` and `GET /v2/collections/{id}/items`.
 - **Built in step 2:** a column file per chunk, in the same row order as its FlatGeobuf; zone maps (`min`, `max` and `nulls` per column) in the chunk row (migration 0033); CQL2 and property-equality filters evaluated exactly on the column values; `numberMatched` for filter-only requests.
 - **Built in step 3:** id runs (migration 0032) and `GET /v2/collections/{id}/items/{featureID}`. Uniqueness across partitions is the loader's job, so the server checks ids only within a body (422), and a lookup that finds the id in more than one partition answers 409.
+- **Built for caching:** a byte-budgeted block cache per worker (`internal/blocks`, 256 MiB), filled once per file. On the 30k corpus a repeated count over 1,751 chunks falls from 0.69 s to 0.13 s, and a repeated bbox plus filter from 0.25 s to 0.11 s.
 - **Verified:**
   - `testdata/corpus/mixed.fgb` (30,000 features: every scalar type, nulls, arrays, LIKE, ranges, datetime and bbox) loaded as a v2 collection in 2.8 s. The 93 filters in `filters.txt` without a bbox return the expected count through both the item list and `numberMatched`, and the five bbox filters return their expected counts through the item list. The two `datetime` lines are v1-only and skipped.
   - GDAL `ogrinfo` reads filtered FlatGeobuf over `/vsicurl/`: 30,000 features unfiltered, 12,000 for a LIKE filter and 3,340 for a bbox plus LIKE filter.
   - Lookups: a feature moved within its partition resolves to its new key, a feature moved to another partition resolves to its live copy, and a duplicate created by two partition loads answers 409.
-- **Not yet:** postings and overviews (steps 4 and 5); conditional `base=` loads, reaping and expired-snapshot cleanup (step 6); merging id runs (lookups scan every live run) and their Bloom filters; spill-to-disk for loads larger than memory (requests are held in memory); a worker block cache, and a run cache with eviction (every read fetches its blocks); an R-tree (bbox pruning is a range query on chunk envelopes).
+- **Not yet:** postings and overviews (steps 4 and 5); conditional `base=` loads, reaping and expired-snapshot cleanup (step 6); merging id runs (lookups scan every live run) and their Bloom filters; spill-to-disk for loads larger than memory (requests are held in memory); a catalog cache per snapshot (every request reads the chunk list), and eviction for decoded id runs; an R-tree (bbox pruning is a range query on chunk envelopes).
 - **Measured on `warm_100k`** (100k features spread thinly across ~7,600 level-8 cells):
 
   | | chunks | logical bytes | load | bbox (-5,40,10,50) |
@@ -22,7 +23,7 @@ Steps 1 to 3 are built under `/v2`, alongside the current contract. DESIGN.md is
   | v2 | 7,614 (13 features each) | 15 MB | 5.9 s | 15,047 features, 1.0 s |
 
   GDAL `ogrinfo` reads the v2 FlatGeobuf output (100,000 features, same extent as v1).
-- **Finding:** a fixed level-8 partition costs one chunk per populated cell, and each chunk carries about 0.8 KB of FlatGeobuf header and index. Dense partitions are unaffected. Sparse data pays heavily: here 1.7× the storage and 400× the chunk rows. **Open decision:** whether to pack adjacent sparse partitions into shared chunks up to the chunk target. A replace then reads back at most one chunk's worth of neighbouring rows, and dense partitions still load alone.
+- **Finding:** a fixed level-8 partition costs one chunk per populated cell, and each chunk carries about 0.8 KB of FlatGeobuf header and index. Dense partitions are unaffected. Sparse data pays heavily: here 1.7× the storage and 400× the chunk rows. **Decided:** one chunk per partition, with no packing across partitions. The overhead is accepted, and the worker caches absorb the read cost (see Read path).
 
 ## Goal
 
@@ -63,7 +64,7 @@ Empty partitions have no rows at all.
 
 ## Chunks
 
-- Within a partition, features are sorted by `(key, id)` and cut into chunks of about 2 MiB, at most 50,000 features each. Each partition's last chunk is partial: at most one per populated partition, so up to about 90k extra chunks over the ~200k full ones at 1e9. They are small, so they cost catalog rows and files, not bytes.
+- Within a partition, features are sorted by `(key, id)` and cut into chunks of about 2 MiB, at most 50,000 features each. Each partition's last chunk is partial: at most one per populated partition, so up to about 90k extra chunks over the ~200k full ones at 1e9. They are small, so each costs a catalog row and about 0.8 KB of FlatGeobuf header and index. Chunks never span partitions: a sparse partition keeps its own chunk, so every populated partition has at least one.
 - **A chunk** is an immutable `(chunk_id, partition, seq, key range, envelope, rows)`. Reloading a partition produces new chunks.
 - **Row order:** row `i` of a chunk's column file is feature `i` of its FGB. The encoder writes features in `(key, id)` order and must not reorder them.
 - **Envelopes:** they stay the spatial correctness key. A feature is keyed by its center, but its chunk's envelope covers its full extent.
@@ -144,7 +145,7 @@ Each overview level is a sampled, simplified copy of the collection in FlatGeobu
 
 - Blocks live in our own schema, using the pgvfs layout but written by our own Go code. Every artifact is an immutable file stored as 8,120-byte rows keyed `(file_id, n)`, one per 8 KB heap page, inline and without TOAST.
 - A file is written with one binary `COPY` and read by primary-key range, at most 8 MB per read.
-- Workers cache file bytes by `file_id` indefinitely.
+- Workers cache file bytes by `file_id` in a byte-budgeted LRU, filled once per file and shared by concurrent readers (256 MiB per worker for now). Files are immutable, so an entry is never stale; eviction is the only way out.
 - Autovacuum on the block table runs at 1 % dead rows. WAL is about 1× the bytes written.
 
 ### Catalog
@@ -185,7 +186,7 @@ Collections are independent. A client that wants several together (RustGIS layer
 | own column codec | evolved from `internal/chunk/attributes.go`: fixed-width typed vectors, per-file dictionaries, per-column zstd |
 | `klauspost/compress` | zstd |
 | `jackc/pgx/v5` `CopyFrom` | block writes |
-| `hashicorp/golang-lru/v2` + `singleflight` | block cache |
+| `golang.org/x/sync/singleflight` and a stdlib LRU (`container/list`) | block cache; `golang-lru` counts entries, not bytes |
 
 ## Scale targets (1e9 features)
 
@@ -234,5 +235,4 @@ Worker memory is the catalog, the id runs and a column/block cache budget. All o
 - Overview levels, `cap` and simplification tolerances. Size the overhead on a real layer first.
 - The distinct-count budget above which a column is not indexed.
 - The chunk target (2 MiB / 50,000 features), to retune with measurements.
-- Whether to pack adjacent sparse partitions into shared chunks (see Implementation status).
 - When to merge id runs, and whether to give them Bloom filters.
