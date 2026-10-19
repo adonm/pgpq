@@ -56,6 +56,7 @@ th:first-child,td:first-child{text-align:left}
 th{color:var(--mut);font-weight:500}
 th.grp{color:var(--fg)}
 .box{border:1px solid var(--line);border-radius:6px;padding:16px 20px;background:var(--fill);margin-bottom:18px}
+.tab h3{margin:22px 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .box h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
 .box p{margin:6px 0}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
@@ -115,6 +116,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <span>line thickness = bytes moved (log scale)</span>
       <span>box meter = share of its flow's time · Costs bars = bytes (log scale)</span>
       <span>dashed line = Postgres access</span>
+      <span>shape: capsule = network · square = Postgres · rounded = worker, cache or client · glyph = table, cache, flow, screen, commit or CPU</span>
     </div>
   </section>
 </div>
@@ -150,12 +152,17 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     <div class="stage" id="fig-costs" role="img" aria-label="Bytes moved per action for a typical cell and a dense cell"><canvas></canvas><svg></svg></div>
     <table aria-label="Cost of each action">
       <thead>
-        <tr><th rowspan="2">action</th><th class="grp" colspan="3">typical cell (12k features)</th><th class="grp" colspan="3">dense cell (2.5M features)</th></tr>
+        <tr><th rowspan="2">action</th><th class="grp" colspan="3">typical cell (<span id="f-typical"></span> features)</th><th class="grp" colspan="3">dense cell (<span id="f-dense2"></span> features)</th></tr>
         <tr><th>network</th><th>Postgres</th><th>CPU</th><th>network</th><th>Postgres</th><th>CPU</th></tr>
       </thead>
       <tbody id="cost-body"></tbody>
     </table>
     <p class="note" id="cost-note"></p>
+    <h3>Model inputs</h3>
+    <table aria-label="Cost model inputs">
+      <thead><tr><th>input</th><th>value</th><th>source</th></tr></thead>
+      <tbody id="input-body"></tbody>
+    </table>
   </section>
 
   <section class="tab" id="tab-decide">
@@ -170,32 +177,32 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
         <h3>Decisions</h3>
         <ul class="dec">
           <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
-          <li><span class="tag built">built</span><b>Chunk size</b><br><span>2 MiB of uncompressed FGB or 50,000 features. Kept; retune only after measuring.</span></li>
+          <li><span class="tag built">built</span><b>Chunk size</b><br><span><span id="f-chunk"></span> of uncompressed FGB or <span id="f-maxf"></span> features. Kept; retune only after measuring.</span></li>
           <li><span class="tag built">built</span><b>Sparse partitions</b><br><span>No packing. Every populated cell keeps at least one chunk.</span></li>
-          <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, each built per upload from the cell below. Detail is not stored: it reads the L8 chunks whose envelope meets the bbox. Level 4 and 12 are cut. Cap 256 per cell.</span></li>
+          <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, each built per upload from the cell below. Detail is not stored: it reads the L8 chunks whose envelope meets the bbox. Level 4 and 12 are cut. Cap <span id="f-cap2"></span> per cell.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell. The server reads only that body and writes only that cell’s rows.</span></li>
           <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
           <li><span class="tag built">built</span><b>Conditional loads</b><br><span>base=s answers 409 when a listed cell changed after s.</span></li>
-          <li><span class="tag built">built</span><b>Caches</b><br><span>Three LRUs per worker, 256 MiB each: file bytes, chunk lists, decoded id runs.</span></li>
+          <li><span class="tag built">built</span><b>Caches</b><br><span>Three LRUs per worker, <span id="f-cache"></span> each: file bytes, chunk lists, decoded id runs.</span></li>
           <li><span class="tag decided">decided</span><b>Upload</b><br><span>One .fgb.zst per L8 cell. No streaming, bucketing or spill. Not built: the /v2 load still takes multi-cell bodies.</span></li>
           <li><span class="tag decided">decided</span><b>Snapshot per upload</b><br><span>Each upload is one commit. A multi-cell reload is not atomic: readers can see old and new cells together until it ends.</span></li>
           <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the latest snapshot, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
-          <li><span class="tag next">next</span><b>Id runs</b><br><span>One run per upload. Lookups search every live run. Above 64 live runs, a background merge combines the 16 smallest and drops stale entries.</span></li>
-          <li><span class="tag next">next</span><b>Reaping</b><br><span>Replaced rows and files stay 15 minutes, then are deleted. Nothing pins a snapshot, so there is no 72 h retention.</span></li>
+          <li><span class="tag next">next</span><b>Id runs</b><br><span>One run per upload. Lookups search every live run. Above <span id="f-runsmax"></span> live runs, a background merge combines the <span id="f-runsmerge"></span> smallest and drops stale entries.</span></li>
+          <li><span class="tag next">next</span><b>Reaping</b><br><span>Replaced rows and files stay <span id="f-grace"></span>, then are deleted. No cursor pins a snapshot, so there is no snapshot retention.</span></li>
           <li><span class="tag cut">cut</span><b>Postings</b><br><span>Zone maps and column files answer filters for now. Revisit if a dense-cell filter takes over 1 s cold.</span></li>
-          <li><span class="tag cut">cut</span><b>Id-run Bloom filters</b><br><span>A binary search over at most 64 runs is cheap.</span></li>
+          <li><span class="tag cut">cut</span><b>Id-run Bloom filters</b><br><span>A binary search over at most <span id="f-runsmax2"></span> runs is cheap.</span></li>
         </ul>
       </div>
       <div>
         <h3>Risks</h3>
         <ul>
-          <li>Loads are held in memory and nothing spills. The densest cell (about 2.5M features) decodes to about 1.2 GB and sets the worker’s memory.</li>
-          <li>A filter on a dense cell reads every chunk until postings exist: about 300 MB per request in the worst case (see Costs).</li>
+          <li>Loads are held in memory and nothing spills. The densest cell (about <span id="f-dense"></span> features) decodes to about <span id="f-densemem"></span> and sets the worker’s memory.</li>
+          <li>A filter on a dense cell reads every chunk until postings exist: about <span id="f-filter"></span> per request in the worst case (see Costs).</li>
           <li>A reload of many cells is not one snapshot. Readers can see a mix of old and new cells until the last upload commits.</li>
           <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one snapshot.</li>
-          <li>Id runs are delta-coded, so a lookup decodes each live run in full. At 1e9 features the runs total about 15 GB: a fence index per run is needed before lookups scale.</li>
-          <li>Coarse zoom, dense data: below about zoom 10 a dense view is served by levels 6 and 2. A page that lags the zoom overscans: at zoom 7 a 1,000-feature page falls through to level 2 while the view holds about 1.9M features.</li>
-          <li>Dense cities at zoom 13 hold about 240k features on screen, about 24 MB over the link. Use overviews until detail is small, around zoom 16 or 17.</li>
+          <li>Id runs are delta-coded, so a lookup decodes each live run in full. At <span id="f-billion"></span> features the runs total about <span id="f-runsat1e9"></span>: a fence index per run is needed before lookups scale.</li>
+          <li>Coarse zoom, dense data: below about zoom <span id="f-coarsezoom"></span> a dense view is served by levels 6 and 2. A page that lags the zoom overscans: at zoom 7 a <span id="f-page"></span>-feature page falls through to level 2 while the view holds about <span id="f-z7n"></span> features.</li>
+          <li>Dense cities at zoom 13 hold about <span id="f-z13n"></span> features on screen, about <span id="f-z13b"></span> over the link. Use overviews until detail is small, around zoom <span id="f-zdense"></span>.</li>
           <li>Overview responses carry full geometry, so they can be large.</li>
           <li>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</li>
         </ul>
@@ -204,7 +211,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><b>Key</b>: the S2 level-30 cell of a feature’s bbox centre. Sets the storage order.</li>
           <li><b>Partition</b>: an S2 level-8 cell, the unit of upload, load and replacement.</li>
           <li><b>Chunk</b>: an immutable FlatGeobuf with a column file and a zone map, and one catalog row.</li>
-          <li><b>Sample</b>: the 256 smallest-hash features of a cell, stored as chunks with level = N.</li>
+          <li><b>Sample</b>: the <span id="f-cap"></span> smallest-hash features of a cell, stored as chunks with level = N.</li>
           <li><b>Id run</b>: sorted (hash, key) pairs, one per upload.</li>
           <li><b>Snapshot</b>: one upload’s commit. A row is visible at s when begin ≤ s and s &lt; end.</li>
           <li><b>Cursor</b>: the (key, id) of the last feature a page returned. It carries no snapshot; each page reads the latest one.</li>
@@ -225,7 +232,28 @@ const PAL = {
 };
 let P = PAL.dark;
 
-const K = { raw: 470, zst: 100, col: 20, run: 15, meta: 200, chunk: 2097152, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 470, zst: 100, col: 20, run: 15, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, grace: 15 * 60, runsMax: 64, runsMerge: 16, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
+const fmtMiB = b => `${+(b / 1048576).toFixed(1)} MiB`;
+const fmtRate = b => (b >= 1e9 ? `${+(b / 1e9).toFixed(b % 1e9 ? 1 : 0)} GB/s` : `${Math.round(b / 1e6)} MB/s`);
+const INPUTS = [
+  ['Raw FGB per feature', () => `${K.raw} B`, 'measured, buildings_fr'],
+  ['Stored FGB per feature, zstd', () => `${K.zst} B`, 'measured, buildings_fr'],
+  ['Column files per feature', () => `${K.col} B`, 'measured, buildings_fr'],
+  ['Id-run entry', () => `${K.run} B`, '13–16 B measured'],
+  ['Chunk', () => `${fmtMiB(K.chunk)} uncompressed, about ${fmt(PER_CHUNK)} features`, 'target'],
+  ['Chunk catalog row', () => `${K.meta} B`, 'estimate'],
+  ['Samples per cell', () => `${CAP}`, 'design'],
+  ['Ingest CPU', () => `${fmtTime(K.sec)} per feature`, 'measured: 27–32 s per million on 6 cores'],
+  ['CPU split in an upload', () => `${pct(CPU_SHARE.decode)} decode · ${pct(CPU_SHARE.validate)} validate · ${pct(CPU_SHARE.sort)} sort · ${pct(CPU_SHARE.encode)} encode`, 'estimate'],
+  ['Commit', () => fmtTime(K.fixed), 'estimate'],
+  ['Postgres throughput', () => fmtRate(K.db), 'estimate'],
+  ['Decode: zstd, id runs', () => fmtRate(K.dec), 'estimate'],
+  ['Block row', () => `${fmt(K.block)} B, one per ${K.pageBytes / 1024} KB page`, 'schema'],
+  ['Worker cache, each', () => fmtMiB(K.cache), 'setting'],
+  ['Network', () => (W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'), 'workload bar'],
+  ['Page', () => fmt(W.page), 'workload bar'],
+];
 const PER_CHUNK = Math.floor(K.chunk / K.raw);
 const CPU_SHARE = { decode: 0.25, validate: 0.05, sort: 0.1, encode: 0.6 };
 const TYPICAL = 12000, DENSE = 2500000;
@@ -396,6 +424,36 @@ class Fig {
     const bx = x2 - ux * 7, by = y2 - uy * 7;
     return new Zdog.Shape({ addTo: this.illo, path: [this.pt(x2, y2), this.pt(bx - uy * 3.5, by + ux * 3.5), this.pt(bx + uy * 3.5, by - ux * 3.5)], closed: true, fill: true, stroke: false });
   }
+  radius(role) { return role === 'net' ? 26 : role === 'db' ? 2 : 6; }
+  glyph(role, gx, gy) {
+    const out = [];
+    if (role === 'db') {
+      for (let i = 0; i < 3; i++) out.push(this.line([[gx - 7, gy + i * 4], [gx + 7, gy + i * 4]], 1.3));
+    } else if (role === 'cache') {
+      for (let i = 0; i < 2; i++) {
+        out.push(this.line([[gx - 7, gy + i * 5 + 1], [gx - 1, gy + i * 5 + 1]], 1.3));
+        out.push(this.line([[gx + 2, gy + i * 5 + 1], [gx + 7, gy + i * 5 + 1]], 1.3));
+      }
+    } else if (role === 'net') {
+      out.push(this.line([[gx - 7, gy + 2], [gx, gy + 6], [gx - 7, gy + 10]], 1.3));
+      out.push(this.line([[gx, gy + 2], [gx + 7, gy + 6], [gx, gy + 10]], 1.3));
+    } else if (role === 'client') {
+      out.push(this.shape(gx - 7, gy + 1, 14, 9, 1, { fill: false, stroke: 1.2 }));
+      out.push(this.line([[gx - 3, gy + 13], [gx + 3, gy + 13]], 1.2));
+    } else if (role === 'tx') {
+      out.push(this.line([[gx - 7, gy + 4], [gx + 7, gy + 4]], 1.3));
+      out.push(this.line([[gx - 3, gy + 8], [gx + 7, gy + 8]], 1.3));
+    } else {
+      out.push(this.shape(gx - 5, gy + 1, 10, 10, 1, { fill: false, stroke: 1.3 }));
+    }
+    return out;
+  }
+  decorate(x, y, w, h, role) {
+    const stripe = this.shape(x, y, 3, h, 0, { fill: true, stroke: false });
+    const glyph = this.glyph(role, x + w - 16, y + 12);
+    const col = P[ROLE_KIND[role] || 'cpu'];
+    this.bind(() => { stripe.color = col; for (const g of glyph) g.color = col; });
+  }
   text(x, y, str, cls = 'v', anchor = 'start') {
     const t = document.createElementNS(NS, 'text');
     t.setAttribute('x', x); t.setAttribute('y', y); t.setAttribute('class', cls); t.setAttribute('text-anchor', anchor);
@@ -416,6 +474,7 @@ class Fig {
   step() { return false; }
 }
 
+const ROLE_KIND = { step: 'cpu', net: 'net', db: 'db', cache: 'mut', client: 'mut', tx: 'mut' };
 const MED = { w1: 'net', w2: 'mut', w3: 'mut', w4: 'mut', w5: 'mut', w6: 'db', w7: 'db', w8: 'db', r1: 'mut', r2: 'mut', r3: 'mut', r4: 'mut', r5: 'net', r6: 'db', r7: 'db', r8: 'db' };
 const EDGES = [
   ['w1', 'loader', 'r', 'decode', 'l', false], ['w2', 'decode', 'r', 'validate', 'l', false],
@@ -434,7 +493,7 @@ const BOXES = [
   { key: 'encode', id: 'encode', x: 672, y: 36, w: 124, h: 66 }, { key: 'commit', id: 'commit', x: 836, y: 36, w: 124, h: 66 },
   { key: 'blobsW', id: 'blobs', x: 410, y: 146, w: 214, h: 66 }, { key: 'idsW', id: 'idRuns', x: 672, y: 146, w: 124, h: 66 },
   { key: 'catalogW', id: 'catalog', x: 836, y: 146, w: 124, h: 66 },
-  { key: 'catalogR', id: 'catalog', x: 154, y: 284, w: 116, h: 66 }, { key: 'blobsR', id: 'blobs', x: 434, y: 284, w: 116, h: 66 },
+  { key: 'catalogR', id: 'catalog', x: 154, y: 284, w: 116, h: 66 }, { key: 'blobsR', id: 'blobs', label: 'blobs', x: 434, y: 284, w: 116, h: 66 },
   { key: 'idsR', id: 'idRuns', x: 854, y: 284, w: 116, h: 66 },
   { key: 'reader', id: 'reader', x: 14, y: 380, w: 116, h: 66 }, { key: 'catalogOv', id: 'catalogOv', x: 154, y: 380, w: 116, h: 66 },
   { key: 'prune', id: 'prune', x: 294, y: 380, w: 116, h: 66 }, { key: 'fileOv', id: 'fileOv', x: 434, y: 380, w: 116, h: 66 },
@@ -490,13 +549,13 @@ const MODEL = {
     l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} written`,
     text: 'Encodes each chunk (FGB and zstd), its column file and zone map, then the samples (level 8 for the partition, and levels 6 and 2 for its ancestors) and the id run. This is the largest CPU share. Its files go to blobs and id runs; its chunk rows go to the commit.',
     layout: ['files: fgb, cols, idrun', 'rows written unpublished, by COPY'], index: [] },
-  commit: { t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total,
+  commit: { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total,
     l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
     text: 'One transaction: lock the collection row, check base=s, end the cell’s live rows, insert the new rows, rebuild levels 6 and 2 for its ancestors from the samples below, insert the snapshot, publish the files. It reads its own samples and the sibling samples under its ancestors.',
     layout: ['one snapshot per upload'], index: [] },
   blobs: { t: 'blobs & files', kind: 'db', size: c => c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes,
     l1: c => `${fmtBytes(c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes)} of blocks`, l2: c => `${fmt(c.Wr.files)} files`,
-    text: 'Virtual files: each file is stored as 8,120-byte rows, one per 8 KB heap page, inline and without TOAST. The files table lists each file (fgb, cols or idrun), its size and whether it is published. One COPY per file writes the rows before the commit; the read path reads them back through the file-bytes overlay.',
+    text: `Virtual files: each file is stored as ${fmt(K.block)}-byte rows, one per ${K.pageBytes / 1024} KB heap page, inline and without TOAST. The files table lists each file (fgb, cols or idrun), its size and whether it is published. One COPY per file writes the rows before the commit; the read path reads them back through the file-bytes overlay.`,
     layout: ['blocks: file_id bigint, n int, data bytea (storage plain)', 'files: file_id identity, collection, kind, bytes, published, created'], index: ['blocks pk (file_id, n)', 'files pk (file_id)'] },
   idRuns: { t: 'id runs', kind: 'db', size: c => c.Wr.runBytes,
     l1: c => `${fmtBytes(c.Wr.runBytes)} of runs`, l2: () => 'one per upload',
@@ -507,10 +566,10 @@ const MODEL = {
     text: 'The chunk rows that make up each snapshot: key range, envelope, zone map and the file they point to, with a snapshot range. Partitions record the snapshot that last changed each cell, collections the current snapshot and column list, and snapshots each commit. Rows an upload replaces stay 15 minutes for requests already running.',
     layout: ['chunks: chunk_id identity pk, collection, cell, seq, first and last key and id', 'chunks: minx, miny, maxx, maxy, features, file_id, col_file, zone (JSON text), level, begin_snapshot, end_snapshot', 'partitions: collection, cell, changed', 'collections: name pk, uid, current_snapshot, id_column, columns_json', 'snapshots: collection, id, created'],
     index: ['chunks (collection, begin_snapshot)', 'chunks (collection, cell) where end_snapshot is null', 'partitions pk (collection, cell)', 'collections pk (name)', 'snapshots pk (collection, id)'] },
-  reader: { t: 'Reader', kind: 'mut', l1: c => `${fmt(c.page)} features`, l2: () => 'one request',
+  reader: { t: 'Reader', kind: 'mut', role: 'client', l1: c => `${fmt(c.page)} features`, l2: () => 'one request',
     text: 'A request: items with bbox, filter or overview=N; items/{id}; numberMatched; or PUT ?base=s. Each page reads the latest snapshot.',
     layout: [], index: [] },
-  catalogOv: { t: 'Catalog', kind: 'db', share: c => c.Rd.steps[0].t / c.Rd.total,
+  catalogOv: { t: 'Catalog', kind: 'db', role: 'cache', share: c => c.Rd.steps[0].t / c.Rd.total,
     l1: () => 'overlay · LRU', l2: c => `${fmtBytes(c.Rd.steps[0].db)} metadata`,
     text: 'Overlay on the catalog. One query per snapshot loads the chunk list: the chunks whose snapshot range covers it. A page reads the latest snapshot, so it uses the current list.',
     layout: ['where collection = $1', 'and begin_snapshot ≤ s', 'and (end_snapshot is null or end_snapshot > s)'], index: ['uses (collection, begin_snapshot)'] },
@@ -518,7 +577,7 @@ const MODEL = {
     l1: c => `${fmtTime(c.Rd.steps[1].cpu)} CPU`, l2: () => 'envelopes',
     text: 'In memory: the bbox is tested against chunk envelopes, and filters against zone maps. The list is scanned; there is no R-tree yet.',
     layout: [], index: [] },
-  fileOv: { t: 'File bytes', kind: 'db', share: c => c.Rd.steps[2].t / c.Rd.total,
+  fileOv: { t: 'File bytes', kind: 'db', role: 'cache', share: c => c.Rd.steps[2].t / c.Rd.total,
     l1: () => 'overlay · LRU', l2: c => `${fmtBytes(c.Rd.steps[2].db)} read`,
     text: 'Overlay on blocks. A miss reads the file’s block rows in (file_id, n) order and keeps the bytes; a hit costs no query. A bbox page still reads every chunk it lands in.',
     layout: ['select n, data from blocks', 'where file_id = $1 order by n'], index: ['pk (file_id, n)'] },
@@ -530,9 +589,9 @@ const MODEL = {
     l1: c => `${fmtBytes(c.Rd.steps[4].net)} out`, l2: c => `${fmtTime(c.Rd.steps[4].net / c.link)} to send`,
     text: 'Features stream out in (key, id) order, as zstd when the client accepts it. The cursor carries only the last (key, id): each page reads the latest snapshot, so an upload between pages shows in the rest of the walk. Cursors never expire.',
     layout: [], index: [] },
-  idOv: { t: 'Id lookup', kind: 'db', size: c => c.Wr.runBytes,
+  idOv: { t: 'Id lookup', kind: 'db', role: 'cache', size: c => c.Wr.runBytes,
     l1: () => 'overlay · LRU', l2: () => 'decodes the runs',
-    text: 'Overlay on id runs: decoded runs in a 256 MiB LRU. A lookup binary-searches every live run, then reads the candidate chunk to verify the id. A cold lookup decodes all of a run’s bytes.',
+    text: `Overlay on id runs: decoded runs in a ${fmtMiB(K.cache)} LRU. A lookup binary-searches every live run, then reads the candidate chunk to verify the id. A cold lookup decodes all of a run’s bytes.`,
     layout: ['a miss decodes the whole run'], index: [] },
 };
 
@@ -587,11 +646,14 @@ this.bind(() => { divider.color = P.line; });
     }
     for (const b of BOXES) {
       const n = MODEL[b.id];
-      const f = this.shape(b.x, b.y, b.w, b.h, 6, { fill: true, stroke: false });
-      const o = this.shape(b.x, b.y, b.w, b.h, 6, { fill: false, stroke: 1.2 });
+      const role = n.role || (n.kind === 'cpu' ? 'step' : n.kind);
+      const r = this.radius(role);
+      const f = this.shape(b.x, b.y, b.w, b.h, r, { fill: true, stroke: false });
+      const o = this.shape(b.x, b.y, b.w, b.h, r, { fill: false, stroke: 1.2 });
+      this.decorate(b.x, b.y, b.w, b.h, role);
       const track = this.shape(b.x + 9, b.y + b.h - 9, b.w - 18, 4, 0, { fill: true, stroke: false });
       const meter = this.shape(b.x + 9, b.y + b.h - 9, 1, 4, 0, { fill: true, stroke: false });
-      this.text(b.x + 9, b.y + 19, n.t, 't');
+      this.text(b.x + 9, b.y + 19, b.label || n.t, 't');
       const t2 = this.text(b.x + 9, b.y + 37, '', 's');
       const t3 = this.text(b.x + 9, b.y + 51, '', 's');
       this.hit(b.x, b.y, b.w, b.h, () => { S.model.sel = b.id; this.render(); refresh(); });
@@ -655,6 +717,7 @@ const RUNGS = ['detail', 8, 6, 2];
 const kmTile = z => (40075.017 / 2 ** z) * Math.cos((48 * Math.PI) / 180);
 const cellKm2 = L => 85010745 / 4 ** L;
 const km2 = a => (a < 10 ? a.toFixed(1) : fmt(a));
+const withinOf = L => fmt(4 ** (8 - L));
 const km2short = a => (a >= 1e6 ? `${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${Math.round(a / 1e3)}k` : km2(a));
 const fmtCount = n => (n >= 0.05 ? (n < 1 ? n.toFixed(1) : fmt(n)) : '< 0.1');
 const detailAt = z => (W.f / cellKm2(8)) * 12 * kmTile(z) ** 2;
@@ -664,6 +727,12 @@ function rungCounts(z) {
   return RUNGS.map(k => ({ k, n: k === 'detail' ? detail : Math.min(detail, (CAP * area) / cellKm2(k)) }));
 }
 const pickAt = z => rungCounts(z).find(r => r.n <= W.page) || null;
+const detailFor = (f, z) => (f / cellKm2(8)) * 12 * kmTile(z) ** 2;
+const pickFor = (f, z) => rungCountsV(z, f).find(r => r.n <= W.page) || null;
+function rungCountsV(z, f) {
+  const area = 12 * kmTile(z) ** 2, detail = detailFor(f, z);
+  return RUNGS.map(k => ({ k, n: k === 'detail' ? detail : Math.min(detail, (CAP * area) / cellKm2(k)) }));
+}
 function zoomBands() {
   const out = {};
   for (const z of ZOOMS) {
@@ -696,9 +765,10 @@ class Overviews extends Fig {
     this.bind(() => { tint.color = P.lit; hl.color = P.mut; });
     this.view = this.shape(0, 0, 1, 1, 0, { fill: false, stroke: 1.8 });
     this.bind(() => { this.view.color = P.fg; });
-    this.text(X, Y - 10, 'one L8 cell, about 36 km across, on average', 'lab');
-    this.text(X, Y + S + 16, 'L6 cell · 144 km across · 16 L8 cells', 'lab');
-    this.text(X, Y + S + 32, 'L2 cell · 2,305 km · 4,096 L8 cells', 'lab');
+    const across = L => `${km2(Math.sqrt(cellKm2(L)))} km`;
+    this.text(X, Y - 10, `one L8 cell, about ${across(8)} across, on average`, 'lab');
+    this.text(X, Y + S + 16, `L6 cell · ${across(6)} across · ${withinOf(6)} L8 cells`, 'lab');
+    this.text(X, Y + S + 32, `L2 cell · ${across(2)} across · ${withinOf(2)} L8 cells`, 'lab');
     this.viewText = this.text(X, Y + S + 48, '', 'lab');
     this.stripLabel = this.text(370, 44, '', 'lab');
     const cw = 616 / ZOOMS.length;
@@ -754,7 +824,7 @@ class Overviews extends Fig {
     this.rows.forEach((r, i) => {
       const row = rows[i], chosen = !!pick && pick.k === r.k;
       r.bg.color = chosen ? P.lit : P.lane;
-      r.name.textContent = `${chosen ? '→ ' : ''}${r.k === 'detail' ? 'detail · L8 range scan' : `${rungName(r.k)} · ${km2short(cellKm2(r.k))} km² cell`}`;
+      r.name.textContent = `${chosen ? '→ ' : ''}${r.k === 'detail' ? 'detail · L8 range scan' : `${rungName(r.k)} · ${km2(cellKm2(r.k))} km² cell`}`;
       r.bar.color = chosen ? P.fg : P.mut;
       this.place(r.bar, 600, r.y + 18, 230 * logFrac(row.n, 0, 9), 14);
       txt(r.sub, `${r.k === 'detail' ? 'no cap, whole chunks' : `${CAP} per cell`} · ${bandText(r.k, bands)}`);
@@ -790,8 +860,8 @@ const STAGES = [
   { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} out`,
     text: 'Encodes each chunk (FGB, zstd) and its column file, then builds the samples and the id run. This stage has the largest CPU share.' },
   { t: 'Write blobs', kind: 'db', share: c => c.Wr.tDb / c.Wr.total, l1: c => `${fmtBytes(c.Wr.db)} COPY`, l2: c => `${fmtTime(c.Wr.tDb)} to Postgres`,
-    text: 'Writes every file as 8,120-byte block rows, each file in its own transaction, unpublished until the commit. WAL writes about the same bytes again.' },
-  { t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total, l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
+    text: `Writes every file as ${fmt(K.block)}-byte block rows, one per ${K.pageBytes / 1024} KB page, each file in its own transaction, unpublished until the commit. WAL writes about the same bytes again.` },
+  { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total, l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
     text: 'One transaction. Everything the upload changes becomes visible at one snapshot, or nothing does. Its cost does not depend on the cell size.' },
 ];
 const SUBS = [
@@ -815,8 +885,10 @@ class Load extends Fig {
     }
     STAGES.forEach((st, i) => {
       const x = 10 + i * 144;
-      const f = this.shape(x, 30, 120, 96, 6, { fill: true, stroke: false });
-      const o = this.shape(x, 30, 120, 96, 6, { fill: false, stroke: 1.2 });
+      const sr = this.radius(st.role || (st.kind === 'cpu' ? 'step' : st.kind));
+      const f = this.shape(x, 30, 120, 96, sr, { fill: true, stroke: false });
+      const o = this.shape(x, 30, 120, 96, sr, { fill: false, stroke: 1.2 });
+      this.decorate(x, 30, 120, 96, st.role || (st.kind === 'cpu' ? 'step' : st.kind));
       const track = this.shape(x + 8, 117, 104, 4, 0, { fill: true, stroke: false });
       const meter = this.shape(x + 8, 117, 1, 4, 0, { fill: true, stroke: false });
       this.text(x + 8, 48, st.t, 't');
@@ -881,17 +953,17 @@ class Load extends Fig {
 }
 
 const REQS = [
-  { label: 'items?bbox=', lines: [['catalog overlay,', 'latest snapshot'], ['prune: envelope', 'per chunk'], ['file bytes,', 'whole chunks'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']],
+  { label: 'items?bbox=', roles: ['cache', 'step', 'cache', 'step', 'net'], lines: [['catalog overlay,', 'latest snapshot'], ['prune: envelope', 'per chunk'], ['file bytes,', 'whole chunks'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']],
     run: c => readBBox(c.f, c.page, c.link), note: 'Reads whole chunks, not just the matching rows: a page still moves every chunk it lands in. The cursor carries only (key, id), so each page reads the latest snapshot.' },
-  { label: 'items?filter=', lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']],
+  { label: 'items?filter=', roles: ['cache', 'step', 'db', 'cache', 'net'], lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']],
     run: c => readFilter(c.f, c.page, c.link), note: 'Worst case: no postings yet, so every chunk of the cell is a candidate and each one is read whole. Postings would remove most of this cost.' },
-  { label: 'numberMatched', lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
+  { label: 'numberMatched', roles: ['cache', 'step', 'db', 'net'], lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
     run: c => readCount(c.f, c.link), note: 'Counts from column files only, so it never decodes geometry. Omitted with a bbox alone, as in v1.' },
-  { label: 'items?overview=N', lines: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['samples,', 'LRU'], ['FGB search', 'of the samples'], ['page by', '(key, id)']],
+  { label: 'items?overview=N', roles: ['cache', 'step', 'cache', 'step', 'net'], lines: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['samples,', 'LRU'], ['FGB search', 'of the samples'], ['page by', '(key, id)']],
     run: c => readOverview(c.page, c.link), note: 'N is 2, 6 or 8, chosen by the client. No filter. Samples are small, so overviews are the cheap way to show a whole area.' },
-  { label: 'items/{id}', lines: [['id runs overlay:', 'search each run'], ['candidate keys', 'name cells'], ['catalog: chunks', 'covering the key'], ['verify the id', 'in each chunk']],
+  { label: 'items/{id}', roles: ['cache', 'step', 'cache', 'db'], lines: [['id runs overlay:', 'search each run'], ['candidate keys', 'name cells'], ['catalog: chunks', 'covering the key'], ['verify the id', 'in each chunk']],
     run: c => readId(c.f, c.link), note: 'A cold lookup decodes every live run in full, which is why the id-run merge and a fence index are on the risk list.' },
-  { label: 'PUT ?base=s', lines: [['lock the', 'collection row'], ['check the cell', 'changed after s'], ['accept, or', 'answer 409']],
+  { label: 'PUT ?base=s', roles: ['db', 'db', 'net'], lines: [['lock the', 'collection row'], ['check the cell', 'changed after s'], ['accept, or', 'answer 409']],
     run: c => readBase(c.link), note: 'Only the uploaded cell is checked. The blobs are written before the lock is taken, so the lock covers a few rows.' },
 ];
 const reqGeom = n => {
@@ -927,8 +999,11 @@ class Reads extends Fig {
     const R = REQS[S.reads.req], n = R.lines.length, { BOX, xs } = reqGeom(n);
     R.lines.forEach(([l1, l2], i) => {
       const x = xs[i];
-      const f = this.shape(x, 50, BOX, 84, 6, { fill: true, stroke: false });
-      const o = this.shape(x, 50, BOX, 84, 6, { fill: false, stroke: 1.2 });
+      const kd = stepKind(this.run.steps[i]);
+      const kr = this.radius(R.roles[i] || 'step');
+      const f = this.shape(x, 50, BOX, 84, kr, { fill: true, stroke: false });
+      const o = this.shape(x, 50, BOX, 84, kr, { fill: false, stroke: 1.2 });
+      this.decorate(x, 50, BOX, 84, R.roles[i] || 'step');
       const track = this.shape(x + 10, 122, BOX - 20, 4, 0, { fill: true, stroke: false });
       const meter = this.shape(x + 10, 122, 1, 4, 0, { fill: true, stroke: false });
       const t1 = this.text(x + 10, 68, l1, 'v');
@@ -1011,7 +1086,7 @@ class Reads extends Fig {
 class Costs extends Fig {
   constructor() {
     super('fig-costs', 1000, 440);
-    this.text(10, 22, 'bytes moved (network + Postgres), log scale · upper bar = typical cell 12k, lower bar = dense cell 2.5M', 'lab');
+    this.text(10, 22, `bytes moved (network + Postgres), log scale · upper bar = typical cell ${fmtBig(TYPICAL)}, lower bar = dense cell ${fmtBig(DENSE)}`, 'lab');
     actions(TYPICAL).forEach((_, i) => {
       const y = 40 + i * 48;
       const name = this.text(10, y + 19, '', 'v');
@@ -1055,7 +1130,7 @@ const SIDE = {
   overviews() {
     return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
       <input type="range" id="z-range" min="6" max="17" step="1" aria-label="Zoom level">
-      <p>Level 8 is the ingest unit, and its samples are the coarse views: 256 kept in each partition, the features with the smallest hash. Level 6 keeps 256 in each of its cells, built from its 16 partitions, and level 2 from its 4,096. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
+      <p>Level 8 is the ingest unit, and its samples are the coarse views: ${CAP} kept in each partition, the features with the smallest hash. Level 6 keeps ${CAP} in each of its ${withinOf(6)} partitions, and level 2 from its ${withinOf(2)}. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
       <p class="note">Detail is not stored: it reads the L8 chunks whose envelope meets the bbox, pruned from the key-ordered chunk list; an in-memory R-tree over the envelopes is planned. The row count stays bounded as the zoom rises.</p>
       <p class="note">Each zoom uses the finest option that fits one page. From the workload bar: the cell size is spread evenly over the view, and the page size is the budget. A larger page lets a fine view use detail sooner instead of a sparse sample.</p>
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
@@ -1118,7 +1193,35 @@ function syncCosts() {
     const d = den[i];
     return `<tr><td>${esc(t.name)}</td><td>${fmtBytes(t.net)}</td><td>${fmtBytes(t.db)}</td><td>${t.cpu ? fmtTime(t.cpu) : '—'}</td><td>${fmtBytes(d.net)}</td><td>${fmtBytes(d.db)}</td><td>${d.cpu ? fmtTime(d.cpu) : '—'}</td></tr>`;
   }).join('');
-  set('#cost-note', `Link ${W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'} and page of ${fmt(W.page)} come from the workload bar. Measured: sizes per feature (buildings_fr) and the ingest rate on 6 cores (27–32 s per million features). Estimated: the CPU split inside an upload, Postgres at 500 MB/s, zstd decode at 1 GB/s, and a 0.1 s commit. The bars and this table use the same numbers.`);
+  set('#cost-note', `Link ${W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'} and page of ${fmt(W.page)} come from the workload bar. Measured: sizes per feature (buildings_fr) and ingest at ${fmtTime(K.sec)} per feature on 6 cores. Estimated: the CPU split inside an upload, Postgres at ${fmtRate(K.db)}, decoding at ${fmtRate(K.dec)}, and a ${fmtTime(K.fixed)} commit. The bars, the table and the inputs below read the same numbers.`);
+  $('#input-body').innerHTML = INPUTS.map(([name, value, src]) => `<tr><td>${esc(name)}</td><td>${esc(value())}</td><td>${esc(src)}</td></tr>`).join('');
+}
+function syncFacts() {
+  const d13 = detailFor(DENSE, 13), d7 = detailFor(DENSE, 7);
+  const coarse = ZOOMS.find(z => { const p = pickFor(DENSE, z); return p && p.k === 8; });
+  const fine = ZOOMS.find(z => detailFor(DENSE, z) <= W.page);
+  set('#f-cache', fmtMiB(K.cache));
+  set('#f-grace', fmtTime(K.grace));
+  set('#f-runsmax', fmt(K.runsMax));
+  set('#f-runsmax2', fmt(K.runsMax));
+  set('#f-runsmerge', fmt(K.runsMerge));
+  set('#f-chunk', fmtMiB(K.chunk));
+  set('#f-maxf', fmt(K.maxFeatures));
+  set('#f-cap', fmt(CAP));
+  set('#f-cap2', fmt(CAP));
+  set('#f-dense', fmtBig(DENSE));
+  set('#f-dense2', fmtBig(DENSE));
+  set('#f-densemem', fmtBytes(DENSE * K.raw));
+  set('#f-filter', fmtBytes(readFilter(DENSE, W.page, W.link).db));
+  set('#f-billion', fmtBig(1e9));
+  set('#f-runsat1e9', fmtBytes(1e9 * K.run));
+  set('#f-coarsezoom', coarse === undefined ? '—' : coarse);
+  set('#f-page', fmt(W.page));
+  set('#f-z7n', fmtBig(d7));
+  set('#f-z13n', fmt(d13));
+  set('#f-z13b', fmtBytes(d13 * K.zst));
+  set('#f-zdense', fine === undefined ? '—' : fine);
+  set('#f-typical', fmtBig(TYPICAL));
 }
 function sync() {
   if (S.tab === 'model') syncModel();
@@ -1130,6 +1233,7 @@ function sync() {
 function refresh() {
   const el = $('#side-' + S.tab);
   if (el && SIDE[S.tab]) el.innerHTML = SIDE[S.tab]();
+  syncFacts();
   sync();
 }
 function act(tab, name, arg) {
