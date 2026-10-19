@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/adonm/postfgb/internal/api"
+	"github.com/adonm/postfgb/internal/layer"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -63,9 +64,15 @@ func serve(args []string) {
 	if *readonly {
 		slog.Info("read-only worker")
 	}
+	layers := layer.New(st.Pool)
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	defer stopWorker()
+	if !*readonly {
+		go layers.RunDirty(workerCtx)
+	}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly}),
+		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly, Layers: layers}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errCh := make(chan error, 1)

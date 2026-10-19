@@ -52,6 +52,9 @@ func TestOverviewLevelsKeepTheSmallestHashesPerCell(t *testing.T) {
 	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, features), nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := l.FlushDirty(ctx); err != nil {
+		t.Fatal(err)
+	}
 	detail := readAll(t, l, name, Query{Limit: 64})
 	for _, level := range []int{2, 6, 8} {
 		checkTopPerCell(t, l, name, level, detail)
@@ -75,8 +78,92 @@ func TestReloadRebuildsCoarseLevels(t *testing.T) {
 	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, second), cells); err != nil {
 		t.Fatal(err)
 	}
+	if err := l.FlushDirty(ctx); err != nil {
+		t.Fatal(err)
+	}
 	detail := readAll(t, l, name, Query{Limit: 64})
 	for _, level := range []int{2, 6} {
 		checkTopPerCell(t, l, name, level, detail)
+	}
+}
+
+func TestL2OverviewWaitsForFlush(t *testing.T) {
+	l, ctx := openTest(t)
+	name := "layer_test_deferred"
+	dropCollection(t, l, name)
+	t.Cleanup(func() { dropCollection(t, l, name) })
+	features := cityFeatures("paris", paris, 300, 71)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, features), nil); err != nil {
+		t.Fatal(err)
+	}
+	levelCount := func(level int) int {
+		t.Helper()
+		var n int
+		if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.chunks where collection = $1 and level = $2`, name, level).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if levelCount(6) == 0 {
+		t.Fatal("level 6 was not built by the load")
+	}
+	if levelCount(2) != 0 {
+		t.Fatalf("level 2 already has %d chunks before the worker", levelCount(2))
+	}
+	var dirty int
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.overview_dirty where collection = $1 and level = 2`, name).Scan(&dirty); err != nil {
+		t.Fatal(err)
+	}
+	if dirty == 0 {
+		t.Fatal("the load did not queue a level 2 overview")
+	}
+	world := [4]float64{-180, -90, 180, 90}
+	if hits := readAll(t, l, name, Query{Limit: 64, Level: 2, BBox: &world}); len(hits) != 0 {
+		t.Fatalf("level 2 served %d hits before the worker", len(hits))
+	}
+	if err := l.FlushDirty(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if levelCount(2) == 0 {
+		t.Fatal("the worker did not build level 2")
+	}
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.overview_dirty where collection = $1`, name).Scan(&dirty); err != nil || dirty != 0 {
+		t.Fatalf("dirty rows after the flush = %d (%v)", dirty, err)
+	}
+	if hits := readAll(t, l, name, Query{Limit: 64, Level: 2, BBox: &world}); len(hits) == 0 {
+		t.Fatal("level 2 is empty after the worker")
+	}
+}
+
+func TestDirtyWorkerWaitsForQuiet(t *testing.T) {
+	l, ctx := openTest(t)
+	name := "layer_test_dirty_quiet"
+	dropCollection(t, l, name)
+	t.Cleanup(func() { dropCollection(t, l, name) })
+	features := cityFeatures("paris", paris, 120, 72)
+	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, features), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.flushDirty(ctx, false, dirtyBatch); err != nil {
+		t.Fatal(err)
+	}
+	var level int
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.chunks where collection = $1 and level = 2`, name).Scan(&level); err != nil {
+		t.Fatal(err)
+	}
+	if level != 0 {
+		t.Fatalf("the worker built level 2 before the quiet window: %d chunks", level)
+	}
+	if _, err := l.pool.Exec(ctx, `update pfgb.overview_dirty set dirty_since = now() - interval '6 seconds' where collection = $1`, name); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.flushDirty(ctx, false, dirtyBatch); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.chunks where collection = $1 and level = 2`, name).Scan(&level); err != nil {
+		t.Fatal(err)
+	}
+	if level == 0 {
+		t.Fatal("the worker ignored a dirty row past the quiet window")
 	}
 }

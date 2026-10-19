@@ -99,6 +99,9 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 	for _, row := range coarse {
 		fileIDs = append(fileIDs, row.fileID, row.colFile)
 	}
+	if err := queueOverviews(ctx, tx, name, ancestors(touched, deferredLevel), deferredLevel); err != nil {
+		return LoadResult{}, err
+	}
 	if err := replaceIDs(ctx, tx, uid, touched, entries); err != nil {
 		return LoadResult{}, err
 	}

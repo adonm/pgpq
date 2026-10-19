@@ -17,6 +17,7 @@ type Server struct {
 type Config struct {
 	Store    *store.Store
 	ReadOnly bool
+	Layers   *layer.Layer
 }
 
 type link struct {
@@ -36,7 +37,9 @@ func New(st *store.Store) http.Handler {
 func NewWithConfig(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	s := &Server{Store: cfg.Store, ReadOnly: cfg.ReadOnly, metrics: newMetrics()}
-	if cfg.Store != nil {
+	if cfg.Layers != nil {
+		s.layers = cfg.Layers
+	} else if cfg.Store != nil {
 		s.layers = layer.New(cfg.Store.Pool)
 	}
 	mux.HandleFunc("GET /healthz", s.healthz)

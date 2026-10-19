@@ -46,7 +46,8 @@ type coarseStep struct {
 
 var (
 	overviewLevels = []int{8}
-	coarseSteps    = []coarseStep{{level: 6, from: 8}, {level: 2, from: 6}}
+	coarseSteps    = []coarseStep{{level: 6, from: 8}}
+	deferredLevel  = 2
 	servedLevels   = []int{2, 6, 8}
 )
 
