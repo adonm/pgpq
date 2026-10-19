@@ -654,68 +654,128 @@ class Model extends Fig {
   }
 }
 
-const LEVELS = [['Detail', null, 'detail, with no overview'], ['Level 12 sample', 5.07, 'overview=12'], ['Level 10 sample', 81.1, 'overview=10'], ['Level 8 sample', 1297.3, 'overview=8']];
+const CAP = 256;
+const ZOOMS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+const RUNGS = ['detail', 12, 10, 8, 6, 4, 2];
 const kmTile = z => (40075.017 / 2 ** z) * Math.cos((48 * Math.PI) / 180);
-const barPos = v => Math.min(1, Math.max(0, Math.log10(Math.max(v, 1)) / 6)) * 420;
-function onScreen(z) {
-  const t = kmTile(z), area = 12 * t * t, detail = 1900 * area;
-  return LEVELS.map(([, cell]) => (cell === null ? detail : Math.min(detail, (256 * area) / cell)));
+const cellKm2 = L => 85010745 / 4 ** L;
+const km2 = a => (a < 10 ? a.toFixed(1) : fmt(a));
+const rungName = k => (k === 'detail' ? 'detail' : `L${k}`);
+function rungCounts(z) {
+  const area = 12 * kmTile(z) ** 2, detail = (W.f / cellKm2(8)) * area;
+  return RUNGS.map(k => {
+    if (k === 'detail') return { k, n: detail, ok: true };
+    const ok = k !== 12 || W.f > 100000;
+    return { k, n: ok ? Math.min(detail, (CAP * area) / cellKm2(k)) : 0, ok };
+  });
+}
+const pickAt = z => rungCounts(z).find(r => r.ok && r.n <= W.page) || null;
+function zoomBands() {
+  const out = {};
+  for (const z of ZOOMS) {
+    const p = pickAt(z);
+    if (p) out[p.k] = (out[p.k] || []).concat(z);
+  }
+  return out;
+}
+function bandText(k, bands) {
+  const zs = bands[k];
+  if (!zs) return 'not used, zoom 6–17';
+  const a = zs[0], b = zs[zs.length - 1];
+  if (k === 'detail' && b === 17) return `zoom ${a}+`;
+  return a === b ? `zoom ${a}` : `zoom ${a}–${b}`;
 }
 
 class Ladder extends Fig {
   constructor() {
     super('fig-ladder', 1000, 440);
-    const cell = (x, y, w, hi) => {
-      const f = this.shape(x, y, w, w, 0, { fill: true, stroke: false });
-      const o = this.shape(x, y, w, w, 0, { fill: false, stroke: hi ? 2 : 1 });
-      this.bind(() => { f.color = P.fill; o.color = hi ? P.fg : P.line; });
+    const cell = (x, y, s, tint) => {
+      const f = this.shape(x, y, s, s, 0, { fill: true, stroke: false });
+      const o = this.shape(x, y, s, s, 0, { fill: false, stroke: 1 });
+      this.bind(() => { f.color = tint ? P.lit : P.fill; o.color = P.line; });
     };
-    cell(40, 24, 380, false);
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(40 + i * 95, 24 + j * 95, 95, i === 1 && j === 1);
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(135 + i * 23.75, 119 + j * 23.75, 23.75, false);
-    this.text(46, 16, 'L8 cell · about 36 km', 'lab');
-    this.scr = this.shape(135, 119, 1, 1, 0, { fill: true, stroke: false });
-    this.scrEdge = this.shape(135, 119, 1, 1, 0, { fill: false, stroke: 1.6 });
-    this.bind(() => { this.scr.color = P.lit; this.scrEdge.color = P.fg; });
-    this.bars = LEVELS.map(([name], i) => {
-      const y = 96 + i * 84;
-      const back = this.shape(520, y, 420, 26, 0, { fill: true, stroke: false });
-      const edge = this.shape(520, y, 420, 26, 0, { fill: false, stroke: 1 });
-      const band = this.shape(520 + barPos(100), y, barPos(2000) - barPos(100), 26, 0, { fill: true, stroke: false });
-      const fill = this.shape(520, y, 1, 26, 0, { fill: true, stroke: false });
-      this.bind(() => { back.color = P.lane; edge.color = P.line; band.color = P.band; });
-      this.text(520, y - 12, name, 'lab');
-      const val = this.text(940, y - 12, '', 'v', 'end');
-      const wire = this.text(940, y + 41, '', 's', 'end');
-      return { y, fill, val, wire };
+    const X = 30, Y = 52, S10 = 75, S12 = S10 / 4;
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(X + i * S10, Y + j * S10, S10, false);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(X + S10 + i * S12, Y + S10 + j * S12, S12, true);
+    const hl = this.shape(X + S10, Y + S10, S10, S10, 0, { fill: false, stroke: 2 });
+    this.bind(() => { hl.color = P.mut; });
+    this.view = this.shape(0, 0, 1, 1, 0, { fill: false, stroke: 1.8 });
+    this.bind(() => { this.view.color = P.fg; });
+    this.text(X, Y - 10, 'one L8 cell, about 36 km across, on average', 'lab');
+    this.text(X, Y + 318, 'L10 · 9 km · 16 per L8 cell (highlighted)', 'lab');
+    this.text(X, Y + 334, 'L12 · 2.3 km · 256 per L8 cell (16 shown)', 'lab');
+    this.viewText = this.text(X, Y + 350, '', 'lab');
+    this.stripLabel = this.text(370, 44, '', 'lab');
+    const cw = 616 / ZOOMS.length;
+    this.cells = ZOOMS.map((z, i) => {
+      const x = 370 + i * cw, w = cw - 3, y = 60, h = 40;
+      const f = this.shape(x, y, w, h, 0, { fill: true, stroke: false });
+      const o = this.shape(x, y, w, h, 0, { fill: false, stroke: 1 });
+      const t = this.text(x + w / 2, y + 25, '', 'v', 'middle');
+      this.text(x + w / 2, y + 56, String(z), 'lab', 'middle');
+      return { z, f, o, t };
     });
-    this.text(520, 430, 'band: 100 to 2,000 features on screen (assumed)', 'lab');
+    this.rowsLabel = this.text(370, 172, '', 'lab');
+    this.rows = RUNGS.map((k, i) => {
+      const y = 182 + i * 32;
+      return {
+        k, y,
+        bg: this.shape(366, y, 620, 30, 0, { fill: true, stroke: false }),
+        bar: this.shape(600, y + 8, 1, 14, 0, { fill: true, stroke: false }),
+        name: this.text(370, y + 12, '', 'v'),
+        sub: this.text(370, y + 25, '', 'lab'),
+        val: this.text(986, y + 20, '', 'v', 'end'),
+      };
+    });
+    this.budget = this.shape(600, 178, 1, 226, 0, { fill: true, stroke: false });
+    this.bind(() => { this.budget.color = P.mut; });
+    for (const [t, x] of [['1', 600], ['1k', 677], ['1M', 753], ['1B', 830]]) this.text(x, 420, t, 'lab', 'middle');
     this.render();
   }
   geometry(z) {
-    const t = kmTile(z), k = 380 / 36, w = 4 * t * k, h = 3 * t * k;
-    const rx = 182.5 - w / 2, ry = 166.5 - h / 2;
-    const x1 = Math.max(rx, 40), y1 = Math.max(ry, 24), x2 = Math.min(rx + w, 420), y2 = Math.min(ry + h, 404);
+    const s = 300 / 36, t = kmTile(z), w = 4 * t * s, h = 3 * t * s, cx = 142.5, cy = 164.5;
+    const x1 = Math.max(cx - w / 2, 30), y1 = Math.max(cy - h / 2, 52);
+    const x2 = Math.min(cx + w / 2, 330), y2 = Math.min(cy + h / 2, 352);
     return x2 > x1 && y2 > y1 ? { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } : null;
   }
   paint() {
     super.paint();
-    const z = Math.round(S.ladder.z), counts = onScreen(z), g = this.geometry(z);
-    this.scr.visible = this.scrEdge.visible = !!g;
-    if (g) { this.place(this.scr, g.x, g.y, g.w, g.h); this.place(this.scrEdge, g.x, g.y, g.w, g.h); }
-    this.bars.forEach((b, i) => {
-      const v = counts[i], ok = v >= 100 && v <= 2000;
-      this.place(b.fill, 520, b.y, barPos(v), 26);
-      b.fill.color = ok ? P.fg : P.mut;
-      b.val.textContent = `${fmt(v)} features`;
-      b.wire.textContent = `${fmtBytes(v * K.zst)} over the link · ${fmtTime((v * K.zst) / this.cur.link)}`;
+    const z = Math.round(S.ladder.z), rows = rungCounts(z), pick = pickAt(z), bands = zoomBands();
+    const g = this.geometry(z), t = kmTile(z);
+    this.view.visible = !!g;
+    if (g) this.place(this.view, g.x, g.y, g.w, g.h);
+    this.viewText.textContent = `view at zoom ${z}: ${km2(4 * t)} × ${km2(3 * t)} km`;
+    this.stripLabel.textContent = `level served at each zoom · cell ${fmt(W.f)} features · page ${fmt(W.page)}`;
+    for (const c of this.cells) {
+      const cur = c.z === z, p = pickAt(c.z);
+      c.t.textContent = p ? rungName(p.k) : 'none';
+      c.f.color = cur ? P.lit : P.fill;
+      c.o.color = cur ? P.fg : P.line;
+      c.o.stroke = cur ? 2 : 1;
+    }
+    this.rowsLabel.textContent = `features on screen at zoom ${z} · line marks one page of ${fmt(W.page)}`;
+    this.place(this.budget, 600 + 230 * logFrac(W.page, 0, 9), 178, 1, 226);
+    this.rows.forEach((r, i) => {
+      const row = rows[i], chosen = !!pick && pick.k === r.k;
+      r.bg.color = chosen ? P.lit : P.lane;
+      r.name.textContent = `${chosen ? '→ ' : ''}${rungName(r.k)} · ${r.k === 'detail' ? 'every feature' : `${km2(cellKm2(r.k))} km² cell`}`;
+      r.bar.visible = row.ok;
+      if (!row.ok) {
+        r.sub.textContent = 'not built below 100k per cell';
+        r.val.textContent = '—';
+        return;
+      }
+      r.bar.color = chosen ? P.fg : P.mut;
+      this.place(r.bar, 600, r.y + 8, 230 * logFrac(row.n, 0, 9), 14);
+      r.sub.textContent = `${r.k === 'detail' ? 'no cap' : `${CAP} per cell`} · ${bandText(r.k, bands)}`;
+      r.val.textContent = `${row.n < 1 ? '< 1' : fmt(row.n)} · ${fmtBytes(row.n * K.zst)}`;
     });
   }
   step(dt) {
     const s = S.ladder.sweep;
     if (!s) return false;
     s.t += dt;
-    S.ladder.z = 2 + 15 * Math.min(1, s.t / 12);
+    S.ladder.z = 6 + 11 * Math.min(1, s.t / 12);
     if (s.t >= 12) S.ladder.sweep = null;
     return true;
   }
@@ -724,7 +784,7 @@ class Ladder extends Fig {
     if (name === 'demo') L.sweep = { t: 0 };
     if (name === 'reset') { L.z = 13; L.sweep = null; }
     if (name === 'set') { L.z = +arg; L.sweep = null; }
-    if (name === 'step') { L.sweep = null; L.z = Math.min(17, Math.max(2, Math.round(L.z) + arg)); }
+    if (name === 'step') { L.sweep = null; L.z = Math.min(17, Math.max(6, Math.round(L.z) + arg)); }
   }
 }
 
@@ -1062,8 +1122,10 @@ const SIDE = {
   },
   ladder() {
     return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
-      <input type="range" id="z-range" min="2" max="17" step="1" aria-label="Zoom level">
-      <p class="note">Estimates for one dense cell: 1,900 features per km², a 1024 × 768 screen at 48° N. The band (100 to 2,000 features on screen) is an assumption to review.</p>
+      <input type="range" id="z-range" min="6" max="17" step="1" aria-label="Zoom level">
+      <p>An overview level is an S2 grid. Level L keeps up to 256 features in each of its cells, the ones with the smallest hash, so they are spread evenly. A coarser level has 16 times the ground per cell, so it keeps 16 times fewer features per km².</p>
+      <p class="note">Each zoom uses the finest level that fits one page. Where a cell holds more than 256 features at a level, that level's count depends only on the view's area, not on the density.</p>
+      <p class="note">From the workload bar: the cell size is spread evenly over the view, and the page size is the budget. L12 is built only for partitions above 100,000 features.</p>
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   load() {
@@ -1091,12 +1153,20 @@ function syncModel() {
   else set('#status-model', `${MODEL[cs.box].t}: ${fmtTime(cs.t)} of work, ${MODEL[cs.box].l2(c)}`);
 }
 function syncLadder() {
-  const z = Math.round(S.ladder.z), counts = onScreen(z), pick = counts.findIndex(v => v >= 100 && v <= 2000), r = $('#z-range');
+  const z = Math.round(S.ladder.z), rows = rungCounts(z), pick = pickAt(z), r = $('#z-range');
   if (r && document.activeElement !== r) r.value = z;
   set('#z-val', z);
-  set('#z-pick', pick < 0 ? 'No level falls in the band at this zoom. Coarser levels 6, 4 and 2 serve it.' : `Ask for ${LEVELS[pick][2]}: ${fmt(counts[pick])} features on screen, the finest level in the band, ${fmtBytes(counts[pick] * K.zst)} over the link.`);
-  set('#status-ladder', `Zoom ${z}: detail would move ${fmtBytes(counts[0] * K.zst)} (${fmtTime((counts[0] * K.zst) / W.link)}) over the link.`);
+  const detail = rows[0].n;
+  if (!pick) {
+    set('#z-pick', `No level fits one page of ${fmt(W.page)} at this zoom.`);
+    set('#status-ladder', `Zoom ${z}: no level fits one page of ${fmt(W.page)}.`);
+    return;
+  }
+  const want = pick.k === 'detail' ? 'detail' : `overview=${pick.k}`;
+  set('#z-pick', `Ask for ${want}: ${fmt(pick.n)} features, ${fmtBytes(pick.n * K.zst)} over the link (${fmtTime((pick.n * K.zst) / W.link)}). Detail would be ${fmt(detail)} features.`);
+  set('#status-ladder', `Zoom ${z}: ask for ${want}, ${fmt(pick.n)} features. Detail: ${fmt(detail)}.`);
 }
+
 function syncLoad() {
   const k = S.load.k, cur = k === 0 ? S.load.sel : k <= 6 ? k - 1 : 6;
   S.load.sel = cur;

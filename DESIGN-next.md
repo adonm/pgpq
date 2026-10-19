@@ -218,6 +218,8 @@ The design page (`/design`) draws every figure from one cost model, so the visua
 | Postgres throughput, reads and writes | 500 MB/s | estimate |
 | Decode, zstd and id runs | 1 GB/s | estimate |
 | Network | 1 Gbit/s or 100 Mbit/s, chosen on the page | setting |
+| Ladder density | features in one L8 cell ÷ 1,297 km², spread evenly over the view | assumption, Ladder tab |
+| Ladder budget | one page: the Page setting | setting |
 
 Per action, for one cell of N features and a page of P features:
 
@@ -228,6 +230,7 @@ Per action, for one cell of N features and a page of P features:
 - **numberMatched with a filter:** N × 20 B of column files; no geometry.
 - **Id lookup, uncached:** N × 15 B of runs decoded, plus one candidate chunk.
 - **Overview page:** P × 100 B of samples, returned as zstd.
+- **Ladder:** a view at zoom z covers 12 × (40,075 km × cos 48° ÷ 2^z)² km², so it holds density × area features at detail. Level L shows min(detail, 256 × area ÷ cell(L)) features, where cell(L) = 85.0 million km² ÷ 4^L. Zoom z uses the finest level that fits one page. L12 is built only for partitions above 100,000 features.
 
 ## Kept from the current implementation
 
