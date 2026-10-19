@@ -13,7 +13,7 @@ Design decisions are recorded in the design page served at `/design` (`internal/
 | Path | Content |
 | --- | --- |
 | `PUT /v2/collections/{id}` (writable) | create or replace a collection from a FlatGeobuf body, reprojected to WGS84; an id column is required (`id`, `fid`, `gid`, `ogc_fid`, or `id_column=`); JSON columns are flattened into typed columns by default (`flatten=off` disables); `cells=` scopes a load to the listed level-8 cells |
-| `GET /v2/collections/{id}/items` | features with `bbox`, property filters, CQL2-text `filter=`, `limit`, opaque `cursor` paging with `links rel=next`, `overview=0\|2\|6\|8`, `numberMatched=true` (without a bbox), and `f=flatgeobuf` or `Accept: application/flatgeobuf` |
+| `GET /v2/collections/{id}/items` | features with `bbox`, property filters, CQL2-text `filter=`, `limit`, opaque `cursor` paging with `links rel=next`, `overview=0\|2\|4\|6`, `numberMatched=true` (without a bbox), and `f=flatgeobuf` or `Accept: application/flatgeobuf` |
 | `GET /v2/collections/{id}/items/{featureID}` | one feature by its stored id |
 | `/healthz`, `/readyz`, `/metrics` | probes and Prometheus metrics |
 | `/design` | the design page |
@@ -22,7 +22,7 @@ Design decisions are recorded in the design page served at `/design` (`internal/
 
 ## How it works
 
-- Uploads stream one FlatGeobuf file. Each feature is assigned to a level-8 S2 cell, sorted within the cell by Hilbert key and id, and encoded into FlatGeobuf chunks of about 2 MiB. Chunks are zstd-compressed and stored as 8120-byte rows in `pfgb.blocks`, catalogued by `pfgb.chunks`; ids live in `pfgb.ids`, and overview levels are sampled with L8 built at load, L6 in the commit, and L2 by a background worker.
+- Uploads stream one FlatGeobuf file. Each feature is assigned to a level-8 S2 cell, sorted within the cell by Hilbert key and id, and encoded into FlatGeobuf chunks of about 2 MiB. Chunks are zstd-compressed and stored as 8120-byte rows in `pfgb.blocks`, catalogued by `pfgb.chunks`; ids live in `pfgb.ids`. L8 is detail; the L6, L4 and L2 samples keep 2,048 features per cell. L6 and L4 are built in the commit, L2 by a background worker, and the coarse samples drop subpixel lines and areas while keeping points.
 - Reads load the collection's cell catalog from PostgreSQL, prune cells by bounding box and per-chunk zones, then evaluate filters exactly in Go over the stored Parquet column files; PFA1 sidecars from earlier collections remain readable. Cursors resume by `(cell, key, id)`.
 - PostgreSQL only stores blocks and scalar catalog columns; there is no PostGIS dependency, and the core path needs no PostgreSQL extensions.
 - JSON columns are detected and flattened one level into typed columns at ingest. Scalar keys become ordinary columns; array-valued keys stay JSON. Key selection is deterministic for the same input.

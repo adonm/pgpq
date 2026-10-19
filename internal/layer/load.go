@@ -19,23 +19,40 @@ import (
 )
 
 const (
-	targetChunkBytes = 2 << 20
-	maxChunkFeatures = 50000
-	maxChunkBytes    = 8 << 20
-	detailLevel      = 0
-	l8SampleCap      = 512
-	l6SampleCap      = 2048
-	l2SampleCap      = 2048
+	targetChunkBytes  = 2 << 20
+	maxChunkFeatures  = 50000
+	maxChunkBytes     = 8 << 20
+	detailLevel       = 0
+	overviewSampleCap = 2048
+	sampleLatitude    = 48.0
+	metersPerDegree   = 111320.0
 )
 
-func capFor(level int) int {
+func samplePixelMeters(level int) float64 {
+	var zoom float64
 	switch level {
-	case 8:
-		return l8SampleCap
+	case 2:
+		zoom = 6
+	case 4:
+		zoom = 8
 	case 6:
-		return l6SampleCap
+		zoom = 10
+	default:
+		return 0
 	}
-	return l2SampleCap
+	return 2 * math.Pi * 6378137 * math.Cos(sampleLatitude*math.Pi/180) / (256 * math.Exp2(zoom))
+}
+
+func sampleTooSmall(bounds [4]float64, level int) bool {
+	limit := samplePixelMeters(level)
+	if limit == 0 {
+		return false
+	}
+	lat := (bounds[1] + bounds[3]) / 2 * math.Pi / 180
+	width := (bounds[2] - bounds[0]) * metersPerDegree * math.Cos(lat)
+	height := (bounds[3] - bounds[1]) * metersPerDegree
+	size := math.Max(width, height)
+	return size > 0 && size < limit
 }
 
 // coarseStep rebuilds one overview level from the level below it.
@@ -45,10 +62,10 @@ type coarseStep struct {
 }
 
 var (
-	overviewLevels = []int{8}
-	coarseSteps    = []coarseStep{{level: 6, from: 8}}
+	overviewLevels = []int{}
+	coarseSteps    = []coarseStep{{level: 6, from: detailLevel}, {level: 4, from: 6}}
 	deferredLevel  = 2
-	servedLevels   = []int{2, 6, 8}
+	servedLevels   = []int{2, 4, 6}
 )
 
 type blobPut func(ctx context.Context, collection, kind string, data []byte) (int64, error)
@@ -111,6 +128,9 @@ func (l *Layer) Load(ctx context.Context, name string, ds ingest.Dataset, cells 
 func sampleOverview(entries []entry, level int) []entry {
 	groups := map[uint64][]entry{}
 	for _, e := range entries {
+		if sampleTooSmall(e.bounds, level) {
+			continue
+		}
 		cell := spatial.Level(e.key, level)
 		groups[cell] = append(groups[cell], e)
 	}
@@ -122,7 +142,7 @@ func sampleOverview(entries []entry, level int) []entry {
 			}
 			return compareKeyID(a.key, a.id, b.key, b.id)
 		})
-		out = append(out, group[:min(len(group), capFor(level))]...)
+		out = append(out, group[:min(len(group), overviewSampleCap)]...)
 	}
 	return out
 }

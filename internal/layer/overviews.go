@@ -93,13 +93,16 @@ func (l *Layer) coarseChunks(ctx context.Context, tx pgx.Tx, put blobPut, coll C
 			samples = append(samples, chunkSample{entry: entry{key: spatial.Key(bounds), id: id, hash: idHash(id), bounds: bounds}, input: input})
 		}
 	}
+	samples = slices.DeleteFunc(samples, func(s chunkSample) bool {
+		return sampleTooSmall(s.entry.bounds, level)
+	})
 	slices.SortFunc(samples, func(a, b chunkSample) int {
 		if c := cmp.Compare(a.entry.hash, b.entry.hash); c != 0 {
 			return c
 		}
 		return compareKeyID(a.entry.key, a.entry.id, b.entry.key, b.entry.id)
 	})
-	samples = samples[:min(len(samples), capFor(level))]
+	samples = samples[:min(len(samples), overviewSampleCap)]
 	slices.SortFunc(samples, func(a, b chunkSample) int {
 		return compareKeyID(a.entry.key, a.entry.id, b.entry.key, b.entry.id)
 	})

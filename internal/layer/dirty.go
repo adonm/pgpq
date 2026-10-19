@@ -128,9 +128,11 @@ func (l *Layer) flushDirtyRow(ctx context.Context, force bool) (bool, error) {
 func inferredSource(level int) int {
 	switch level {
 	case 6:
-		return 8
-	case 2:
+		return detailLevel
+	case 4:
 		return 6
+	case 2:
+		return 4
 	}
 	return 0
 }
