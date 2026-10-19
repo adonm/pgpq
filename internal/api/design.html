@@ -72,9 +72,30 @@ tr.pick td{font-weight:600}
 .tag.cut{text-decoration:line-through}
 footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;border-top:1px solid var(--line)}
 @media (max-width:900px){.grid2{grid-template-columns:1fr}}
+#fig-model{aspect-ratio:1000 / 470}
+#fig-model text{font-family:inherit}
+#fig-model .plate{fill:var(--fill)}#fig-model .plate-edge{fill:none;stroke:var(--line);stroke-width:1.2}
+#fig-model .box.sel .plate-edge{stroke:var(--fg);stroke-width:2.2}#fig-model .box.lit .plate{fill:var(--fillLit)}
+#fig-model .stripe{fill:var(--mut)}#fig-model .role-net .stripe{fill:var(--net)}#fig-model .role-db .stripe{fill:var(--db)}#fig-model .role-step .stripe{fill:var(--cpu)}
+#fig-model .icon{color:var(--mut)}#fig-model .role-net .icon{color:var(--net)}#fig-model .role-db .icon{color:var(--db)}#fig-model .role-step .icon{color:var(--cpu)}
+#fig-model .track{fill:var(--track)}#fig-model .meter{fill:var(--mut)}#fig-model .m-net{fill:var(--net)}#fig-model .m-db{fill:var(--db)}#fig-model .m-cpu{fill:var(--cpu)}
+#fig-model .edge{fill:none;stroke:var(--mut)}#fig-model .edge.e-net{stroke:var(--net)}#fig-model .edge.e-db{stroke:var(--db)}
+#fig-model .edge.dash{stroke-dasharray:5 4}#fig-model .edge.hot{stroke:var(--fg);marker-end:url(#ar-fg)}
+#fig-model .box{cursor:pointer}
 </style>
 </head>
-<body>
+<body><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-db" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"/><path d="M5 5v14c0 1.7 3.1 3 7 3s7-1.3 7-3V5"/><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></symbol>
+<symbol id="i-table" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 9h16M9 9v10M15 9v10"/></symbol>
+<symbol id="i-files" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="12" height="15" rx="1"/><path d="M4 7v14h12"/></symbol>
+<symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="12" r="3"/><path d="M11 12h9M17 12v3M20 12v2"/></symbol>
+<symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></symbol>
+<symbol id="i-client" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="1"/><path d="M9 20h6"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4 10-11"/></symbol>
+<symbol id="i-net" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l4 3-4 3M10 9l4 3-4 3M17 9l4 3-4 3"/></symbol>
+<symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></symbol>
+<symbol id="i-page" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h6M10 16h6"/></symbol>
+</defs><marker id="ar-mut" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--mut)"/></marker><marker id="ar-net" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--net)"/></marker><marker id="ar-db" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--db)"/></marker><marker id="ar-fg" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--fg)"/></marker></svg>
 <div class="top">
   <header>
     <div class="brand">postfgb v2 · design</div>
@@ -107,7 +128,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
 
 <main>
   <section class="tab on" id="tab-model">
-    <div class="stage" id="fig-model" role="img" aria-label="Write and read flows with bytes and CPU cost for the chosen workload"><canvas></canvas><svg></svg></div>
+    <div class="stage" id="fig-model" role="img" aria-label="Write and read flows with bytes and CPU cost for the chosen workload"><svg viewBox="0 0 1000 470" role="img"><rect x="0" y="0" width="1000" height="222" fill="var(--lane)"/><rect x="0" y="250" width="1000" height="220" fill="var(--fill)"/><line x1="0" y1="240" x2="1000" y2="240" stroke="var(--line)"/><text class="t" x="14" y="22">UPLOAD · the loader writes the canonical file; the worker validates, derives and stores it</text><text class="t" x="14" y="270">READ · Postgres tables, then worker overlays in memory, then the client</text><text class="lab" x="986" y="22" text-anchor="end" id="m-caption"></text><line class="edge e-mut" data-edge="w1" x1="140" y1="69.0" x2="180" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="w2" x1="304" y1="69.0" x2="344" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="w3" x1="468" y1="69.0" x2="508" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="w4" x1="632" y1="69.0" x2="672" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="w5" x1="796" y1="69.0" x2="836" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-db dash" data-edge="w6" x1="734.0" y1="102" x2="734.0" y2="146" marker-end="url(#ar-db)"/><line class="edge e-db dash" data-edge="w7" x1="406.0" y1="102" x2="406.0" y2="146" marker-end="url(#ar-db)"/><line class="edge e-db dash" data-edge="w8" x1="898.0" y1="102" x2="898.0" y2="146" marker-end="url(#ar-db)"/><line class="edge e-mut" data-edge="r1" x1="130" y1="413.0" x2="154" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="r2" x1="270" y1="413.0" x2="294" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="r3" x1="410" y1="413.0" x2="434" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="r4" x1="550" y1="413.0" x2="574" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="r5" x1="690" y1="413.0" x2="714" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-db dash" data-edge="r6" x1="212.0" y1="350" x2="212.0" y2="380" marker-end="url(#ar-db)"/><line class="edge e-db dash" data-edge="r7" x1="492.0" y1="350" x2="492.0" y2="380" marker-end="url(#ar-db)"/><line class="edge e-db dash" data-edge="r8" x1="912.0" y1="350" x2="912.0" y2="380" marker-end="url(#ar-db)"/><g class="box role-net" data-box="loader" data-id="loader" role="button" aria-label="Loader"><rect class="plate" x="16" y="36" width="124" height="66" rx="26"/><rect class="plate-edge" x="16" y="36" width="124" height="66" rx="26"/><rect class="stripe" x="16" y="36" width="3" height="66"/><use class="icon" href="#i-net" x="116" y="44" width="16" height="16"/><text class="t" x="25" y="55">Loader</text><text class="s v1" x="25" y="73"></text><text class="s v2" x="25" y="87"></text><rect class="track" x="25" y="93" width="106" height="4"/><rect class="meter m-net" x="25" y="93" width="0" height="4"/></g><g class="box role-step" data-box="decode" data-id="decode" role="button" aria-label="Validate"><rect class="plate" x="180" y="36" width="124" height="66" rx="6"/><rect class="plate-edge" x="180" y="36" width="124" height="66" rx="6"/><rect class="stripe" x="180" y="36" width="3" height="66"/><use class="icon" href="#i-cpu" x="280" y="44" width="16" height="16"/><text class="t" x="189" y="55">Validate</text><text class="s v1" x="189" y="73"></text><text class="s v2" x="189" y="87"></text><rect class="track" x="189" y="93" width="106" height="4"/><rect class="meter m-cpu" x="189" y="93" width="0" height="4"/></g><g class="box role-step" data-box="validate" data-id="validate" role="button" aria-label="Derive"><rect class="plate" x="344" y="36" width="124" height="66" rx="6"/><rect class="plate-edge" x="344" y="36" width="124" height="66" rx="6"/><rect class="stripe" x="344" y="36" width="3" height="66"/><use class="icon" href="#i-cpu" x="444" y="44" width="16" height="16"/><text class="t" x="353" y="55">Derive</text><text class="s v1" x="353" y="73"></text><text class="s v2" x="353" y="87"></text><rect class="track" x="353" y="93" width="106" height="4"/><rect class="meter m-cpu" x="353" y="93" width="0" height="4"/></g><g class="box role-step" data-box="sort" data-id="sort" role="button" aria-label="Compress"><rect class="plate" x="508" y="36" width="124" height="66" rx="6"/><rect class="plate-edge" x="508" y="36" width="124" height="66" rx="6"/><rect class="stripe" x="508" y="36" width="3" height="66"/><use class="icon" href="#i-page" x="608" y="44" width="16" height="16"/><text class="t" x="517" y="55">Compress</text><text class="s v1" x="517" y="73"></text><text class="s v2" x="517" y="87"></text><rect class="track" x="517" y="93" width="106" height="4"/><rect class="meter m-cpu" x="517" y="93" width="0" height="4"/></g><g class="box role-db" data-box="encode" data-id="encode" role="button" aria-label="Write blocks"><rect class="plate" x="672" y="36" width="124" height="66" rx="2"/><rect class="plate-edge" x="672" y="36" width="124" height="66" rx="2"/><rect class="stripe" x="672" y="36" width="3" height="66"/><use class="icon" href="#i-files" x="772" y="44" width="16" height="16"/><text class="t" x="681" y="55">Write blocks</text><text class="s v1" x="681" y="73"></text><text class="s v2" x="681" y="87"></text><rect class="track" x="681" y="93" width="106" height="4"/><rect class="meter m-db" x="681" y="93" width="0" height="4"/></g><g class="box role-tx" data-box="commit" data-id="commit" role="button" aria-label="Commit"><rect class="plate" x="836" y="36" width="124" height="66" rx="6"/><rect class="plate-edge" x="836" y="36" width="124" height="66" rx="6"/><rect class="stripe" x="836" y="36" width="3" height="66"/><use class="icon" href="#i-check" x="936" y="44" width="16" height="16"/><text class="t" x="845" y="55">Commit</text><text class="s v1" x="845" y="73"></text><text class="s v2" x="845" y="87"></text><rect class="track" x="845" y="93" width="106" height="4"/><rect class="meter m-mut" x="845" y="93" width="0" height="4"/></g><g class="box role-db" data-box="blobsW" data-id="blobs" role="button" aria-label="blobs & files"><rect class="plate" x="634" y="146" width="200" height="66" rx="2"/><rect class="plate-edge" x="634" y="146" width="200" height="66" rx="2"/><rect class="stripe" x="634" y="146" width="3" height="66"/><use class="icon" href="#i-files" x="810" y="154" width="16" height="16"/><text class="t" x="643" y="165">blobs & files</text><text class="s v1" x="643" y="183"></text><text class="s v2" x="643" y="197"></text><rect class="track" x="643" y="203" width="182" height="4"/><rect class="meter m-db" x="643" y="203" width="0" height="4"/></g><g class="box role-db" data-box="idsW" data-id="idRuns" role="button" aria-label="id index"><rect class="plate" x="344" y="146" width="124" height="66" rx="2"/><rect class="plate-edge" x="344" y="146" width="124" height="66" rx="2"/><rect class="stripe" x="344" y="146" width="3" height="66"/><use class="icon" href="#i-key" x="444" y="154" width="16" height="16"/><text class="t" x="353" y="165">id index</text><text class="s v1" x="353" y="183"></text><text class="s v2" x="353" y="197"></text><rect class="track" x="353" y="203" width="106" height="4"/><rect class="meter m-db" x="353" y="203" width="0" height="4"/></g><g class="box role-db" data-box="catalogW" data-id="catalog" role="button" aria-label="catalog"><rect class="plate" x="836" y="146" width="124" height="66" rx="2"/><rect class="plate-edge" x="836" y="146" width="124" height="66" rx="2"/><rect class="stripe" x="836" y="146" width="3" height="66"/><use class="icon" href="#i-table" x="936" y="154" width="16" height="16"/><text class="t" x="845" y="165">catalog</text><text class="s v1" x="845" y="183"></text><text class="s v2" x="845" y="197"></text><rect class="track" x="845" y="203" width="106" height="4"/><rect class="meter m-db" x="845" y="203" width="0" height="4"/></g><g class="box role-db" data-box="catalogR" data-id="catalog" role="button" aria-label="catalog"><rect class="plate" x="154" y="284" width="116" height="66" rx="2"/><rect class="plate-edge" x="154" y="284" width="116" height="66" rx="2"/><rect class="stripe" x="154" y="284" width="3" height="66"/><use class="icon" href="#i-table" x="246" y="292" width="16" height="16"/><text class="t" x="163" y="303">catalog</text><text class="s v1" x="163" y="321"></text><text class="s v2" x="163" y="335"></text><rect class="track" x="163" y="341" width="98" height="4"/><rect class="meter m-db" x="163" y="341" width="0" height="4"/></g><g class="box role-db" data-box="blobsR" data-id="blobs" role="button" aria-label="blobs"><rect class="plate" x="434" y="284" width="116" height="66" rx="2"/><rect class="plate-edge" x="434" y="284" width="116" height="66" rx="2"/><rect class="stripe" x="434" y="284" width="3" height="66"/><use class="icon" href="#i-files" x="526" y="292" width="16" height="16"/><text class="t" x="443" y="303">blobs</text><text class="s v1" x="443" y="321"></text><text class="s v2" x="443" y="335"></text><rect class="track" x="443" y="341" width="98" height="4"/><rect class="meter m-db" x="443" y="341" width="0" height="4"/></g><g class="box role-db" data-box="idsR" data-id="idRuns" role="button" aria-label="id index"><rect class="plate" x="854" y="284" width="116" height="66" rx="2"/><rect class="plate-edge" x="854" y="284" width="116" height="66" rx="2"/><rect class="stripe" x="854" y="284" width="3" height="66"/><use class="icon" href="#i-key" x="946" y="292" width="16" height="16"/><text class="t" x="863" y="303">id index</text><text class="s v1" x="863" y="321"></text><text class="s v2" x="863" y="335"></text><rect class="track" x="863" y="341" width="98" height="4"/><rect class="meter m-db" x="863" y="341" width="0" height="4"/></g><g class="box role-client" data-box="reader" data-id="reader" role="button" aria-label="Reader"><rect class="plate" x="14" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="14" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="14" y="380" width="3" height="66"/><use class="icon" href="#i-client" x="106" y="388" width="16" height="16"/><text class="t" x="23" y="399">Reader</text><text class="s v1" x="23" y="417"></text><text class="s v2" x="23" y="431"></text><rect class="track" x="23" y="437" width="98" height="4"/><rect class="meter m-mut" x="23" y="437" width="0" height="4"/></g><g class="box role-cache" data-box="catalogOv" data-id="catalogOv" role="button" aria-label="Catalog"><rect class="plate" x="154" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="154" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="154" y="380" width="3" height="66"/><use class="icon" href="#i-table" x="246" y="388" width="16" height="16"/><text class="t" x="163" y="399">Catalog</text><text class="s v1" x="163" y="417"></text><text class="s v2" x="163" y="431"></text><rect class="track" x="163" y="437" width="98" height="4"/><rect class="meter m-db" x="163" y="437" width="0" height="4"/></g><g class="box role-step" data-box="prune" data-id="prune" role="button" aria-label="Locate"><rect class="plate" x="294" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="294" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="294" y="380" width="3" height="66"/><use class="icon" href="#i-grid" x="386" y="388" width="16" height="16"/><text class="t" x="303" y="399">Locate</text><text class="s v1" x="303" y="417"></text><text class="s v2" x="303" y="431"></text><rect class="track" x="303" y="437" width="98" height="4"/><rect class="meter m-cpu" x="303" y="437" width="0" height="4"/></g><g class="box role-cache" data-box="fileOv" data-id="fileOv" role="button" aria-label="Blocks"><rect class="plate" x="434" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="434" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="434" y="380" width="3" height="66"/><use class="icon" href="#i-files" x="526" y="388" width="16" height="16"/><text class="t" x="443" y="399">Blocks</text><text class="s v1" x="443" y="417"></text><text class="s v2" x="443" y="431"></text><rect class="track" x="443" y="437" width="98" height="4"/><rect class="meter m-db" x="443" y="437" width="0" height="4"/></g><g class="box role-step" data-box="fgb" data-id="fgb" role="button" aria-label="Decode"><rect class="plate" x="574" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="574" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="574" y="380" width="3" height="66"/><use class="icon" href="#i-page" x="666" y="388" width="16" height="16"/><text class="t" x="583" y="399">Decode</text><text class="s v1" x="583" y="417"></text><text class="s v2" x="583" y="431"></text><rect class="track" x="583" y="437" width="98" height="4"/><rect class="meter m-cpu" x="583" y="437" width="0" height="4"/></g><g class="box role-net" data-box="response" data-id="response" role="button" aria-label="Response"><rect class="plate" x="714" y="380" width="116" height="66" rx="26"/><rect class="plate-edge" x="714" y="380" width="116" height="66" rx="26"/><rect class="stripe" x="714" y="380" width="3" height="66"/><use class="icon" href="#i-net" x="806" y="388" width="16" height="16"/><text class="t" x="723" y="399">Response</text><text class="s v1" x="723" y="417"></text><text class="s v2" x="723" y="431"></text><rect class="track" x="723" y="437" width="98" height="4"/><rect class="meter m-net" x="723" y="437" width="0" height="4"/></g><g class="box role-step" data-box="idOv" data-id="idOv" role="button" aria-label="Id lookup"><rect class="plate" x="854" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="854" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="854" y="380" width="3" height="66"/><use class="icon" href="#i-key" x="946" y="388" width="16" height="16"/><text class="t" x="863" y="399">Id lookup</text><text class="s v1" x="863" y="417"></text><text class="s v2" x="863" y="431"></text><rect class="track" x="863" y="437" width="98" height="4"/><rect class="meter m-cpu" x="863" y="437" width="0" height="4"/></g><circle id="m-packet" r="4" fill="var(--net)" visibility="hidden"/></svg></div>
     <p class="status" id="status-model"></p>
     <h3>Cost of each action</h3>
     <table aria-label="Cost of each action">
@@ -454,7 +475,6 @@ const EDGES = [
   ['r5', 'fgb', 'r', 'response', 'l', false], ['r6', 'catalogR', 'b', 'catalogOv', 't', true],
   ['r7', 'blobsR', 'b', 'fileOv', 't', true], ['r8', 'idsR', 'b', 'idOv', 't', true],
 ];
-const EDGE_BY = Object.fromEntries(EDGES.map(([id, from, fs, to, ts, dash]) => [id, { from, fs, to, ts, dash }]));
 const BOXES = [
   { key: 'loader', id: 'loader', x: 16, y: 36, w: 124, h: 66 }, { key: 'decode', id: 'decode', x: 180, y: 36, w: 124, h: 66 },
   { key: 'validate', id: 'validate', x: 344, y: 36, w: 124, h: 66 }, { key: 'sort', id: 'sort', x: 508, y: 36, w: 124, h: 66 },
@@ -506,7 +526,7 @@ const MODEL = {
     text: 'Decompresses and parses the canonical file once, then checks that features are in (key, id) order, inside the cell, with unique ids, and that the index root matches the file. A failure answers 422.',
     layout: ['the order is checked, not produced'], index: [] },
   validate: { t: 'Derive', kind: 'cpu', share: c => c.Wr.stage.derive / c.Wr.total,
-    l1: c => `${fmtTime(c.Wr.stage.derive)} CPU`, l2: () => 'fence, columns, ids',
+    l1: c => `${fmtTime(c.Wr.stage.derive)} CPU`, l2: () => 'fence, cols, ids',
     text: 'One pass over the validated features builds the key fence, the column sidecar and the id index rows.',
     layout: ['streamed from the parsed file'], index: [] },
   sort: { t: 'Compress', kind: 'cpu', share: c => c.Wr.stage.compress / c.Wr.total,
@@ -530,7 +550,7 @@ const MODEL = {
     text: 'One row per feature: the hash of its id and the key that locates it. A lookup reads the rows for a hash, jumps to the key in the partition file through its fence, and checks the id exactly. The rows are replaced with the cell on every upload.',
     layout: ['ids: collection_id smallint, hash, key', 'one row per feature'], index: ['pk (collection_id, hash, key)'] },
   catalog: { t: 'catalog', kind: 'db', size: c => c.Wr.files * K.meta,
-    l1: c => `${fmt(c.Wr.files)} rows/upload`, l2: () => `${fmt(collectionStored(W.f).rows)} rows stored`,
+    l1: c => `${fmt(c.Wr.files)} rows/upload`, l2: () => `${fmt(collectionStored(W.f).rows)} stored`,
     text: 'One row per stored file: a partition’s detail file or an overview sample, with its key range, envelope and sizes, keyed by the 2-byte collection id. The collections row holds the name, version and column list, so a worker can tell a cached file list from a stale one. A commit replaces a cell’s files and bumps the version.',
     layout: ['files: file_id identity pk, collection_id smallint, cell, level, first_key, last_key, minx, miny, maxx, maxy, features, fgb_file, fence_file, col_file, bytes', 'collections: id smallint pk, name unique, version, id_column, columns_json', 'ids: collection_id smallint, hash, key'],
     index: ['files (collection_id, cell, level)', 'collections pk (id), unique (name)', 'ids pk (collection_id, hash, key)'] },
@@ -550,7 +570,7 @@ const MODEL = {
     text: 'Overlay on blocks. A miss reads the block rows for the byte ranges the index or fence named, in (file_id, n) order, and keeps them; a hit costs no query.',
     layout: ['select n, data from blocks', 'where file_id = $1 and n = any($2)'], index: ['pk (file_id, n)'] },
   fgb: { t: 'Decode', kind: 'cpu', share: c => c.Rd.steps[3].t / c.Rd.total,
-    l1: c => `${fmtTime(c.Rd.steps[3].cpu)} CPU`, l2: () => 'decompress, decode',
+    l1: c => `${fmtTime(c.Rd.steps[3].cpu)} CPU`, l2: () => 'decode blocks',
     text: 'Decompresses the matched blocks and decodes only the features in range. Nothing outside the byte range the index or fence named is read.',
     layout: [], index: [] },
   response: { t: 'Response', kind: 'net', share: c => c.Rd.steps[4].t / c.Rd.total,
@@ -588,82 +608,62 @@ function playModel(kind) {
   S.model.demo = { seq: seqFor(kind, costNow()), i: 0, t: 0, dur: null };
 }
 
-class Model extends Fig {
+class Model {
   constructor() {
-    super('fig-model', 1000, 470);
-    this.bytes = EDGE_BYTES(this.cur);
-    for (const [y, h, label, ty, fill] of [[0, 222, 'UPLOAD · the loader writes the canonical file; the worker validates, derives and stores it', 22, 'lane'], [250, 220, 'READ · Postgres tables, then worker overlays in memory, then the client', 270, 'fill']]) {
-      const lane = this.shape(0, y, 1000, h, 0, { fill: true, stroke: false });
-      this.bind(() => { lane.color = P[fill]; });
-      this.text(14, ty, label, 't');
-    if (y === 0) this.totalText = this.text(986, 22, '', 'lab', 'end');
-    }
-    const divider = this.line([[0, 240], [1000, 240]], 1);
-    this.bind(() => {
-      const T = typeTotals(W.f);
-      this.totalText.textContent = `${fmtBig(W.n)} · ${fmt(T.cells)} cells · ${fmtBytes(T.stored)} stored`;
+    this.svg = document.querySelector('#fig-model svg');
+    this.boxes = BOXES.map(b => ({
+      b, g: this.svg.querySelector(`[data-box="${b.key}"]`),
+      t1: this.svg.querySelector(`[data-box="${b.key}"] .v1`),
+      t2: this.svg.querySelector(`[data-box="${b.key}"] .v2`),
+      meter: this.svg.querySelector(`[data-box="${b.key}"] .meter`),
+    }));
+    this.edges = Object.fromEntries(EDGES.map(([id]) => [id, this.svg.querySelector(`[data-edge="${id}"]`)]));
+    this.packet = this.svg.querySelector('#m-packet');
+    this.caption = this.svg.querySelector('#m-caption');
+    this.svg.addEventListener('click', e => {
+      const g = e.target.closest('[data-box]');
+      if (!g) return;
+      S.model.sel = g.dataset.id;
+      this.render();
+      refresh();
     });
-this.bind(() => { divider.color = P.line; });
-    for (const [id, from, fs, to, ts, dash] of EDGES) {
-      const pts = [anchor(from, fs), anchor(to, ts)];
-      const band = dash ? this.line(pts, 1) : null;
-      const segs = dash ? this.dashes(pts) : [this.line(pts, 1)];
-      const head = this.head(pts);
-      this.bind(() => {
-        const cs = this.currentStep(), hot = !!cs && cs.e === id;
-        const col = hot ? P.fg : P[MED[id]], w = wStroke(this.bytes[id] || 0);
-        if (band) { band.color = alpha(P[MED[id]], 0.28); band.stroke = w; }
-        for (const s of segs) { s.color = col; s.stroke = band ? (hot ? 2.2 : 1.6) : (hot ? w + 1 : w); }
-        head.color = col;
-      });
-    }
-    for (const b of BOXES) {
-      const n = MODEL[b.id];
-      const role = n.role || (n.kind === 'cpu' ? 'step' : n.kind);
-      const r = this.radius(role);
-      const f = this.shape(b.x, b.y, b.w, b.h, r, { fill: true, stroke: false });
-      const o = this.shape(b.x, b.y, b.w, b.h, r, { fill: false, stroke: 1.2 });
-      this.decorate(b.x, b.y, b.w, b.h, role);
-      const track = this.shape(b.x + 9, b.y + b.h - 9, b.w - 18, 4, 0, { fill: true, stroke: false });
-      const meter = this.shape(b.x + 9, b.y + b.h - 9, 1, 4, 0, { fill: true, stroke: false });
-      this.text(b.x + 9, b.y + 19, b.label || n.t, 't');
-      const t2 = this.text(b.x + 9, b.y + 37, '', 's');
-      const t3 = this.text(b.x + 9, b.y + 51, '', 's');
-      this.hit(b.x, b.y, b.w, b.h, () => { S.model.sel = b.id; this.render(); refresh(); });
-      this.bind(() => {
-        const c = this.cur, on = S.model.sel === b.id, lit = S.model.lit.has(b.key), cs = this.currentStep();
-        f.color = lit ? P.fillLit : P.fill;
-        o.color = on ? P.fg : P.line;
-        o.stroke = on ? 2.2 : 1.2;
-        track.color = P.track;
-        const share = n.share ? n.share(c) : n.size ? logFrac(n.size(c), 2, 10) : 0;
-        const p = cs && cs.box === b.key ? S.model.demo.t / (S.model.demo.dur || 1) : 1;
-        this.place(meter, b.x + 9, b.y + b.h - 9, (b.w - 18) * share * p, 4);
-        meter.color = P[n.kind];
-        t2.textContent = n.l1(c);
-        t3.textContent = n.l2(c);
-      });
-    }
-    this.dot = new Zdog.Ellipse({ addTo: this.illo, diameter: 8, fill: true, stroke: false, visible: false });
     this.render();
   }
   currentStep() { const d = S.model.demo; return d ? d.seq[d.i] : null; }
-  paint() {
-    this.cur = costNow();
-    this.bytes = EDGE_BYTES(this.cur);
-    super.paint();
-    const cs = this.currentStep(), d = S.model.demo;
-    this.dot.visible = !!(cs && cs.e);
+  render() {
+    const c = costNow();
+    this.cur = c;
+    const d = S.model.demo, cs = this.currentStep();
+    for (const { b, g, t1, t2, meter } of this.boxes) {
+      const n = MODEL[b.id];
+      g.classList.toggle('sel', S.model.sel === b.id);
+      g.classList.toggle('lit', S.model.lit.has(b.key));
+      const share = n.share ? n.share(c) : n.size ? logFrac(n.size(c), 2, 10) : 0;
+      const p = cs && cs.box === b.key ? d.t / (d.dur || 1) : 1;
+      meter.setAttribute('width', Math.max(0, (b.w - 18) * share * p).toFixed(1));
+      t1.textContent = n.l1(c);
+      t2.textContent = n.l2(c);
+    }
+    const bytes = EDGE_BYTES(c);
+    for (const [id] of EDGES) {
+      const e = this.edges[id];
+      e.setAttribute('stroke-width', wStroke(bytes[id] || 0).toFixed(2));
+      e.classList.toggle('hot', !!cs && cs.e === id);
+    }
+    const T = typeTotals(W.f);
+    this.caption.textContent = `${fmtBig(W.n)} · ${fmt(T.cells)} cells · ${fmtBytes(T.stored)} stored`;
+    this.packet.setAttribute('visibility', cs && cs.e ? 'visible' : 'hidden');
     if (cs && cs.e) {
-      const e = EDGE_BY[cs.e];
-      const [x, y] = along([anchor(e.from, e.fs), anchor(e.to, e.ts)], d.t / (d.dur || 1));
-      this.dot.diameter = 2 * wPacket(cs.b || 1);
-      this.dot.updatePath();
-      this.dot.color = P[MED[cs.e]];
-      this.dot.translate.x = this.x(x);
-      this.dot.translate.y = this.y(y);
+      const [, from, fs, to, ts] = EDGES.find(e => e[0] === cs.e);
+      const [x1, y1] = anchor(from, fs), [x2, y2] = anchor(to, ts);
+      const k = Math.min(1, Math.max(0, d.t / (d.dur || 1)));
+      this.packet.setAttribute('cx', (x1 + (x2 - x1) * k).toFixed(1));
+      this.packet.setAttribute('cy', (y1 + (y2 - y1) * k).toFixed(1));
+      this.packet.setAttribute('r', wPacket(cs.b || 1).toFixed(1));
+      this.packet.setAttribute('fill', `var(--${MED[cs.e]})`);
     }
   }
+  show() { this.render(); }
   step(dt) {
     const d = S.model.demo;
     if (!d) return false;
@@ -671,7 +671,7 @@ this.bind(() => { divider.color = P.line; });
     if (d.dur == null) d.dur = wDur(cs.t);
     d.t += dt;
     if (d.t >= d.dur) {
-      S.model.lit.add(cs.e ? EDGE_BY[cs.e].to : cs.box);
+      S.model.lit.add(cs.e ? EDGES.find(e => e[0] === cs.e)[3] : cs.box);
       d.i++; d.t = 0; d.dur = null;
       if (d.i >= d.seq.length) S.model.demo = null;
     }
@@ -828,7 +828,7 @@ const STAGES = [
     text: `Decompresses the whole file into memory and parses it once. Memory is the biggest cost here: the file takes about ${K.raw} B per feature. No streaming, bucketing or spill.` },
   { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
     text: 'Checks (key, id) order, cell membership, unique ids, usable geometry and that the index root matches the file.' },
-  { t: 'Derive', kind: 'cpu', share: c => c.Wr.stage.derive / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.derive)} CPU`, l2: () => 'fence, columns, ids',
+  { t: 'Derive', kind: 'cpu', share: c => c.Wr.stage.derive / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.derive)} CPU`, l2: () => 'fence, cols, ids',
     text: 'Builds the key fence, the column sidecar and the id index rows in one pass over the validated features.' },
   { t: 'Compress', kind: 'cpu', share: c => c.Wr.stage.compress / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.compress)} CPU`, l2: c => `${fmtBytes(c.Wr.fileBytes)} out`,
     text: 'Slices the canonical FGB into 8 KB pieces and zstd-compresses each piece into a block row.' },
