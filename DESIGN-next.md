@@ -199,6 +199,36 @@ Collections are independent. A client that wants several together (RustGIS layer
 
 Worker memory is the catalog, the id runs and a column/block cache budget. All of this is to be measured at 10⁷–10⁸ features before anything is claimed.
 
+## Cost model
+
+The design page (`/design`) draws every figure from one cost model, so the visuals and the numbers agree. Sizes and ingest rate are measured; the rest are estimates, and the page labels them as such.
+
+| Input | Value | Source |
+| --- | --- | --- |
+| Raw FGB per feature | 470 B | measured, `buildings_fr` (Partition sizes) |
+| Stored FGB per feature, zstd | 100 B | measured, `buildings_fr` |
+| Column files per feature | 20 B | measured, `buildings_fr` |
+| Id-run entry | 15 B | 13–16 B per feature per run (Identity) |
+| Chunk | 2 MiB uncompressed, about 4,460 features | Chunks section and 470 B per feature |
+| Chunk catalog row | 200 B | estimate |
+| Samples | 256 per L8 cell; 256 per L10 cell (16 per partition); 256 per L12 cell (256 per partition) above 100,000 features | Overview levels |
+| Ingest CPU | 30 µs wall per feature on 6 cores | measured: 27–32 s per million features |
+| CPU split inside an upload | decode 25%, validate 5%, sort and cut 10%, encode with samples and id run 60% | estimate |
+| Commit | 0.1 s, independent of size | estimate |
+| Postgres throughput, reads and writes | 500 MB/s | estimate |
+| Decode, zstd and id runs | 1 GB/s | estimate |
+| Network | 1 Gbit/s or 100 Mbit/s, chosen on the page | setting |
+
+Per action, for one cell of N features and a page of P features:
+
+- **Upload:** N × 100 B over the link; the decoded file takes N × 470 B of memory.
+- **Ingest writes:** N × (100 + 20 + 15) B, plus samples and chunk rows. WAL writes about the same bytes again.
+- **bbox page:** reads whole chunks, so about min(⌈P / 4,460⌉ + 1, chunks) × 4,460 × 100 B, and returns P × 100 B as zstd.
+- **Filter, worst case:** no postings yet, so every chunk is a candidate and N × 120 B is read (column files and whole chunks).
+- **numberMatched with a filter:** N × 20 B of column files; no geometry.
+- **Id lookup, uncached:** N × 15 B of runs decoded, plus one candidate chunk.
+- **Overview page:** P × 100 B of samples, returned as zstd.
+
 ## Kept from the current implementation
 
 - FGB encode/decode (`ParseFlat`, `DecodePropertyText`, `EncodeCols`)

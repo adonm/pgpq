@@ -5,51 +5,66 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>postfgb v2 · design</title>
 <style>
-:root{--bg:#101112;--fill:#17181a;--lane:#141517;--line:#34373d;--fg:#d8dadf;--mut:#868b94;--accent:#f2a93b;--band:#2a2f36;--lit:#2d2a22;--fillLit:#2b2619;color-scheme:dark}
+:root{--bg:#101112;--fill:#17181a;--lane:#141517;--track:#25272b;--line:#34373d;--fg:#d8dadf;--mut:#868b94;--accent:#f2a93b;--cpu:#f2a93b;--net:#4fc3dc;--db:#7ccf8b;--band:#2a2f36;--lit:#2d2a22;--fillLit:#2b2619;color-scheme:dark}
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-header{position:sticky;top:0;z-index:2;display:flex;align-items:center;flex-wrap:wrap;gap:12px 28px;padding:12px 20px;background:var(--bg);border-bottom:1px solid var(--line)}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+header{display:flex;align-items:center;flex-wrap:wrap;gap:8px 26px;padding:10px 20px}
 .brand{font-weight:600}
-nav{display:flex;flex-wrap:wrap;gap:6px 18px}
+nav{display:flex;flex-wrap:wrap;gap:4px 16px}
 button{font:inherit;color:var(--mut);background:none;border:0;padding:4px 0;cursor:pointer}
 button:hover{color:var(--fg)}
 nav button[aria-selected=true]{color:var(--fg);box-shadow:inset 0 -2px 0 var(--accent)}
-.btn{padding:6px 10px;border:1px solid var(--line);border-radius:4px;color:var(--fg)}
-.btn[aria-pressed=true]{border-color:var(--accent)}
+.btn{padding:3px 9px;border:1px solid var(--line);border-radius:4px;color:var(--fg)}
+.btn[aria-pressed=true]{border-color:var(--fg)}
 #theme{margin-left:auto}
-.tab{display:none;grid-template-columns:minmax(0,1fr);gap:20px;max-width:1200px;margin:0 auto;padding:20px}
-.tab.on{display:grid}
-.chips{display:flex;flex-wrap:wrap;gap:8px;grid-column:1 / -1}
+.workload{display:flex;flex-wrap:wrap;gap:6px 20px;align-items:center;padding:6px 20px 8px;border-top:1px solid var(--line)}
+.wl{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.wl .k{color:var(--mut);font-size:11px;letter-spacing:.05em;text-transform:uppercase}
+.wl input[type=range]{width:150px;accent-color:var(--accent);margin:0}
+.wl output{color:var(--fg);white-space:nowrap}
+.sum{width:100%;margin:0;color:var(--mut);font-size:12px}
+.legend{width:100%;display:flex;flex-wrap:wrap;gap:2px 16px;font-size:11px;color:var(--mut)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+main{max-width:1200px;margin:0 auto;padding:16px 20px 28px}
+.tab{display:none}
+.tab.on{display:block}
 .stage{position:relative;width:100%;border:1px solid var(--line);border-radius:6px;background:var(--lane);overflow:hidden}
 .stage canvas,.stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
 .stage svg{pointer-events:none}
-.t{font-size:13px;font-weight:600;fill:var(--fg)}
+.t{font-size:12.5px;font-weight:600;fill:var(--fg)}
 .s{font-size:10.5px;fill:var(--mut)}
-.lab{font-size:11px;letter-spacing:.06em;fill:var(--mut)}
-.v{font-size:13px;fill:var(--fg)}
-.a{font-size:13px;fill:var(--accent)}
-.m{font-size:13px;fill:var(--mut)}
-.r{font-size:12px;fill:var(--mut)}
+.v{font-size:12px;fill:var(--fg)}
+.lab{font-size:10.5px;letter-spacing:.05em;fill:var(--mut)}
 .hit{fill:transparent;pointer-events:all;cursor:pointer}
-.side{border:1px solid var(--line);border-radius:6px;padding:16px 20px;background:var(--fill)}
-.side h2{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
-.side h3{margin:16px 0 4px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.status{min-height:1.5em;margin:10px 2px 0;font-size:13px}
+.side{margin-top:14px;border:1px solid var(--line);border-radius:6px;padding:16px 20px;background:var(--fill)}
+.side h2{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
+.side h3{margin:14px 0 4px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .side p{margin:0 0 10px}
-.side ul{margin:0 0 10px;padding-left:16px;color:var(--mut);font-size:12px}
+.side ul{margin:0 0 10px;padding-left:16px;color:var(--mut);font-size:12.5px}
+.side dl{display:grid;grid-template-columns:max-content 1fr;gap:3px 16px;margin:0 0 10px;font-size:12.5px}
+.side dt{color:var(--mut)}
+.side dd{margin:0}
 .note{color:var(--mut);font-size:12px}
-.ctl{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
-input[type=range]{width:100%;accent-color:var(--accent);margin:6px 0 12px}
-.box{border:1px solid var(--line);border-radius:6px;padding:16px;background:var(--fill);margin-bottom:20px}
-.box h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+input[type=range]{width:100%;accent-color:var(--accent);margin:6px 0 10px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:14px}
+th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:500}
+th.grp{color:var(--fg)}
+.box{border:1px solid var(--line);border-radius:6px;padding:16px 20px;background:var(--fill);margin-bottom:18px}
+.box h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
 .box p{margin:6px 0}
-.budget{margin:10px 0 12px}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px}
-.grid2 h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+.grid2 h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
 .grid2 ul{margin:0 0 20px;padding-left:18px}
+.grid2 ul.dec{list-style:none;padding-left:0}
 .grid2 li{margin:0 0 8px}
 .grid2 li span{color:var(--mut)}
-.grid2 ul.dec{list-style:none;padding-left:0}
-.tag{display:inline-block;min-width:64px;padding:0 6px;margin-right:6px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);color:var(--mut)}
+.tag{display:inline-block;min-width:66px;padding:0 6px;margin-right:6px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);color:var(--mut)}
 .tag.built{color:var(--fg)}
 .tag.decided,.tag.next{color:var(--accent);border-color:var(--accent)}
 .tag.cut{text-decoration:line-through}
@@ -58,108 +73,165 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
 </style>
 </head>
 <body>
-<header>
-  <div class="brand">postfgb v2 · design</div>
-  <nav role="tablist" aria-label="Figure">
-    <button role="tab" data-tab="model" aria-selected="true">Model</button>
-    <button role="tab" data-tab="ladder" aria-selected="false">Ladder</button>
-    <button role="tab" data-tab="load" aria-selected="false">Load</button>
-    <button role="tab" data-tab="snaps" aria-selected="false">Snapshots</button>
-    <button role="tab" data-tab="reads" aria-selected="false">Reads</button>
-    <button role="tab" data-tab="decide" aria-selected="false">Decisions</button>
-  </nav>
-  <button id="theme" class="btn" aria-label="Switch light or dark">theme: dark</button>
-</header>
-
-<section class="tab on" id="tab-model">
-  <div class="stage" id="fig-model"><canvas></canvas><svg></svg></div>
-  <aside class="side" id="side-model"></aside>
-</section>
-
-<section class="tab" id="tab-ladder">
-  <div class="stage" id="fig-ladder"><canvas></canvas><svg></svg></div>
-  <aside class="side" id="side-ladder"></aside>
-</section>
-
-<section class="tab" id="tab-load">
-  <div class="stage" id="fig-load"><canvas></canvas><svg></svg></div>
-  <aside class="side" id="side-load"></aside>
-</section>
-
-<section class="tab" id="tab-snaps">
-  <div class="stage" id="fig-snaps"><canvas></canvas><svg></svg></div>
-  <aside class="side" id="side-snaps"></aside>
-</section>
-
-<section class="tab" id="tab-reads">
-  <div class="chips" id="chips"></div>
-  <div class="stage" id="fig-reads"><canvas></canvas><svg></svg></div>
-  <aside class="side" id="side-reads"></aside>
-</section>
-
-<section class="tab wide" id="tab-decide">
-  <div class="box">
-    <h3>Code budget · production Go for v2</h3>
-    <div class="stage budget" id="fig-budget"><canvas></canvas><svg></svg></div>
-    <p>Now: about 1,920 of 4,000 lines (48%).</p>
-    <p>With the id-run merge and reaping: about 2,000 lines (50%).</p>
-    <p class="note">Outside the budget: about 1,070 lines of tests and 66 lines of SQL.</p>
-  </div>
-  <div class="grid2">
-    <div>
-      <h3>Decisions</h3>
-      <ul class="dec">
-        <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
-        <li><span class="tag built">built</span><b>Chunk size</b><br><span>2 MiB or 50,000 features. Kept; retune only after measuring.</span></li>
-        <li><span class="tag built">built</span><b>Sparse partitions</b><br><span>No packing. Every populated cell keeps at least one chunk.</span></li>
-        <li><span class="tag built">built</span><b>Overview levels</b><br><span>8 and 10 per cell; 12 above 100,000 features; 6, 4 and 2 per cell, rebuilt in the commit. Cap 256.</span></li>
-        <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
-        <li><span class="tag built">built</span><b>Conditional loads</b><br><span>base=s answers 409 when a listed cell changed after s.</span></li>
-        <li><span class="tag built">built</span><b>Caches</b><br><span>Three LRUs per worker, 256 MiB each: file bytes, chunk lists, decoded id runs.</span></li>
-        <li><span class="tag decided">decided</span><b>Upload</b><br><span>One .fgb.zst per L8 cell. No streaming, bucketing or spill. Not built: the /v2 load still takes multi-cell bodies.</span></li>
-        <li><span class="tag decided">decided</span><b>Snapshot per upload</b><br><span>Each upload is one commit. A multi-cell reload is not atomic: readers can see old and new cells together until it ends.</span></li>
-        <li><span class="tag next">next</span><b>Id runs</b><br><span>One run per upload. Lookups search every live run. Above 64 live runs, a background merge combines the smallest and drops stale entries.</span></li>
-        <li><span class="tag next">next</span><b>Reaping</b><br><span>Keep 72 h retention. Delete rows and files that no retained snapshot can see.</span></li>
-        <li><span class="tag cut">cut</span><b>Postings</b><br><span>Zone maps and column files answer filters for now. Revisit if a dense-cell filter takes over 1 s cold.</span></li>
-        <li><span class="tag cut">cut</span><b>Id-run Bloom filters</b><br><span>A binary search over at most 64 runs is cheap.</span></li>
-      </ul>
+<div class="top">
+  <header>
+    <div class="brand">postfgb v2 · design</div>
+    <nav role="tablist" aria-label="Figures">
+      <button role="tab" data-tab="model" aria-selected="true">Model</button>
+      <button role="tab" data-tab="ladder" aria-selected="false">Ladder</button>
+      <button role="tab" data-tab="load" aria-selected="false">Load</button>
+      <button role="tab" data-tab="snaps" aria-selected="false">Snapshots</button>
+      <button role="tab" data-tab="reads" aria-selected="false">Reads</button>
+      <button role="tab" data-tab="costs" aria-selected="false">Costs</button>
+      <button role="tab" data-tab="decide" aria-selected="false">Decisions</button>
+    </nav>
+    <button id="theme" class="btn">theme: dark</button>
+  </header>
+  <section class="workload" aria-label="Workload used by every figure">
+    <div class="wl">
+      <span class="k">Cell size</span>
+      <input id="f-range" type="range" min="0" max="6.6" step="0.01" aria-label="Features in one cell, log scale">
+      <output id="f-out"></output>
+      <button class="btn" data-f="1">1</button>
+      <button class="btn" data-f="12000">12k mean</button>
+      <button class="btn" data-f="2500000">2.5M dense</button>
     </div>
-    <div>
-      <h3>Risks</h3>
-      <ul>
-        <li>Loads are held in memory and nothing spills. The densest cell (about 1.2 GB of FGB at 1e9 features) sets the worker’s memory.</li>
-        <li>A reload of many cells is not one snapshot. Readers can see a mix of old and new cells until the last upload commits.</li>
-        <li>Id runs are delta-coded, so a lookup decodes each live run in full. At 1e9 features the runs total about 15 GB: a fence index per run is needed before lookups scale.</li>
-        <li>The coarse rebuild reads sibling samples on every upload. Measure at 10 million features.</li>
-        <li>Dense cities at zoom 13 hold about 240k features on screen. Use overviews until detail is small, around zoom 16 or 17.</li>
-        <li>Overview responses carry full geometry, so they can be large.</li>
-        <li>Filters on dense cells scan column files until postings exist.</li>
-        <li>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</li>
-      </ul>
-      <h3>Terms</h3>
-      <ul>
-        <li><b>Key</b>: the S2 level-30 cell of a feature’s bbox centre. Sets the storage order.</li>
-        <li><b>Partition</b>: an S2 level-8 cell, the unit of upload, load and replacement.</li>
-        <li><b>Chunk</b>: an immutable FlatGeobuf with a column file and a zone map, and one catalog row.</li>
-        <li><b>Sample</b>: the 256 smallest-hash features of a cell, stored as chunks with level = N.</li>
-        <li><b>Id run</b>: sorted (hash, key) pairs, one per upload.</li>
-        <li><b>Snapshot</b>: one upload’s commit. A row is visible at s when begin ≤ s &lt; end.</li>
-        <li><b>Virtual file</b>: a file’s bytes stored as block rows, read back through the file-bytes overlay.</li>
-      </ul>
+    <div class="wl">
+      <span class="k">Link</span>
+      <button class="btn" data-link="125000000">1 Gbit/s</button>
+      <button class="btn" data-link="12500000">100 Mbit/s</button>
     </div>
-  </div>
-</section>
+    <div class="wl">
+      <span class="k">Page</span>
+      <button class="btn" data-page="1000">1k</button>
+      <button class="btn" data-page="10000">10k</button>
+      <button class="btn" data-page="100000">100k</button>
+    </div>
+    <p class="sum" id="wl-sum"></p>
+    <div class="legend">
+      <span><i style="background:var(--cpu)"></i>CPU</span>
+      <span><i style="background:var(--net)"></i>network</span>
+      <span><i style="background:var(--db)"></i>Postgres I/O</span>
+      <span><i style="background:var(--mut)"></i>memory or in-process</span>
+      <span>line thickness = bytes moved (log scale)</span>
+      <span>box meter = share of its flow's time · Costs bars = bytes (log scale)</span>
+      <span>dashed line = Postgres access</span>
+    </div>
+  </section>
+</div>
 
-<footer id="hint">1–6 figures · D demo · E read demo · R reset · ← → step or zoom · T theme</footer>
+<main>
+  <section class="tab on" id="tab-model">
+    <div class="stage" id="fig-model" role="img" aria-label="Write and read flows with bytes and CPU cost for the chosen workload"><canvas></canvas><svg></svg></div>
+    <p class="status" id="status-model"></p>
+    <aside class="side" id="side-model"></aside>
+  </section>
+
+  <section class="tab" id="tab-ladder">
+    <div class="stage" id="fig-ladder" role="img" aria-label="Features and bytes on screen for each overview level"><canvas></canvas><svg></svg></div>
+    <p class="status" id="status-ladder"></p>
+    <aside class="side" id="side-ladder"></aside>
+  </section>
+
+  <section class="tab" id="tab-load">
+    <div class="stage" id="fig-load" role="img" aria-label="One upload through seven stages, with sizes and CPU share"><canvas></canvas><svg></svg></div>
+    <p class="status" id="status-load"></p>
+    <aside class="side" id="side-load"></aside>
+  </section>
+
+  <section class="tab" id="tab-snaps">
+    <div class="stage" id="fig-snaps" role="img" aria-label="Snapshot visibility, with bytes retained by each row"><canvas></canvas><svg></svg></div>
+    <p class="status" id="status-snaps"></p>
+    <aside class="side" id="side-snaps"></aside>
+  </section>
+
+  <section class="tab" id="tab-reads">
+    <div class="chips" id="chips"></div>
+    <div class="stage" id="fig-reads" role="img" aria-label="Read path for the chosen request, with bytes moved and CPU per step"><canvas></canvas><svg></svg></div>
+    <p class="status" id="status-reads"></p>
+    <aside class="side" id="side-reads"></aside>
+  </section>
+
+  <section class="tab" id="tab-costs">
+    <div class="stage" id="fig-costs" role="img" aria-label="Bytes moved per action for a typical cell and a dense cell"><canvas></canvas><svg></svg></div>
+    <table aria-label="Cost of each action">
+      <thead>
+        <tr><th rowspan="2">action</th><th class="grp" colspan="3">typical cell (12k features)</th><th class="grp" colspan="3">dense cell (2.5M features)</th></tr>
+        <tr><th>network</th><th>Postgres</th><th>CPU</th><th>network</th><th>Postgres</th><th>CPU</th></tr>
+      </thead>
+      <tbody id="cost-body"></tbody>
+    </table>
+    <p class="note" id="cost-note"></p>
+  </section>
+
+  <section class="tab" id="tab-decide">
+    <div class="box">
+      <h3>Code budget · production Go for v2</h3>
+      <div class="stage" id="fig-budget" style="aspect-ratio:1000/40;border:0;background:none"><canvas></canvas><svg></svg></div>
+      <p>Now: about 1,920 of 4,000 lines (48%).</p>
+      <p class="note">Outside the budget: about 1,070 lines of tests and 66 lines of SQL.</p>
+    </div>
+    <div class="grid2">
+      <div>
+        <h3>Decisions</h3>
+        <ul class="dec">
+          <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
+          <li><span class="tag built">built</span><b>Chunk size</b><br><span>2 MiB of uncompressed FGB or 50,000 features. Kept; retune only after measuring.</span></li>
+          <li><span class="tag built">built</span><b>Sparse partitions</b><br><span>No packing. Every populated cell keeps at least one chunk.</span></li>
+          <li><span class="tag built">built</span><b>Overview levels</b><br><span>8 and 10 per partition; 12 for partitions above 100,000 features; 6, 4 and 2 per cell, rebuilt in the commit. Cap 256 per cell.</span></li>
+          <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
+          <li><span class="tag built">built</span><b>Conditional loads</b><br><span>base=s answers 409 when a listed cell changed after s.</span></li>
+          <li><span class="tag built">built</span><b>Caches</b><br><span>Three LRUs per worker, 256 MiB each: file bytes, chunk lists, decoded id runs.</span></li>
+          <li><span class="tag decided">decided</span><b>Upload</b><br><span>One .fgb.zst per L8 cell. No streaming, bucketing or spill. Not built: the /v2 load still takes multi-cell bodies.</span></li>
+          <li><span class="tag decided">decided</span><b>Snapshot per upload</b><br><span>Each upload is one commit. A multi-cell reload is not atomic: readers can see old and new cells together until it ends.</span></li>
+          <li><span class="tag next">next</span><b>Id runs</b><br><span>One run per upload. Lookups search every live run. Above 64 live runs, a background merge combines the 16 smallest and drops stale entries.</span></li>
+          <li><span class="tag next">next</span><b>Reaping</b><br><span>Keep 72 h retention. Delete rows and files that no retained snapshot can see.</span></li>
+          <li><span class="tag cut">cut</span><b>Postings</b><br><span>Zone maps and column files answer filters for now. Revisit if a dense-cell filter takes over 1 s cold.</span></li>
+          <li><span class="tag cut">cut</span><b>Id-run Bloom filters</b><br><span>A binary search over at most 64 runs is cheap.</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Risks</h3>
+        <ul>
+          <li>Loads are held in memory and nothing spills. The densest cell (about 2.5M features) decodes to about 1.2 GB and sets the worker’s memory.</li>
+          <li>A filter on a dense cell reads every chunk until postings exist: about 300 MB per request in the worst case (see Costs).</li>
+          <li>A reload of many cells is not one snapshot. Readers can see a mix of old and new cells until the last upload commits.</li>
+          <li>Id runs are delta-coded, so a lookup decodes each live run in full. At 1e9 features the runs total about 15 GB: a fence index per run is needed before lookups scale.</li>
+          <li>The coarse rebuild reads sibling samples on every upload. Measure at 10 million features.</li>
+          <li>Dense cities at zoom 13 hold about 240k features on screen, about 24 MB over the link. Use overviews until detail is small, around zoom 16 or 17.</li>
+          <li>Overview responses carry full geometry, so they can be large.</li>
+          <li>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</li>
+        </ul>
+        <h3>Terms</h3>
+        <ul>
+          <li><b>Key</b>: the S2 level-30 cell of a feature’s bbox centre. Sets the storage order.</li>
+          <li><b>Partition</b>: an S2 level-8 cell, the unit of upload, load and replacement.</li>
+          <li><b>Chunk</b>: an immutable FlatGeobuf with a column file and a zone map, and one catalog row.</li>
+          <li><b>Sample</b>: the 256 smallest-hash features of a cell, stored as chunks with level = N.</li>
+          <li><b>Id run</b>: sorted (hash, key) pairs, one per upload.</li>
+          <li><b>Snapshot</b>: one upload’s commit. A row is visible at s when begin ≤ s and s &lt; end.</li>
+          <li><b>Virtual file</b>: a file’s bytes stored as block rows, read back through the file-bytes overlay.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>1–7 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are measured on buildings_fr; the CPU split and Postgres speed are estimates (see Costs)</footer>
 
 <script src="https://unpkg.com/zdog@1.1.3/dist/zdog.dist.min.js"></script>
 <script>
 const PAL = {
-  dark: { bg: '#101112', fill: '#17181a', lane: '#141517', line: '#34373d', fg: '#d8dadf', mut: '#868b94', accent: '#f2a93b', band: '#2a2f36', lit: '#2d2a22', fillLit: '#2b2619' },
-  light: { bg: '#fafaf9', fill: '#ffffff', lane: '#f1f2f3', line: '#cdd1d6', fg: '#1c1d1f', mut: '#6a6f77', accent: '#b3600a', band: '#dde3ea', lit: '#f7ead7', fillLit: '#fbf1e4' },
+  dark: { bg: '#101112', fill: '#17181a', lane: '#141517', track: '#25272b', line: '#34373d', fg: '#d8dadf', mut: '#868b94', accent: '#f2a93b', cpu: '#f2a93b', net: '#4fc3dc', db: '#7ccf8b', band: '#2a2f36', lit: '#2d2a22', fillLit: '#2b2619' },
+  light: { bg: '#fafaf9', fill: '#ffffff', lane: '#f1f2f3', track: '#e3e6ea', line: '#cdd1d6', fg: '#1c1d1f', mut: '#6a6f77', accent: '#b3600a', cpu: '#b3600a', net: '#0b7c99', db: '#2f7d4a', band: '#dde3ea', lit: '#f7ead7', fillLit: '#fbf1e4' },
 };
 let P = PAL.dark;
-const EDGE_T = 0.6;
+
+const K = { raw: 470, zst: 100, col: 20, run: 15, meta: 200, chunk: 2097152, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const PER_CHUNK = Math.floor(K.chunk / K.raw);
+const CPU_SHARE = { decode: 0.25, validate: 0.05, sort: 0.1, encode: 0.6 };
+const TYPICAL = 12000, DENSE = 2500000;
+const W = { f: 12000, link: 125e6, page: 1000 };
 const S = {
   tab: 'model',
   model: { sel: 'chunks', lit: new Set(), demo: null },
@@ -167,37 +239,186 @@ const S = {
   load: { k: 0, sel: 0, play: null },
   snaps: { s: 1, sel: -1, play: null },
   reads: { req: 0, sel: 0, lit: new Set(), demo: null },
+  drag: null,
 };
 const NS = 'http://www.w3.org/2000/svg';
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const list = items => (items.length ? `<ul>${items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '');
+const pct = v => `${Math.round(v * 100)}%`;
+const fmt = n => Math.round(n).toLocaleString('en-GB');
+const set = (sel, text) => { const el = $(sel); if (el) el.textContent = text; };
+const alpha = (h, a) => { const n = parseInt(h.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
 
-const WRITE_SEQ = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7'];
-const READ_SEQ = ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'];
-const BAND_Y = { w: 30, p: 164, r: 308 };
-const MODEL = {
-  loader: { band: 'w', col: 0, t: 'Loader', s: ['one .fgb.zst', 'per L8 cell'], text: 'Uploads one zstd-compressed FlatGeobuf per level-8 cell. Every feature in the file falls in that cell, so a reload is one upload per cell.', layout: ['body: zstd FlatGeobuf', 'one L8 cell per upload'], index: [] },
-  decode: { band: 'w', col: 1, t: 'Decode', s: ['zstd → FGB', 'in memory'], text: 'The worker decompresses the whole file into memory and parses it once. Each feature gets its key (bbox centre, S2 level 30) and its id.', layout: ['no streaming, bucketing or spill', 'densest cell is about 1.2 GB of FGB'], index: [] },
-  validate: { band: 'w', col: 2, t: 'Validate', s: ['cell · ids · geom', '422 on failure'], text: '422 for a feature outside the cell, a duplicate id in the file, or unusable geometry. base=s is checked in the commit.', layout: [], index: [] },
-  sort: { band: 'w', col: 3, t: 'Sort & cut', s: ['(key, id)', '2 MiB or 50,000'], text: 'Sort by (key, id), then cut chunks at 2 MiB or 50,000 features, whichever comes first. Each chunk is a contiguous key range.', layout: ['chunk = contiguous key range', 'rows keep key order'], index: [] },
-  encode: { band: 'w', col: 4, t: 'Encode', s: ['FGB · col · zone', 'samples · id run'], text: 'Per chunk: an FGB (zstd), a column file in the same row order, and a zone map. Per cell: samples at levels 8 and 10 (12 above 100,000 features) and one id run.', layout: ['files: fgb, cols, idrun', 'written unpublished, by COPY'], index: [] },
-  commit: { band: 'w', col: 5, t: 'Commit', s: ['one tx', 'one snapshot'], text: 'One transaction: lock the collection row, check base=s, end the cell’s live chunks, insert the new rows, rebuild levels 6, 4 and 2, insert the snapshot, publish the files.', layout: ['one snapshot per upload'], index: [] },
-  collections: { band: 'p', col: 0, t: 'collections', s: ['uid · snapshot', 'schema, id_col'], text: 'One row per collection. The commit locks it FOR UPDATE, so commits serialize per collection.', layout: ['name text pk', 'uid bigint identity', 'current_snapshot, id_column', 'columns_json jsonb'], index: ['pk (name)'] },
-  chunks: { band: 'p', col: 1, t: 'chunks', s: ['key, bbox, zone', 'begin · end snap'], text: 'One row per chunk. A chunk is visible at snapshot s when begin ≤ s and s < end. The zone map is stored as JSON text.', layout: ['chunk_id pk, collection, cell, seq', 'first and last key and id', 'minx, miny, maxx, maxy, features', 'file_id, col_file, zone, level', 'begin_snapshot, end_snapshot'], index: ['(collection, begin_snapshot)', '(collection, cell) where end_snapshot is null'] },
-  partitions: { band: 'p', col: 2, t: 'partitions', s: ['cell · changed'], text: 'The last snapshot that changed each cell. base=s answers 409 when a listed cell changed after s.', layout: ['collection, cell, changed'], index: ['pk (collection, cell)'] },
-  blocks: { band: 'p', col: 3, t: 'blocks', s: ['file_id, n', '8,120 B rows'], text: 'Virtual files: each file is split into 8,120-byte rows, one per 8 KB heap page, stored inline without TOAST. Written by COPY before the commit.', layout: ['file_id bigint', 'n int', 'data bytea, storage plain'], index: ['pk (file_id, n)'] },
-  files: { band: 'p', col: 4, t: 'files', s: ['kind · bytes', 'published'], text: 'One row per virtual file. kind is fgb, cols or idrun. A file becomes readable when the commit sets published.', layout: ['file_id identity pk', 'collection, kind, bytes', 'published, created'], index: ['pk (file_id)'] },
-  snapshots: { band: 'p', col: 5, t: 'snapshots', s: ['(collection, id)'], text: 'One row per snapshot, the commit that created it. Cursors pin one; retention is 72 h.', layout: ['collection, id', 'created'], index: ['pk (collection, id)'] },
-  id_runs: { band: 'p', col: 6, t: 'id_runs', s: ['file · entries', 'begin · end'], text: 'One row per id run, one per upload. An upload does not end older runs; a background merge drops their stale entries.', layout: ['file_id pk, collection', 'entries, begin_snapshot, end_snapshot'], index: ['(collection) where end_snapshot is null'] },
-  reader: { band: 'r', col: 0, t: 'Reader', s: ['items, id, count'], text: 'A request: items with bbox, filter or overview=N; items/{id}; numberMatched; or PUT ?base=s.', layout: [], index: [] },
-  catalog: { band: 'r', col: 1, t: 'Catalog', s: ['chunk list at s', 'cached per snap'], text: 'Overlay on the chunks table. One query loads the chunk list for (collection, s). Kept in a 256 MiB LRU per worker.', layout: ['where collection = $1', 'and begin_snapshot ≤ s', 'and (end_snapshot is null or > s)'], index: ['uses (collection, begin_snapshot)'] },
-  prune: { band: 'r', col: 2, t: 'Prune', s: ['envelope · zones'], text: 'In memory: the bbox is tested against chunk envelopes, and filters against zone maps. The list is scanned; there is no R-tree yet.', layout: [], index: [] },
-  fileov: { band: 'r', col: 3, t: 'File bytes', s: ['LRU by file_id', '256 MiB'], text: 'Overlay on blocks. A miss reads the file’s block rows in (file_id, n) order and keeps the bytes; a hit costs no query.', layout: ['select n, data from blocks', 'where file_id = $1 order by n'], index: ['pk (file_id, n)'] },
-  fgb: { band: 'r', col: 4, t: 'FGB search', s: ['packed R-tree', 'per chunk'], text: 'A bbox read searches each candidate chunk’s packed R-tree. A filter reads the candidate chunk whole and keeps the matching rows.', layout: [], index: [] },
-  response: { band: 'r', col: 5, t: 'Response', s: ['page · cursor', 'FGB or GeoJSON'], text: 'Features stream out in (key, id) order. The cursor pins the snapshot and carries the last (key, id). A cursor older than 72 h answers 410.', layout: [], index: [] },
-  idov: { band: 'r', col: 6, t: 'Id runs', s: ['decoded LRU', '256 MiB'], text: 'Overlay on id_runs: decoded runs kept in a 256 MiB LRU. A lookup binary-searches every live run, then reads the candidate chunk to verify the id.', layout: ['a miss decodes the whole run'], index: ['(collection) where end_snapshot is null'] },
-};
-const MODEL_ORDER = Object.keys(MODEL);
+function fmtBytes(b) {
+  if (b < 1024) return `${Math.round(b)} B`;
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let v = b / 1024, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
+}
+function fmtTime(s) {
+  if (s < 0.001) return `${Math.max(1, Math.round(s * 1e6))} µs`;
+  if (s < 1) return `${Math.round(s * 1000)} ms`;
+  if (s < 120) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
+  return `${(s / 60).toFixed(1)} min`;
+}
+const logFrac = (b, lo, hi) => Math.min(1, Math.max(0, (Math.log10(Math.max(b, 1)) - lo) / (hi - lo)));
+const wStroke = b => Math.min(10, 1 + 0.9 * Math.log10(Math.max(b, 1)));
+const wPacket = b => Math.min(6, 2 + 0.45 * Math.log10(Math.max(b, 1)));
+const wDur = t => Math.min(2.4, 0.35 + 0.4 * Math.log10(1 + t * 1000));
+
+function writeCost(f, link) {
+  const chunks = Math.max(1, Math.ceil(f / PER_CHUNK));
+  const samples = Math.min(f, 256) + Math.min(f, 4096) + (f > 100000 ? Math.min(f, 65536) : 0);
+  const cpu = f * K.sec;
+  const upload = f * K.zst, memory = f * K.raw;
+  const chunkBytes = f * K.zst, colBytes = f * K.col, runBytes = f * K.run;
+  const sampleBytes = samples * K.zst, meta = chunks * K.meta;
+  const db = chunkBytes + colBytes + runBytes + sampleBytes + meta;
+  const tUp = upload / link, tDb = db / K.db;
+  const stage = Object.fromEntries(Object.entries(CPU_SHARE).map(([k, s]) => [k, s * cpu]));
+  return { f, chunks, samples, cpu, stage, upload, memory, chunkBytes, colBytes, runBytes, sampleBytes, meta, db, tUp, tDb, total: tUp + cpu + tDb + K.fixed, encodedOut: chunkBytes + colBytes, files: 2 * chunks + 2 };
+}
+function steps(list, link) {
+  const rows = list.map(s => ({ name: s.name, db: s.db || 0, net: s.net || 0, cpu: s.cpu || 0 }));
+  for (const r of rows) r.t = r.db / K.db + r.net / link + r.cpu;
+  const sum = k => rows.reduce((a, r) => a + r[k], 0);
+  return { steps: rows, db: sum('db'), net: sum('net'), cpu: sum('cpu'), total: sum('t') + 0.001 };
+}
+function readBBox(f, page, link) {
+  const chunks = Math.ceil(f / PER_CHUNK), per = Math.min(f, PER_CHUNK), n = Math.min(page, f);
+  const touched = Math.min(chunks, Math.ceil(page / PER_CHUNK) + 1);
+  return steps([
+    { name: 'catalog overlay', db: chunks * K.meta },
+    { name: 'prune envelopes', cpu: 1e-6 * chunks },
+    { name: 'file bytes, whole chunks', db: touched * per * K.zst },
+    { name: 'FGB search', cpu: (touched * per * K.raw) / K.dec + n * 1e-6 },
+    { name: 'response', net: n * K.zst },
+  ], link);
+}
+function readFilter(f, page, link) {
+  const chunks = Math.ceil(f / PER_CHUNK), n = Math.min(page, f);
+  return steps([
+    { name: 'catalog overlay', db: chunks * K.meta },
+    { name: 'zone maps', cpu: 1e-6 * chunks },
+    { name: 'column files', db: f * K.col, cpu: (f * K.col) / K.dec },
+    { name: 'whole candidate chunks', db: f * K.zst, cpu: (f * K.raw) / K.dec },
+    { name: 'matches, page', net: n * K.zst, cpu: n * 1e-6 },
+  ], link);
+}
+function readCount(f, link) {
+  return steps([
+    { name: 'catalog overlay', db: Math.ceil(f / PER_CHUNK) * K.meta },
+    { name: 'zone maps', cpu: 1e-6 * Math.ceil(f / PER_CHUNK) },
+    { name: 'column files, counted', db: f * K.col, cpu: (f * K.col) / K.dec },
+    { name: 'count', net: 32 },
+  ], link);
+}
+function readOverview(page, link) {
+  return steps([
+    { name: 'catalog at level N', db: 2048 },
+    { name: 'samples', db: page * K.zst, cpu: page * 1e-6 },
+    { name: 'response', net: page * K.zst },
+  ], link);
+}
+function readId(f, link) {
+  const per = Math.min(f, PER_CHUNK);
+  return steps([
+    { name: 'id runs, decoded', db: f * K.run, cpu: (f * K.run) / K.dec },
+    { name: 'candidate chunk', db: per * K.zst, cpu: (per * K.raw) / K.dec },
+    { name: 'verify, respond', net: K.zst },
+  ], link);
+}
+function readBase(link) {
+  return steps([{ name: 'lock collection row' }, { name: 'count changed cells', db: 64 }, { name: 'accept or 409', net: 64 }], link);
+}
+function costNow() {
+  return { f: W.f, link: W.link, page: W.page, Wr: writeCost(W.f, W.link), Rd: readBBox(W.f, W.page, W.link) };
+}
+function actions(f) {
+  const Wr = writeCost(f, W.link), B = readBBox(f, W.page, W.link), F = readFilter(f, W.page, W.link);
+  const C = readCount(f, W.link), I = readId(f, W.link), O = readOverview(W.page, W.link), Bs = readBase(W.link);
+  return [
+    { name: 'Upload one cell', net: Wr.upload, db: 0, cpu: Wr.cpu },
+    { name: 'Ingest writes to Postgres', net: 0, db: Wr.db, cpu: 0 },
+    { name: `bbox page of ${fmt(Math.min(W.page, f))}`, net: B.net, db: B.db, cpu: B.cpu },
+    { name: 'Filter, worst case', net: F.net, db: F.db, cpu: F.cpu },
+    { name: 'numberMatched with filter', net: C.net, db: C.db, cpu: C.cpu },
+    { name: 'Id lookup, uncached', net: I.net, db: I.db, cpu: I.cpu },
+    { name: `Overview page of ${fmt(W.page)}`, net: O.net, db: O.db, cpu: O.cpu },
+    { name: 'Base check', net: Bs.net, db: Bs.db, cpu: 0 },
+  ];
+}
+
+class Fig {
+  constructor(id, vw, vh) {
+    this.vw = vw; this.vh = vh; this.binds = []; this.cur = costNow();
+    this.el = document.getElementById(id);
+    this.el.style.aspectRatio = vw + ' / ' + vh;
+    this.svg = this.el.querySelector('svg');
+    this.svg.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
+    this.illo = new Zdog.Illustration({
+      element: this.el.querySelector('canvas'),
+      resize: true,
+      onResize(w) { if (w > 0) this.zoom = w / vw; },
+    });
+  }
+  x(v) { return v - this.vw / 2; }
+  y(v) { return v - this.vh / 2; }
+  pt(x, y) { return { x: this.x(x), y: this.y(y) }; }
+  shape(x, y, w, h, r, opts) {
+    return new Zdog[r ? 'RoundedRect' : 'Rect']({ addTo: this.illo, width: w, height: h, cornerRadius: r, translate: this.pt(x + w / 2, y + h / 2), ...opts });
+  }
+  place(s, x, y, w, h) {
+    s.width = Math.max(0.01, w);
+    s.height = Math.max(0.01, h);
+    s.translate.x = this.x(x + s.width / 2);
+    s.translate.y = this.y(y + h / 2);
+    s.updatePath();
+  }
+  bind(fn) { this.binds.push(fn); fn(); }
+  line(pts, lw) { return new Zdog.Shape({ addTo: this.illo, path: pts.map(([x, y]) => this.pt(x, y)), closed: false, stroke: lw, fill: false }); }
+  dashes(pts) {
+    const out = [];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [x1, y1] = pts[i], [x2, y2] = pts[i + 1], L = Math.hypot(x2 - x1, y2 - y1);
+      if (!L) continue;
+      const ux = (x2 - x1) / L, uy = (y2 - y1) / L;
+      for (let d = 0; d < L; d += 9) {
+        const e = Math.min(L, d + 5);
+        out.push(this.line([[x1 + ux * d, y1 + uy * d], [x1 + ux * e, y1 + uy * e]], 1));
+      }
+    }
+    return out;
+  }
+  head(pts) {
+    const [x1, y1] = pts[pts.length - 2], [x2, y2] = pts[pts.length - 1];
+    const L = Math.hypot(x2 - x1, y2 - y1) || 1, ux = (x2 - x1) / L, uy = (y2 - y1) / L;
+    const bx = x2 - ux * 7, by = y2 - uy * 7;
+    return new Zdog.Shape({ addTo: this.illo, path: [this.pt(x2, y2), this.pt(bx - uy * 3.5, by + ux * 3.5), this.pt(bx + uy * 3.5, by - ux * 3.5)], closed: true, fill: true, stroke: false });
+  }
+  text(x, y, str, cls = 'v', anchor = 'start') {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', x); t.setAttribute('y', y); t.setAttribute('class', cls); t.setAttribute('text-anchor', anchor);
+    t.textContent = str;
+    this.svg.appendChild(t);
+    return t;
+  }
+  hit(x, y, w, h, fn) {
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y); r.setAttribute('width', w); r.setAttribute('height', h); r.setAttribute('class', 'hit');
+    r.addEventListener('click', fn);
+    this.svg.appendChild(r);
+    return r;
+  }
+  paint() { for (const fn of this.binds) fn(); }
+  render() { this.paint(); this.illo.updateRenderGraph(); }
+  show() { this.illo.onWindowResize(); this.render(); }
+  step() { return false; }
+}
+
+const MED = { e1: 'net', e2: 'mut', e3: 'mut', e4: 'mut', e5: 'db', e6: 'mut', e7: 'db', r1: 'net', r2: 'db', r3: 'mut', r4: 'mut', r5: 'db', r6: 'db', r7: 'net', r8: 'db' };
 const EDGES = [
   ['e1', 'loader', 'decode', false], ['e2', 'decode', 'validate', false], ['e3', 'validate', 'sort', false],
   ['e4', 'sort', 'encode', false], ['e5', 'encode', 'blocks', true, 118], ['e6', 'encode', 'commit', false],
@@ -206,10 +427,12 @@ const EDGES = [
   ['r4', 'prune', 'fileov', false], ['r5', 'blocks', 'fileov', true], ['r6', 'fileov', 'fgb', false],
   ['r7', 'fgb', 'response', false], ['r8', 'id_runs', 'idov', true],
 ];
-const edgeOf = id => EDGES.find(e => e[0] === id);
+const EDGE = id => EDGES.find(e => e[0] === id);
+const EDGE_BYTES = c => ({ e1: c.Wr.upload, e2: c.Wr.memory, e3: c.Wr.memory, e4: c.Wr.memory, e5: c.Wr.db, e6: c.Wr.meta, e7: c.Wr.meta, r1: 256, r2: c.Rd.steps[0].db, r3: 256, r4: 256, r5: c.Rd.steps[2].db, r6: c.Rd.steps[2].db, r7: c.Rd.steps[4].net, r8: c.Wr.runBytes });
+const BANDS = { w: { y: 32, w: 124, step: 164, x0: 16 }, p: { y: 174, w: 116, step: 140, x0: 14 }, r: { y: 322, w: 116, step: 140, x0: 14 } };
 const boxOf = id => {
-  const n = MODEL[id], wr = n.band === 'w';
-  return { x: 14 + n.col * (wr ? 164 : 142), y: BAND_Y[n.band], w: wr ? 128 : 122, h: 64 };
+  const n = MODEL[id], g = BANDS[n.band];
+  return { x: g.x0 + n.col * g.step, y: g.y, w: g.w, h: 68 };
 };
 function route(a, b, mid) {
   const ax = a.x + a.w / 2, bx = b.x + b.w / 2;
@@ -240,123 +463,173 @@ function along(pts, t) {
   }
   return pts[0];
 }
-function hotEdge() {
-  const d = S.model.demo;
-  return d ? d.seq[d.i] : null;
-}
 
-class Fig {
-  constructor(id, vw, vh) {
-    this.vw = vw;
-    this.vh = vh;
-    this.binds = [];
-    this.el = document.getElementById(id);
-    this.el.style.aspectRatio = vw + ' / ' + vh;
-    this.svg = this.el.querySelector('svg');
-    this.svg.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
-    this.illo = new Zdog.Illustration({
-      element: this.el.querySelector('canvas'),
-      resize: true,
-      onResize(w) { if (w > 0) this.zoom = w / vw; },
-    });
-  }
-  x(v) { return v - this.vw / 2; }
-  y(v) { return v - this.vh / 2; }
-  pt(x, y) { return { x: this.x(x), y: this.y(y) }; }
-  shape(x, y, w, h, r, opts) {
-    return new Zdog[r ? 'RoundedRect' : 'Rect']({ addTo: this.illo, width: w, height: h, cornerRadius: r, translate: this.pt(x + w / 2, y + h / 2), ...opts });
-  }
-  bind(fn) { this.binds.push(fn); fn(); }
-  line(pts, lw) { return new Zdog.Shape({ addTo: this.illo, path: pts.map(([x, y]) => this.pt(x, y)), closed: false, stroke: lw, fill: false }); }
-  dashes(pts, lw) {
-    const out = [];
-    for (let i = 0; i + 1 < pts.length; i++) {
-      const [x1, y1] = pts[i], [x2, y2] = pts[i + 1], L = Math.hypot(x2 - x1, y2 - y1);
-      if (!L) continue;
-      const ux = (x2 - x1) / L, uy = (y2 - y1) / L;
-      for (let d = 0; d < L; d += 9) {
-        const e = Math.min(L, d + 5);
-        out.push(this.line([[x1 + ux * d, y1 + uy * d], [x1 + ux * e, y1 + uy * e]], lw));
-      }
-    }
-    return out;
-  }
-  head(pts) {
-    const [x1, y1] = pts[pts.length - 2], [x2, y2] = pts[pts.length - 1];
-    const L = Math.hypot(x2 - x1, y2 - y1) || 1, ux = (x2 - x1) / L, uy = (y2 - y1) / L;
-    const bx = x2 - ux * 7, by = y2 - uy * 7;
-    return new Zdog.Shape({ addTo: this.illo, path: [this.pt(x2, y2), this.pt(bx - uy * 3.5, by + ux * 3.5), this.pt(bx + uy * 3.5, by - ux * 3.5)], closed: true, fill: true, stroke: false });
-  }
-  text(x, y, str, cls = 'v', anchor = 'start') {
-    const t = document.createElementNS(NS, 'text');
-    t.setAttribute('x', x);
-    t.setAttribute('y', y);
-    t.setAttribute('class', cls);
-    t.setAttribute('text-anchor', anchor);
-    t.textContent = str;
-    this.svg.appendChild(t);
-    return t;
-  }
-  hit(x, y, w, h, fn) {
-    const r = document.createElementNS(NS, 'rect');
-    r.setAttribute('x', x);
-    r.setAttribute('y', y);
-    r.setAttribute('width', w);
-    r.setAttribute('height', h);
-    r.setAttribute('class', 'hit');
-    r.addEventListener('click', fn);
-    this.svg.appendChild(r);
-    return r;
-  }
-  paint() { for (const fn of this.binds) fn(); }
-  render() { this.paint(); this.illo.updateRenderGraph(); }
-  show() { this.illo.onWindowResize(); this.render(); }
-  step() { return false; }
+const MODEL = {
+  loader: { band: 'w', col: 0, t: 'Loader', kind: 'net', share: c => c.Wr.tUp / c.Wr.total,
+    l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
+    text: 'Uploads one zstd-compressed FlatGeobuf per level-8 cell, about 100 B per feature (measured on buildings_fr). Every feature in the file falls in that cell, so a reload is one upload per cell. The meter is the share of network time.',
+    layout: ['body: zstd FlatGeobuf, one cell', 'upload bytes = features × 100 B'], index: [] },
+  decode: { band: 'w', col: 1, t: 'Decode', kind: 'cpu', share: c => c.Wr.stage.decode / c.Wr.total,
+    l1: c => `${fmtTime(c.Wr.stage.decode)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
+    text: 'Decompresses the whole file into memory and parses it once. The decoded file costs about 470 B per feature of memory, the largest memory cost of an upload.',
+    layout: ['no streaming, bucketing or spill', 'peak memory ≈ features × 470 B'], index: [] },
+  validate: { band: 'w', col: 2, t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total,
+    l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
+    text: 'Checks that every feature is inside the cell, that ids are unique in the file, and that geometry is usable.',
+    layout: [], index: [] },
+  sort: { band: 'w', col: 3, t: 'Sort & cut', kind: 'cpu', share: c => c.Wr.stage.sort / c.Wr.total,
+    l1: c => `${fmtTime(c.Wr.stage.sort)} CPU`, l2: c => `${fmt(c.Wr.chunks)} chunks`,
+    text: 'Sorts by (key, id), then cuts chunks of about 2 MiB of uncompressed FGB, roughly 4,400 buildings each.',
+    layout: ['chunk = contiguous key range', 'cut at 2 MiB or 50,000 features'], index: [] },
+  encode: { band: 'w', col: 4, t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total,
+    l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} written`,
+    text: 'Encodes each chunk (FGB, zstd), its column file and zone map, then the samples (levels 8 and 10, and 12 above 100,000 features) and the id run. The largest CPU share.',
+    layout: ['files: fgb, cols, idrun', 'rows written unpublished, by COPY'], index: [] },
+  commit: { band: 'w', col: 5, t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total,
+    l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
+    text: 'One transaction: lock the collection row, check base=s, end the cell’s live chunks, insert the new rows, rebuild levels 6, 4 and 2, insert the snapshot, publish the files. Its cost does not grow with the cell.',
+    layout: ['one snapshot per upload'], index: [] },
+  collections: { band: 'p', col: 0, t: 'collections', kind: 'db', size: () => 300,
+    l1: () => '1 row', l2: () => 'per collection',
+    text: 'One row per collection. The commit locks it FOR UPDATE, so commits serialize per collection.',
+    layout: ['name text pk', 'uid bigint identity', 'current_snapshot, id_column', 'columns_json jsonb'], index: ['pk (name)'] },
+  chunks: { band: 'p', col: 1, t: 'chunks', kind: 'db', size: c => c.Wr.chunkBytes,
+    l1: c => `${fmt(c.Wr.chunks)} rows/cell`, l2: c => `${fmtBytes(c.Wr.chunkBytes)} of FGB`,
+    text: 'One row per chunk. A chunk is visible at snapshot s when begin ≤ s and s < end. The zone map is stored as JSON text.',
+    layout: ['chunk_id pk, collection, cell, seq', 'first and last key and id', 'minx, miny, maxx, maxy, features', 'file_id, col_file, zone, level', 'begin_snapshot, end_snapshot'],
+    index: ['(collection, begin_snapshot)', '(collection, cell) where end_snapshot is null'] },
+  partitions: { band: 'p', col: 2, t: 'partitions', kind: 'db', size: () => 300,
+    l1: () => '1 row per cell', l2: () => 'changed snapshot',
+    text: 'The last snapshot that changed each cell. base=s answers 409 when a listed cell changed after s.',
+    layout: ['collection, cell, changed'], index: ['pk (collection, cell)'] },
+  blocks: { band: 'p', col: 3, t: 'blocks', kind: 'db', size: c => c.Wr.db,
+    l1: c => `${fmtBytes(c.Wr.db)} of rows`, l2: () => '8,120 B per row',
+    text: 'Virtual files: each file is split into 8,120-byte rows, one per 8 KB heap page, stored inline without TOAST. Written by COPY before the commit.',
+    layout: ['file_id bigint', 'n int', 'data bytea, storage plain'], index: ['pk (file_id, n)'] },
+  files: { band: 'p', col: 4, t: 'files', kind: 'db', size: () => 300,
+    l1: c => `${fmt(c.Wr.files)} files`, l2: () => 'fgb, cols, idrun',
+    text: 'One row per virtual file. A file becomes readable when the commit sets published.',
+    layout: ['file_id identity pk', 'collection, kind, bytes', 'published, created'], index: ['pk (file_id)'] },
+  snapshots: { band: 'p', col: 5, t: 'snapshots', kind: 'db', size: () => 300,
+    l1: () => '1 row per upload', l2: () => 'begin, end',
+    text: 'One row per snapshot, the commit that created it. Cursors pin one; retention is 72 h.',
+    layout: ['collection, id', 'created'], index: ['pk (collection, id)'] },
+  id_runs: { band: 'p', col: 6, t: 'id_runs', kind: 'db', size: c => c.Wr.runBytes,
+    l1: c => `${fmtBytes(c.Wr.runBytes)} of runs`, l2: () => '1 row per upload',
+    text: 'One row per id run, one per upload. An upload does not end older runs; a background merge drops their stale entries.',
+    layout: ['file_id pk, collection', 'entries, begin_snapshot, end_snapshot'], index: ['(collection) where end_snapshot is null'] },
+  reader: { band: 'r', col: 0, t: 'Reader', kind: 'mut',
+    l1: c => `${fmt(c.page)} features`, l2: () => 'one page request',
+    text: 'A request: items with bbox, filter or overview=N; items/{id}; numberMatched; or PUT ?base=s.',
+    layout: [], index: [] },
+  catalog: { band: 'r', col: 1, t: 'Catalog', kind: 'db', share: c => c.Rd.steps[0].t / c.Rd.total,
+    l1: c => `${fmtBytes(c.Rd.steps[0].db)} metadata`, l2: () => 'once per snap',
+    text: 'Overlay on the chunks table. One query loads the chunk list for (collection, s), kept in a 256 MiB LRU per worker.',
+    layout: ['where collection = $1', 'and begin_snapshot ≤ s', 'and (end_snapshot is null or > s)'], index: ['uses (collection, begin_snapshot)'] },
+  prune: { band: 'r', col: 2, t: 'Prune', kind: 'cpu', share: c => c.Rd.steps[1].t / c.Rd.total,
+    l1: c => `${fmtTime(c.Rd.steps[1].cpu)} CPU`, l2: () => 'envelope, zones',
+    text: 'In memory: the bbox is tested against chunk envelopes, and filters against zone maps. The list is scanned; there is no R-tree yet.',
+    layout: [], index: [] },
+  fileov: { band: 'r', col: 3, t: 'File bytes', kind: 'db', share: c => c.Rd.steps[2].t / c.Rd.total,
+    l1: c => `${fmtBytes(c.Rd.steps[2].db)} read`, l2: () => 'whole chunks',
+    text: 'Overlay on blocks. A miss reads the file’s block rows in (file_id, n) order and keeps the bytes; a hit costs no query. A bbox page still reads every chunk it lands in.',
+    layout: ['select n, data from blocks', 'where file_id = $1 order by n'], index: ['pk (file_id, n)'] },
+  fgb: { band: 'r', col: 4, t: 'FGB search', kind: 'cpu', share: c => c.Rd.steps[3].t / c.Rd.total,
+    l1: c => `${fmtTime(c.Rd.steps[3].cpu)} CPU`, l2: () => 'decode, search',
+    text: 'Decompresses each touched chunk and searches its packed R-tree. Most of the CPU is decompression.',
+    layout: [], index: [] },
+  response: { band: 'r', col: 5, t: 'Response', kind: 'net', share: c => c.Rd.steps[4].t / c.Rd.total,
+    l1: c => `${fmtBytes(c.Rd.steps[4].net)} out`, l2: c => `${fmtTime(c.Rd.steps[4].net / c.link)} on the link`,
+    text: 'Features stream out in (key, id) order, as zstd when the client accepts it. The cursor pins the snapshot and carries the last (key, id). A cursor older than 72 h answers 410.',
+    layout: [], index: [] },
+  idov: { band: 'r', col: 6, t: 'Id runs', kind: 'db', size: c => c.Wr.runBytes,
+    l1: c => `${fmtBytes(c.Wr.runBytes)} if uncached`, l2: () => 'decodes the run',
+    text: 'Overlay on id_runs: decoded runs kept in a 256 MiB LRU. A lookup binary-searches every live run, then reads the candidate chunk to verify the id. A cold lookup decodes all of a run’s bytes.',
+    layout: ['a miss decodes the whole run'], index: ['(collection) where end_snapshot is null'] },
+};
+const MODEL_ORDER = Object.keys(MODEL);
+
+function seqFor(kind, c) {
+  const { Wr, Rd, link } = c;
+  if (kind === 'write') return [
+    { e: 'e1', t: Wr.tUp, b: Wr.upload }, { box: 'decode', t: Wr.stage.decode }, { box: 'validate', t: Wr.stage.validate },
+    { box: 'sort', t: Wr.stage.sort }, { box: 'encode', t: Wr.stage.encode }, { e: 'e5', t: Wr.tDb, b: Wr.db },
+    { box: 'commit', t: K.fixed }, { e: 'e7', t: 0.001, b: Wr.meta },
+  ];
+  return [
+    { e: 'r1', t: 0.0005, b: 256 }, { e: 'r2', t: Rd.steps[0].db / K.db, b: Rd.steps[0].db }, { box: 'prune', t: Rd.steps[1].cpu },
+    { e: 'r5', t: Rd.steps[2].db / K.db, b: Rd.steps[2].db }, { box: 'fgb', t: Rd.steps[3].cpu }, { e: 'r7', t: Rd.steps[4].net / link, b: Rd.steps[4].net },
+  ];
+}
+function playModel(kind) {
+  const seq = seqFor(kind, costNow());
+  const first = seq[0].e ? EDGE(seq[0].e)[1] : seq[0].box;
+  S.model.lit = new Set([first]);
+  S.model.demo = { seq, i: 0, t: 0, dur: null };
 }
 
 class Model extends Fig {
   constructor() {
     super('fig-model', 1000, 396);
-    [[0, 112, 'write · one worker, one L8 cell per upload', 12, 18, 'start'], [136, 140, 'postgres · tables, and blocks as virtual files', 988, 152, 'end'], [288, 108, 'read · virtual overlays in worker memory', 12, 388, 'start']].forEach(([y, h, label, x, ty, anchor]) => {
+    this.bytes = EDGE_BYTES(this.cur);
+    for (const [y, h, label, x, ty, anchor] of [[0, 112, 'write · one worker, one L8 cell per upload', 14, 18, 'start'], [136, 140, 'postgres · tables, and blocks as virtual files', 986, 166, 'end'], [288, 108, 'read · virtual overlays in worker memory', 14, 404, 'start']]) {
       const lane = this.shape(0, y, 1000, h, 0, { fill: true, stroke: false });
       this.bind(() => { lane.color = P.lane; });
       this.text(x, ty, label, 'lab', anchor);
-    });
+    }
     for (const [id, from, to, dash, mid] of EDGES) {
       const pts = route(boxOf(from), boxOf(to), mid);
-      const lines = dash ? this.dashes(pts, 1.25) : [this.line(pts, 1.25)];
+      const band = dash ? this.line(pts, 1) : null;
+      const segs = dash ? this.dashes(pts) : [this.line(pts, 1)];
       const head = this.head(pts);
       this.bind(() => {
-        const hot = hotEdge() === id;
-        for (const l of lines) { l.color = hot ? P.accent : P.mut; l.stroke = hot ? 2 : 1.25; }
-        head.color = hot ? P.accent : P.mut;
+        const cs = this.currentStep(), hot = !!cs && cs.e === id;
+        const col = hot ? P.fg : P[MED[id]], w = wStroke(this.bytes[id] || 0);
+        if (band) { band.color = alpha(P[MED[id]], 0.28); band.stroke = w; }
+        for (const s of segs) { s.color = col; s.stroke = band ? (hot ? 2.2 : 1.6) : (hot ? w + 1 : w); }
+        head.color = col;
       });
     }
     for (const id of MODEL_ORDER) {
       const n = MODEL[id], b = boxOf(id);
       const f = this.shape(b.x, b.y, b.w, b.h, 6, { fill: true, stroke: false });
-      const e = this.shape(b.x, b.y, b.w, b.h, 6, { fill: false, stroke: 1.2 });
-      this.bind(() => {
-        const sel = S.model.sel === id;
-        f.color = S.model.lit.has(id) ? P.fillLit : P.fill;
-        e.color = sel ? P.accent : P.line;
-        e.stroke = sel ? 2.4 : 1.2;
-      });
-      this.text(b.x + 8, b.y + 19, n.t, 't');
-      n.s.forEach((ln, i) => this.text(b.x + 8, b.y + 35 + i * 13, ln, 's'));
+      const o = this.shape(b.x, b.y, b.w, b.h, 6, { fill: false, stroke: 1.2 });
+      const track = this.shape(b.x + 9, b.y + b.h - 9, b.w - 18, 4, 0, { fill: true, stroke: false });
+      const meter = this.shape(b.x + 9, b.y + b.h - 9, 1, 4, 0, { fill: true, stroke: false });
+      this.text(b.x + 9, b.y + 19, n.t, 't');
+      const t2 = this.text(b.x + 9, b.y + 37, '', 's');
+      const t3 = this.text(b.x + 9, b.y + 51, '', 's');
       this.hit(b.x, b.y, b.w, b.h, () => { S.model.sel = id; this.render(); refresh(); });
+      this.bind(() => {
+        const c = this.cur, on = S.model.sel === id, lit = S.model.lit.has(id), cs = this.currentStep();
+        f.color = lit ? P.fillLit : P.fill;
+        o.color = on ? P.fg : P.line;
+        o.stroke = on ? 2.2 : 1.2;
+        track.color = P.track;
+        const share = n.share ? n.share(c) : n.size ? logFrac(n.size(c), 2, 10) : 0;
+        const p = cs && cs.box === id ? S.model.demo.t / (S.model.demo.dur || 1) : 1;
+        this.place(meter, b.x + 9, b.y + b.h - 9, (b.w - 18) * share * p, 4);
+        meter.color = P[n.kind];
+        t2.textContent = n.l1(c);
+        t3.textContent = n.l2(c);
+      });
     }
-    this.dot = new Zdog.Ellipse({ addTo: this.illo, diameter: 10, fill: true, stroke: false, visible: false });
+    this.dot = new Zdog.Ellipse({ addTo: this.illo, diameter: 8, fill: true, stroke: false, visible: false });
     this.render();
   }
+  currentStep() { const d = S.model.demo; return d ? d.seq[d.i] : null; }
   paint() {
+    this.cur = costNow();
+    this.bytes = EDGE_BYTES(this.cur);
     super.paint();
-    this.dot.color = P.accent;
-    const d = S.model.demo;
-    this.dot.visible = !!d;
-    if (d) {
-      const [, from, to, , mid] = edgeOf(d.seq[d.i]);
-      const [x, y] = along(route(boxOf(from), boxOf(to), mid), d.t / EDGE_T);
+    const cs = this.currentStep(), d = S.model.demo;
+    this.dot.visible = !!(cs && cs.e);
+    if (cs && cs.e) {
+      const [, from, to, , mid] = EDGE(cs.e);
+      const [x, y] = along(route(boxOf(from), boxOf(to), mid), d.t / (d.dur || 1));
+      this.dot.diameter = 2 * wPacket(cs.b || 1);
+      this.dot.updatePath();
+      this.dot.color = P[MED[cs.e]];
       this.dot.translate.x = this.x(x);
       this.dot.translate.y = this.y(y);
     }
@@ -364,42 +637,38 @@ class Model extends Fig {
   step(dt) {
     const d = S.model.demo;
     if (!d) return false;
+    const cs = d.seq[d.i];
+    if (d.dur == null) d.dur = wDur(cs.t);
     d.t += dt;
-    if (d.t >= EDGE_T) {
-      S.model.lit.add(edgeOf(d.seq[d.i])[2]);
-      d.i++;
-      d.t = 0;
+    if (d.t >= d.dur) {
+      S.model.lit.add(cs.e ? EDGE(cs.e)[2] : cs.box);
+      d.i++; d.t = 0; d.dur = null;
       if (d.i >= d.seq.length) S.model.demo = null;
     }
     return true;
   }
   act(name) {
-    if (name === 'demo') playModel(WRITE_SEQ);
-    if (name === 'read') playModel(READ_SEQ);
+    if (name === 'demo' || name === 'write') playModel('write');
+    if (name === 'read') playModel('read');
     if (name === 'reset') { S.model.lit = new Set(); S.model.demo = null; }
   }
-}
-function playModel(seq) {
-  S.model.lit = new Set([edgeOf(seq[0])[1]]);
-  S.model.demo = { seq, i: 0, t: 0 };
 }
 
 const LEVELS = [['Detail', null, 'detail, with no overview'], ['Level 12 sample', 5.07, 'overview=12'], ['Level 10 sample', 81.1, 'overview=10'], ['Level 8 sample', 1297.3, 'overview=8']];
 const kmTile = z => (40075.017 / 2 ** z) * Math.cos((48 * Math.PI) / 180);
-const fmt = v => Math.round(v).toLocaleString('en-GB');
-function counts(z) {
+const barPos = v => Math.min(1, Math.max(0, Math.log10(Math.max(v, 1)) / 6)) * 420;
+function onScreen(z) {
   const t = kmTile(z), area = 12 * t * t, detail = 1900 * area;
   return LEVELS.map(([, cell]) => (cell === null ? detail : Math.min(detail, (256 * area) / cell)));
 }
-const barPos = v => Math.min(1, Math.max(0, Math.log10(Math.max(v, 1)) / 6)) * 420;
 
 class Ladder extends Fig {
   constructor() {
     super('fig-ladder', 1000, 440);
     const cell = (x, y, w, hi) => {
       const f = this.shape(x, y, w, w, 0, { fill: true, stroke: false });
-      const e = this.shape(x, y, w, w, 0, { fill: false, stroke: hi ? 2 : 1 });
-      this.bind(() => { f.color = P.fill; e.color = hi ? P.accent : P.line; });
+      const o = this.shape(x, y, w, w, 0, { fill: false, stroke: hi ? 2 : 1 });
+      this.bind(() => { f.color = P.fill; o.color = hi ? P.fg : P.line; });
     };
     cell(40, 24, 380, false);
     for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(40 + i * 95, 24 + j * 95, 95, i === 1 && j === 1);
@@ -407,16 +676,18 @@ class Ladder extends Fig {
     this.text(46, 16, 'L8 cell · about 36 km', 'lab');
     this.scr = this.shape(135, 119, 1, 1, 0, { fill: true, stroke: false });
     this.scrEdge = this.shape(135, 119, 1, 1, 0, { fill: false, stroke: 1.6 });
-    this.bind(() => { this.scr.color = P.band; this.scrEdge.color = P.accent; });
+    this.bind(() => { this.scr.color = P.lit; this.scrEdge.color = P.fg; });
     this.bars = LEVELS.map(([name], i) => {
       const y = 96 + i * 84;
       const back = this.shape(520, y, 420, 26, 0, { fill: true, stroke: false });
+      const edge = this.shape(520, y, 420, 26, 0, { fill: false, stroke: 1 });
       const band = this.shape(520 + barPos(100), y, barPos(2000) - barPos(100), 26, 0, { fill: true, stroke: false });
       const fill = this.shape(520, y, 1, 26, 0, { fill: true, stroke: false });
-      this.bind(() => { back.color = P.lane; band.color = P.band; });
+      this.bind(() => { back.color = P.lane; edge.color = P.line; band.color = P.band; });
       this.text(520, y - 12, name, 'lab');
       const val = this.text(940, y - 12, '', 'v', 'end');
-      return { fill, val, y };
+      const wire = this.text(940, y + 41, '', 's', 'end');
+      return { y, fill, val, wire };
     });
     this.text(520, 430, 'band: 100 to 2,000 features on screen (assumed)', 'lab');
     this.render();
@@ -427,38 +698,18 @@ class Ladder extends Fig {
     const x1 = Math.max(rx, 40), y1 = Math.max(ry, 24), x2 = Math.min(rx + w, 420), y2 = Math.min(ry + h, 404);
     return x2 > x1 && y2 > y1 ? { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } : null;
   }
-  place(s, g) {
-    s.visible = !!g;
-    if (!g) return;
-    s.width = g.w;
-    s.height = g.h;
-    s.translate.x = this.x(g.x + g.w / 2);
-    s.translate.y = this.y(g.y + g.h / 2);
-    s.updatePath();
-  }
   paint() {
     super.paint();
-    const z = Math.round(S.ladder.z), c = counts(z), g = this.geometry(z);
-    this.place(this.scr, g);
-    this.place(this.scrEdge, g);
-    LEVELS.forEach((_, i) => {
-      const b = this.bars[i], val = c[i], ok = val >= 100 && val <= 2000;
-      b.fill.color = ok ? P.accent : P.mut;
-      const w = Math.max(0.001, barPos(val));
-      b.fill.width = w;
-      b.fill.height = 26;
-      b.fill.translate.x = this.x(520 + w / 2);
-      b.fill.translate.y = this.y(b.y + 13);
-      b.fill.updatePath();
-      b.val.textContent = fmt(val);
+    const z = Math.round(S.ladder.z), counts = onScreen(z), g = this.geometry(z);
+    this.scr.visible = this.scrEdge.visible = !!g;
+    if (g) { this.place(this.scr, g.x, g.y, g.w, g.h); this.place(this.scrEdge, g.x, g.y, g.w, g.h); }
+    this.bars.forEach((b, i) => {
+      const v = counts[i], ok = v >= 100 && v <= 2000;
+      this.place(b.fill, 520, b.y, barPos(v), 26);
+      b.fill.color = ok ? P.fg : P.mut;
+      b.val.textContent = `${fmt(v)} features`;
+      b.wire.textContent = `${fmtBytes(v * K.zst)} over the link · ${fmtTime((v * K.zst) / this.cur.link)}`;
     });
-  }
-  act(name, arg) {
-    const L = S.ladder;
-    if (name === 'demo') L.sweep = { t: 0 };
-    if (name === 'reset') { L.z = 13; L.sweep = null; }
-    if (name === 'set') { L.z = +arg; L.sweep = null; }
-    if (name === 'step') { L.sweep = null; L.z = Math.min(17, Math.max(2, Math.round(L.z) + arg)); }
   }
   step(dt) {
     const s = S.ladder.sweep;
@@ -468,16 +719,30 @@ class Ladder extends Fig {
     if (s.t >= 12) S.ladder.sweep = null;
     return true;
   }
+  act(name, arg) {
+    const L = S.ladder;
+    if (name === 'demo') L.sweep = { t: 0 };
+    if (name === 'reset') { L.z = 13; L.sweep = null; }
+    if (name === 'set') { L.z = +arg; L.sweep = null; }
+    if (name === 'step') { L.sweep = null; L.z = Math.min(17, Math.max(2, Math.round(L.z) + arg)); }
+  }
 }
 
 const STAGES = [
-  ['Upload', ['one .fgb.zst', 'per L8 cell'], 'One zstd-compressed FlatGeobuf per level-8 cell. The loader sends each cell as its own upload, and each upload is its own snapshot.'],
-  ['Decode', ['zstd → FGB', 'in memory'], 'Decompress the whole file into memory and parse it once. No streaming, bucketing or spill: the densest cell, about 1.2 GB of FGB, must fit in the worker.'],
-  ['Validate', ['cell · ids · geom', '422 on failure'], '422 for a feature outside the cell, a duplicate id in the file, or unusable geometry.'],
-  ['Sort & cut', ['(key, id)', '2 MiB or 50,000'], 'Sort by (key, id), then cut chunks at 2 MiB or 50,000 features, whichever comes first.'],
-  ['Encode', ['FGB · col · zone', 'samples · id run'], 'Per chunk: an FGB (zstd), a column file in the same row order, and a zone map. Per cell: samples at levels 8 and 10 (12 above 100,000 features), and one id run.'],
-  ['Write blobs', ['blocks, COPY', 'unpublished'], 'Each file is written as 8,120-byte block rows in its own transaction. It stays unpublished until the commit.'],
-  ['Commit', ['one tx', 'one snapshot'], 'One transaction. Everything the upload changes becomes visible at one snapshot, or nothing does.'],
+  { t: 'Upload', kind: 'net', share: c => c.Wr.tUp / c.Wr.total, l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
+    text: 'The loader sends one zstd-compressed FlatGeobuf per level-8 cell. Its size is about 100 B per feature after zstd; the network time is that size divided by the link speed.' },
+  { t: 'Decode', kind: 'cpu', share: c => c.Wr.stage.decode / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.decode)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
+    text: 'Decompresses the whole file into memory and parses it once. Memory is the biggest cost here: the decoded file takes about 470 B per feature. No streaming, bucketing or spill.' },
+  { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
+    text: 'Checks that each feature is inside the cell, that ids are unique in the file, and that geometry is usable.' },
+  { t: 'Sort & cut', kind: 'cpu', share: c => c.Wr.stage.sort / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.sort)} CPU`, l2: c => `${fmt(c.Wr.chunks)} chunks`,
+    text: 'Sorts by (key, id), then cuts chunks of about 2 MiB of uncompressed FGB, roughly 4,400 buildings each.' },
+  { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} out`,
+    text: 'Encodes each chunk (FGB, zstd) and its column file, then builds the samples and the id run. This stage has the largest CPU share.' },
+  { t: 'Write blobs', kind: 'db', share: c => c.Wr.tDb / c.Wr.total, l1: c => `${fmtBytes(c.Wr.db)} COPY`, l2: c => `${fmtTime(c.Wr.tDb)} to Postgres`,
+    text: 'Writes every file as 8,120-byte block rows, each file in its own transaction, unpublished until the commit. WAL writes about the same bytes again.' },
+  { t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total, l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
+    text: 'One transaction. Everything the upload changes becomes visible at one snapshot, or nothing does. Its cost does not depend on the cell size.' },
 ];
 const SUBS = [
   'lock the collection row, so commits serialize',
@@ -490,85 +755,120 @@ const SUBS = [
 
 class Load extends Fig {
   constructor() {
-    super('fig-load', 1000, 330);
-    this.boxes = STAGES.map(([title, lines], i) => {
+    super('fig-load', 1000, 492);
+    for (let i = 0; i < 6; i++) {
+      const x = 10 + i * 144, pts = [[x + 120, 78], [x + 144, 78]];
+      const seg = this.line(pts, 1), head = this.head(pts);
+      const bytesAt = () => [this.cur.Wr.upload, this.cur.Wr.memory, this.cur.Wr.memory, this.cur.Wr.memory, this.cur.Wr.db, this.cur.Wr.meta][i];
+      this.bind(() => { seg.stroke = wStroke(bytesAt()); seg.color = P.mut; head.color = P.mut; });
+    }
+    STAGES.forEach((st, i) => {
       const x = 10 + i * 144;
-      const f = this.shape(x, 30, 120, 92, 6, { fill: true, stroke: false });
-      const e = this.shape(x, 30, 120, 92, 6, { fill: false, stroke: 1.2 });
+      const f = this.shape(x, 30, 120, 96, 6, { fill: true, stroke: false });
+      const o = this.shape(x, 30, 120, 96, 6, { fill: false, stroke: 1.2 });
+      const track = this.shape(x + 8, 117, 104, 4, 0, { fill: true, stroke: false });
+      const meter = this.shape(x + 8, 117, 1, 4, 0, { fill: true, stroke: false });
+      this.text(x + 8, 48, st.t, 't');
+      const t2 = this.text(x + 8, 66, '', 's');
+      const t3 = this.text(x + 8, 80, '', 's');
+      this.hit(x, 30, 120, 96, () => { S.load.sel = i; S.load.k = i < 6 ? i + 1 : 7; S.load.play = null; this.render(); refresh(); });
       this.bind(() => {
-        const on = i === active(), done = i < (S.load.k >= 7 ? 6 : active());
+        const c = this.cur, on = this.activeStage() === i, done = i < this.activeStage();
         f.color = done ? P.fillLit : P.fill;
-        e.color = on ? P.accent : P.line;
-        e.stroke = on ? 2.4 : 1.2;
+        o.color = on ? P.fg : P.line;
+        o.stroke = on ? 2.2 : 1.2;
+        track.color = P.track;
+        this.place(meter, x + 8, 117, 104 * st.share(c), 4);
+        meter.color = P[st.kind];
+        t2.textContent = st.l1(c);
+        t3.textContent = st.l2(c);
       });
-      this.text(x + 8, 50, title, 'v');
-      lines.forEach((ln, j) => this.text(x + 8, 66 + j * 14, ln, 's'));
-      this.hit(x, 30, 120, 92, () => { S.load.sel = i; S.load.k = i < 6 ? i + 1 : 7; S.load.play = null; this.render(); refresh(); });
-      if (i < 6) {
-        const arrow = [[x + 120, 76], [x + 144, 76]];
-        this.line(arrow, 1.25);
-        this.head(arrow);
-      }
     });
-    const panel = this.shape(10, 150, 980, 170, 6, { fill: true, stroke: false });
-    const edge = this.shape(10, 150, 980, 170, 6, { fill: false, stroke: 1.2 });
+    this.text(10, 162, 'Data size through one upload (log scale)', 'lab');
+    const rows = [['upload, .fgb.zst', 'upload', 'net'], ['decoded in memory', 'memory', 'mut'], ['chunk FGB, zstd', 'chunkBytes', 'db'], ['column files', 'colBytes', 'db'], ['id run', 'runBytes', 'db'], ['samples L8 · L10 · L12', 'sampleBytes', 'db'], ['rows to Postgres (WAL adds 1×)', 'db', 'db']];
+    rows.forEach(([label, key, kind], i) => {
+      const y = 180 + i * 22;
+      this.text(10, y + 11, label, 'v');
+      const bar = this.shape(300, y + 2, 1, 12, 0, { fill: true, stroke: false });
+      const val = this.text(308, y + 11, '', 'v');
+      this.bind(() => {
+        const bytes = this.cur.Wr[key] !== undefined ? this.cur.Wr[key] : this.cur.Wr.upload;
+        const v = key === 'memory' ? this.cur.Wr.memory : bytes;
+        this.place(bar, 300, y + 2, 540 * logFrac(v, 3, 10), 12);
+        bar.color = P[kind];
+        val.setAttribute('x', 300 + 540 * logFrac(v, 3, 10) + 8);
+        val.textContent = fmtBytes(v);
+      });
+    });
+    const panel = this.shape(10, 352, 980, 126, 6, { fill: true, stroke: false });
+    const edge = this.shape(10, 352, 980, 126, 6, { fill: false, stroke: 1.2 });
     this.bind(() => { panel.color = P.fill; edge.color = P.line; });
-    this.text(24, 176, 'COMMIT · one transaction, one snapshot', 'a');
-    this.subs = SUBS.map((s, j) => this.text(24, 204 + j * 22, `${j + 1}. ${s}`, 'v'));
+    this.text(24, 374, 'COMMIT · one transaction, one snapshot', 'v');
+    this.subs = SUBS.map((s, j) => this.text(24, 393 + j * 15, `${j + 1}. ${s}`, 'v'));
     this.render();
-    function active() { return S.load.k === 0 ? -1 : S.load.k <= 6 ? S.load.k - 1 : 6; }
   }
+  activeStage() { return S.load.k === 0 ? -1 : S.load.k <= 6 ? S.load.k - 1 : 6; }
   paint() {
     super.paint();
     const sub = S.load.k >= 7 ? S.load.k - 7 : -1;
-    this.subs.forEach((t, j) => t.setAttribute('class', j < sub ? 'v' : j === sub ? 'a' : 'm'));
+    this.subs.forEach((t, j) => { t.style.fill = j < sub ? P.mut : j === sub ? P.fg : P.mut; });
   }
   step(dt) {
     const p = S.load.play;
     if (!p) return false;
     p.t += dt;
-    S.load.k = Math.min(12, 1 + Math.floor(p.t / 0.7));
+    S.load.k = Math.min(12, 1 + Math.floor(p.t / 0.8));
     if (S.load.k >= 12) S.load.play = null;
     return true;
   }
   act(name, arg) {
     const L = S.load;
     if (name === 'demo') { L.play = { t: 0 }; L.k = 1; }
-    if (name === 'step') { L.play = null; L.k = Math.min(12, Math.max(0, L.k + 1)); }
+    if (name === 'step') { L.play = null; L.k = Math.min(12, Math.max(0, L.k + (arg || 1))); }
     if (name === 'reset') { L.k = 0; L.play = null; }
   }
 }
 
 const SNAP = [
-  ['P1 detail · upload 1', 1, 2, 'Detail chunks of cell P1 from upload 1. Upload 2 replaced them.'],
-  ['P1 detail · upload 2', 2, null, 'Detail chunks of P1 from upload 2, still current.'],
-  ['P2 detail · upload 1', 1, 3, 'Detail chunks of cell P2 from upload 1. Upload 3 replaced them.'],
-  ['P2 detail · upload 3', 3, null, 'Detail chunks of P2 from upload 3, still current.'],
-  ['L6 cell · upload 1', 1, 2, 'The level-6 overview as of upload 1. Every upload under the cell rebuilds it in its own commit.'],
-  ['L6 cell · upload 2', 2, 3, 'Rebuilt by upload 2, so it sees the new P1 sample.'],
-  ['L6 cell · upload 3', 3, null, 'Rebuilt by upload 3, so it sees the new P2 sample too.'],
-  ['id run · upload 1', 1, null, 'Runs stay live after a later upload. A background merge drops their stale entries.'],
-  ['id run · upload 2', 2, null, 'A second live run. Lookups search every live run.'],
-  ['id run · upload 3', 3, null, 'A third live run. The merge keeps the live count at 64 or fewer.'],
+  ['P1 detail · upload 1', 1, 2, 'Detail chunks of cell P1 from upload 1. Upload 2 replaced them.', 'detail'],
+  ['P1 detail · upload 2', 2, null, 'Detail chunks of P1 from upload 2, still current.', 'detail'],
+  ['P2 detail · upload 1', 1, 3, 'Detail chunks of cell P2 from upload 1. Upload 3 replaced them.', 'detail'],
+  ['P2 detail · upload 3', 3, null, 'Detail chunks of P2 from upload 3, still current.', 'detail'],
+  ['L6 cell · upload 1', 1, 2, 'The level-6 overview as of upload 1. Every upload under the cell rebuilds it in its own commit.', 'l6'],
+  ['L6 cell · upload 2', 2, 3, 'Rebuilt by upload 2, so it sees the new P1 sample.', 'l6'],
+  ['L6 cell · upload 3', 3, null, 'Rebuilt by upload 3, so it sees the new P2 sample too.', 'l6'],
+  ['id run · upload 1', 1, null, 'Runs stay live after a later upload. A background merge drops their stale entries.', 'idrun'],
+  ['id run · upload 2', 2, null, 'A second live run. Lookups search every live run.', 'idrun'],
+  ['id run · upload 3', 3, null, 'A third live run. The merge keeps the live count at 64 or fewer.', 'idrun'],
 ];
 const snapX = s => 330 + (s - 1) * 220;
+const snapBytes = (kind, c) => (kind === 'detail' ? c.Wr.chunkBytes + c.Wr.colBytes : kind === 'l6' ? 256 * K.zst : c.Wr.runBytes);
+const rowThickness = b => Math.min(16, Math.max(3, 3 + (13 * (Math.log10(Math.max(b, 1)) - 3)) / 6));
 
 class Snaps extends Fig {
   constructor() {
     super('fig-snaps', 1000, 336);
     [1, 2, 3].forEach(s => this.text(snapX(s), 22, `snapshot ${s}`, 'lab', 'middle'));
-    this.rows = SNAP.map(([name, b, e], i) => {
-      const y = 40 + i * 26, end = e === null ? snapX(3) + 120 : snapX(e);
+    SNAP.forEach(([name, b, e, , kind], i) => {
+      const y = 40 + i * 26, cy = y + 12, end = e === null ? snapX(3) + 120 : snapX(e);
       const sel = this.shape(8, y - 3, 984, 24, 0, { fill: true, stroke: false });
-      this.bind(() => { sel.color = S.snaps.sel === i ? P.lit : P.lane; sel.visible = S.snaps.sel === i; });
-      this.text(16, y + 14, name, 'r');
-      const bar = this.shape(snapX(b), y + 3, end - snapX(b), 18, 0, { fill: true, stroke: false });
-      this.bind(() => { const vis = b <= S.snaps.s && (e === null || S.snaps.s < e); bar.color = vis ? P.accent : P.band; });
+      this.bind(() => { sel.color = P.lit; sel.visible = S.snaps.sel === i; });
+      this.text(16, y + 15, name, 'lab');
+      const bar = this.shape(snapX(b), cy - 5, end - snapX(b), 10, 0, { fill: true, stroke: false });
+      const size = this.text(end + 8, cy + 4, '', 's');
+      this.bind(() => {
+        const c = this.cur, vis = b <= S.snaps.s && (e === null || S.snaps.s < e), bytes = snapBytes(kind, c), th = rowThickness(bytes);
+        this.place(bar, snapX(b), cy - th / 2, end - snapX(b), th);
+        bar.color = vis ? P.fg : P.band;
+        size.textContent = fmtBytes(bytes);
+      });
       this.hit(0, y - 3, 1000, 24, () => { S.snaps.sel = i; this.render(); refresh(); });
-      return name;
     });
-    this.cursor = new Zdog.Shape({ addTo: this.illo, path: [this.pt(snapX(1), 30), this.pt(snapX(1), 318)], closed: false, stroke: 1.5, color: P.accent, fill: false });
-    this.bind(() => { this.cursor.color = P.accent; this.cursor.translate.x = this.x(snapX(S.snaps.s)) - this.x(snapX(1)); });
+    this.cursor = new Zdog.Shape({ addTo: this.illo, path: [this.pt(snapX(1), 30), this.pt(snapX(1), 318)], closed: false, stroke: 1.5, color: P.fg, fill: false });
+    this.bind(() => {
+      this.cursor.color = P.fg;
+      this.cursor.translate.x = this.x(snapX(S.snaps.s)) - this.x(snapX(1));
+    });
     this.render();
   }
   step(dt) {
@@ -584,66 +884,112 @@ class Snaps extends Fig {
     if (name === 'demo') { N.play = { t: 0 }; N.s = 1; }
     if (name === 'reset') { N.s = 1; N.play = null; }
     if (name === 'set') { N.s = +arg; N.play = null; }
+    if (name === 'step') { N.play = null; N.s = Math.min(3, Math.max(1, N.s + arg)); }
   }
 }
 
 const REQS = [
-  { label: 'items?bbox=', steps: [['catalog overlay,', 'snapshot s'], ['prune: envelope', 'per chunk'], ['file bytes overlay,', 'blocks on a miss'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']], cost: 'chunks whose envelope meets the bbox', note: 'The cursor pins the snapshot and expires with 410 after 72 h.' },
-  { label: 'items?filter=', steps: [['catalog overlay,', 'snapshot s'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']], cost: 'candidate chunks, read whole', note: 'No postings yet: they are cut for v2 (see Decisions), so a dense cell is scanned.' },
-  { label: 'numberMatched', steps: [['catalog overlay,', 'snapshot s'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']], cost: 'column files of candidate chunks', note: 'Returned for filter requests. Omitted with a bbox alone, as in v1, because counting that would decode geometry.' },
-  { label: 'items?overview=N', steps: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['file bytes overlay', ''], ['FGB search', 'of the samples'], ['page by', '(key, id)']], cost: 'samples in view', note: 'N is 2, 4, 6, 8, 10 or 12. No filter. The client picks N; the server does not map zoom.' },
-  { label: 'items/{id}', steps: [['id runs overlay:', 'search each run'], ['candidate keys', 'name cells'], ['catalog: chunks', 'covering the key'], ['verify the id', 'in each chunk']], cost: 'live runs decoded in full, then one chunk per candidate', note: '200 for one feature, 404 for none, 409 when two cells hold the id.' },
-  { label: 'PUT ?base=s', steps: [['lock the', 'collection row'], ['check the cell', 'changed after s'], ['accept, or', 'answer 409']], cost: 'one count over partitions', note: 'Only the uploaded cell is checked. The blobs are written before the lock is taken.' },
+  { label: 'items?bbox=', lines: [['catalog overlay,', 'snapshot s'], ['prune: envelope', 'per chunk'], ['file bytes,', 'whole chunks'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']],
+    run: c => readBBox(c.f, c.page, c.link), note: 'Reads whole chunks, not just the matching rows: a page still moves every chunk it lands in. The cursor pins the snapshot.' },
+  { label: 'items?filter=', lines: [['catalog overlay,', 'snapshot s'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']],
+    run: c => readFilter(c.f, c.page, c.link), note: 'Worst case: no postings yet, so every chunk of the cell is a candidate and each one is read whole. Postings would remove most of this cost.' },
+  { label: 'numberMatched', lines: [['catalog overlay,', 'snapshot s'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
+    run: c => readCount(c.f, c.link), note: 'Counts from column files only, so it never decodes geometry. Omitted with a bbox alone, as in v1.' },
+  { label: 'items?overview=N', lines: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['samples,', 'LRU'], ['FGB search', 'of the samples'], ['page by', '(key, id)']],
+    run: c => readOverview(c.page, c.link), note: 'N is 2, 4, 6, 8, 10 or 12, chosen by the client. No filter. Samples are small, so overviews are the cheap way to show a whole area.' },
+  { label: 'items/{id}', lines: [['id runs overlay:', 'search each run'], ['candidate keys', 'name cells'], ['catalog: chunks', 'covering the key'], ['verify the id', 'in each chunk']],
+    run: c => readId(c.f, c.link), note: 'A cold lookup decodes every live run in full, which is why the id-run merge and a fence index are on the risk list.' },
+  { label: 'PUT ?base=s', lines: [['lock the', 'collection row'], ['check the cell', 'changed after s'], ['accept, or', 'answer 409']],
+    run: c => readBase(c.link), note: 'Only the uploaded cell is checked. The blobs are written before the lock is taken, so the lock covers a few rows.' },
 ];
-function reqGeom(n) {
+const reqGeom = n => {
   const BOX = 160, gap = (1000 - 40 - n * BOX) / Math.max(1, n - 1);
   return { BOX, xs: Array.from({ length: n }, (_, i) => 20 + i * (BOX + gap)) };
-}
-function playReads() {
-  S.reads.lit = new Set([0]);
-  S.reads.demo = { i: 0, t: 0 };
-}
+};
+const stepKind = st => (st.db ? 'db' : st.net ? 'net' : 'cpu');
 
 class Reads extends Fig {
   constructor() {
-    super('fig-reads', 1000, 200);
-    this.packet = new Zdog.Ellipse({ addTo: this.illo, diameter: 10, fill: true, stroke: false, visible: false });
-    this.parts = [];
-    this.build();
+    super('fig-reads', 1000, 286);
+    this.parts = []; this.nodes = []; this.builtFor = -1; this.run = null;
+    this.packet = new Zdog.Ellipse({ addTo: this.illo, diameter: 8, fill: true, stroke: false, visible: false });
+    for (const row of [{ y: 214, label: 'read from Postgres', key: 'db', kind: 'db' }, { y: 246, label: 'returned to the client', key: 'net', kind: 'net' }]) {
+      const bar = this.shape(300, row.y, 1, 14, 0, { fill: true, stroke: false });
+      this.text(10, row.y + 11, row.label, 'v');
+      const val = this.text(308, row.y + 11, '', 'v');
+      this.bind(() => {
+        const bytes = this.run ? this.run[row.key] : 0;
+        this.place(bar, 300, row.y, 540 * logFrac(bytes, 3, 10), 14);
+        bar.color = P[row.kind];
+        val.setAttribute('x', 300 + 540 * logFrac(bytes, 3, 10) + 8);
+        val.textContent = fmtBytes(bytes);
+      });
+    }
+    this.baseBinds = this.binds.slice();
     this.render();
   }
   build() {
-    for (const p of this.parts) p.forEach(s => s.remove());
-    this.parts = [];
-    this.binds = [];
-    this.svg.querySelectorAll('text, rect.hit').forEach(n => n.remove());
-    const R = REQS[S.reads.req], n = R.steps.length, { BOX, xs } = reqGeom(n);
-    R.steps.forEach(([l1, l2], i) => {
-      const f = this.shape(xs[i], 40, BOX, 84, 6, { fill: true, stroke: false });
-      const e = this.shape(xs[i], 40, BOX, 84, 6, { fill: false, stroke: 1.2 });
-      this.parts.push([f, e]);
-      this.bind(() => { f.color = S.reads.lit.has(i) ? P.fillLit : P.fill; e.color = S.reads.sel === i ? P.accent : P.line; e.stroke = S.reads.sel === i ? 2.4 : 1.2; });
-      this.text(xs[i] + 10, 62, l1, 'r');
-      if (l2) this.text(xs[i] + 10, 78, l2, 'r');
-      this.hit(xs[i], 40, BOX, 84, () => { S.reads.sel = i; this.render(); refresh(); });
+    for (const s of this.parts) s.remove();
+    for (const el of this.nodes) el.remove();
+    this.parts = []; this.nodes = []; this.binds = this.baseBinds.slice();
+    const R = REQS[S.reads.req], n = R.lines.length, { BOX, xs } = reqGeom(n);
+    R.lines.forEach(([l1, l2], i) => {
+      const x = xs[i];
+      const f = this.shape(x, 50, BOX, 84, 6, { fill: true, stroke: false });
+      const o = this.shape(x, 50, BOX, 84, 6, { fill: false, stroke: 1.2 });
+      const track = this.shape(x + 10, 122, BOX - 20, 4, 0, { fill: true, stroke: false });
+      const meter = this.shape(x + 10, 122, 1, 4, 0, { fill: true, stroke: false });
+      const t1 = this.text(x + 10, 68, l1, 'v');
+      const t2 = this.text(x + 10, 84, l2, 'v');
+      const c1 = this.text(x + 10, 150, '', 's');
+      const c2 = this.text(x + 10, 165, '', 's');
+      const hit = this.hit(x, 50, BOX, 84, () => { S.reads.sel = i; this.render(); refresh(); });
+      this.parts.push(f, o, track, meter);
+      this.nodes.push(t1, t2, c1, c2, hit);
+      this.bind(() => {
+        const st = this.run.steps[i], on = S.reads.sel === i, lit = S.reads.lit.has(i);
+        f.color = lit ? P.fillLit : P.fill;
+        o.color = on ? P.fg : P.line;
+        o.stroke = on ? 2.2 : 1.2;
+        track.color = P.track;
+        const share = st.t / this.run.total;
+        const progress = S.reads.demo && S.reads.demo.i === i ? S.reads.demo.t / (S.reads.demo.dur || 1) : 1;
+        this.place(meter, x + 10, 122, (BOX - 20) * share * progress, 4);
+        meter.color = P[stepKind(st)];
+        c1.textContent = [st.db ? `DB ${fmtBytes(st.db)}` : '', st.net ? `NET ${fmtBytes(st.net)}` : ''].filter(Boolean).join('  ') || 'no bytes moved';
+        c2.textContent = st.cpu ? `CPU ${fmtTime(st.cpu)}` : `${fmtTime(st.t)} total`;
+      });
     });
     for (let i = 0; i + 1 < n; i++) {
-      const arrow = [[xs[i] + BOX, 82], [xs[i + 1], 82]];
-      const l = this.line(arrow, 1.25);
-      const h = this.head(arrow);
-      this.parts.push([l, h]);
-      this.bind(() => { l.color = P.mut; h.color = P.mut; });
+      const pts = [[xs[i] + BOX, 92], [xs[i + 1], 92]];
+      const seg = this.line(pts, 1), head = this.head(pts);
+      this.parts.push(seg, head);
+      this.bind(() => {
+        const st = this.run.steps[i + 1], bytes = st.db + st.net;
+        seg.stroke = wStroke(bytes);
+        seg.color = P.mut;
+        head.color = P.mut;
+      });
     }
-    this.costText = this.text(500, 160, 'cost driver: ' + R.cost, 'm', 'middle');
+    const cost = this.text(500, 200, '', 'v', 'middle');
+    this.nodes.push(cost);
+    this.bind(() => {
+      cost.textContent = `DB read ${fmtBytes(this.run.db)} · returned ${fmtBytes(this.run.net)} · CPU ${fmtTime(this.run.cpu)} · about ${fmtTime(this.run.total)} end to end`;
+    });
   }
   paint() {
+    this.cur = costNow();
+    this.run = REQS[S.reads.req].run(this.cur);
+    if (this.builtFor !== S.reads.req) { this.builtFor = S.reads.req; this.build(); }
     super.paint();
-    const d = S.reads.demo;
-    this.packet.visible = !!d;
-    this.packet.color = P.accent;
-    if (d) {
-      const { BOX, xs } = reqGeom(REQS[S.reads.req].steps.length);
-      const [x, y] = along([[xs[d.i] + BOX, 82], [xs[d.i + 1], 82]], d.t / EDGE_T);
+    const d = S.reads.demo, { BOX, xs } = reqGeom(this.run.steps.length);
+    this.packet.visible = !!(d && d.i > 0);
+    if (d && d.i > 0) {
+      const st = this.run.steps[d.i];
+      const [x, y] = along([[xs[d.i - 1] + BOX, 92], [xs[d.i], 92]], d.t / (d.dur || 1));
+      this.packet.diameter = 2 * wPacket(st.db + st.net || 1);
+      this.packet.updatePath();
+      this.packet.color = P[stepKind(st)];
       this.packet.translate.x = this.x(x);
       this.packet.translate.y = this.y(y);
     }
@@ -651,27 +997,47 @@ class Reads extends Fig {
   step(dt) {
     const d = S.reads.demo;
     if (!d) return false;
+    const run = REQS[S.reads.req].run(costNow()), st = run.steps[d.i];
+    if (d.dur == null) d.dur = wDur(st.t);
     d.t += dt;
-    if (d.t >= EDGE_T) {
-      S.reads.lit.add(d.i + 1);
-      d.i++;
-      d.t = 0;
-      if (d.i >= REQS[S.reads.req].steps.length - 1) S.reads.demo = null;
+    if (d.t >= d.dur) {
+      S.reads.lit.add(d.i);
+      d.i++; d.t = 0; d.dur = null;
+      if (d.i >= run.steps.length) S.reads.demo = null;
     }
     return true;
   }
   act(name, arg) {
     const Q = S.reads;
-    if (name === 'demo') playReads();
+    if (name === 'req') { Q.req = +arg; Q.sel = 0; Q.lit = new Set(); Q.demo = null; }
+    if (name === 'step') { Q.req = (Q.req + arg + REQS.length) % REQS.length; Q.sel = 0; Q.lit = new Set(); Q.demo = null; }
+    if (name === 'demo') { Q.lit = new Set(); Q.demo = { i: 0, t: 0, dur: null }; }
     if (name === 'reset') { Q.lit = new Set(); Q.demo = null; }
-    if (name === 'req' || name === 'step') {
-      const next = name === 'req' ? +arg : (Q.req + arg + REQS.length) % REQS.length;
-      Q.req = next;
-      Q.sel = 0;
-      Q.lit = new Set();
-      Q.demo = null;
-      this.build();
-    }
+  }
+}
+
+class Costs extends Fig {
+  constructor() {
+    super('fig-costs', 1000, 440);
+    this.text(10, 22, 'bytes moved (network + Postgres), log scale · upper bar = typical cell 12k, lower bar = dense cell 2.5M', 'lab');
+    actions(TYPICAL).forEach((_, i) => {
+      const y = 40 + i * 48;
+      const name = this.text(10, y + 19, '', 'v');
+      [0, 1].forEach(k => {
+        const by = y + 2 + k * 20;
+        const bar = this.shape(330, by, 1, 14, 0, { fill: true, stroke: false });
+        const val = this.text(330, by + 11, '', 's');
+        this.bind(() => {
+          const r = actions(k ? DENSE : TYPICAL)[i], bytes = r.net + r.db;
+          this.place(bar, 330, by, 540 * logFrac(bytes, 2, 10), 14);
+          bar.color = k ? P.fg : P.mut;
+          val.setAttribute('x', 330 + 540 * logFrac(bytes, 2, 10) + 8);
+          val.textContent = fmtBytes(bytes);
+        });
+      });
+      this.bind(() => { name.textContent = actions(TYPICAL)[i].name; });
+    });
+    this.render();
   }
 }
 
@@ -680,71 +1046,24 @@ class Budget extends Fig {
     super('fig-budget', 1000, 40);
     const track = this.shape(0, 12, 1000, 16, 8, { fill: true, stroke: false });
     const used = this.shape(0, 12, 480, 16, 8, { fill: true, stroke: false });
-    this.bind(() => { track.color = P.band; used.color = P.accent; });
+    this.bind(() => { track.color = P.track; used.color = P.fg; });
     this.render();
   }
 }
 
-const FIGS = {
-  model: new Model(),
-  ladder: new Ladder(),
-  load: new Load(),
-  snaps: new Snaps(),
-  reads: new Reads(),
-  decide: new Budget(),
-};
-function set(sel, text) {
-  const el = $(sel);
-  if (el) el.textContent = text;
-}
-function syncLadder() {
-  const z = Math.round(S.ladder.z), c = counts(z), pick = c.findIndex(v => v >= 100 && v <= 2000), r = $('#z-range');
-  if (r && document.activeElement !== r) r.value = z;
-  set('#z-val', z);
-  set('#z-pick', pick < 0 ? 'No level falls in the band at this zoom. Coarser levels 6, 4 and 2 serve it.' : `Ask for ${LEVELS[pick][2]}: ${fmt(c[pick])} features on screen, the finest level in the band.`);
-}
-function syncLoad() {
-  const k = S.load.k, cur = k === 0 ? S.load.sel : k <= 6 ? k - 1 : 6;
-  S.load.sel = cur;
-  set('#l-title', STAGES[cur][0]);
-  set('#l-text', STAGES[cur][2]);
-  set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of 6: ${SUBS[k - 7]}.` : '');
-}
-function syncSnaps() {
-  const N = S.snaps, r = $('#s-range'), row = SNAP[N.sel];
-  if (r && document.activeElement !== r) r.value = N.s;
-  set('#s-val', N.s);
-  set('#s-base', `P1 upload that read snapshot ${N.s}: ${N.s >= 2 ? 'accepted' : '409, P1 changed at 2'}. P2 upload: ${N.s >= 3 ? 'accepted' : '409, P2 changed at 3'}.`);
-  set('#s-row', row ? `${row[0]}: ${row[3]} Visible from snapshot ${row[1]}${row[2] ? `, up to but not including ${row[2]}` : ' onwards'}.` : 'Click a row for its detail.');
-}
-function syncReads() {
-  const Q = S.reads, R = REQS[Q.req];
-  set('#r-title', R.label);
-  set('#r-step', `Step ${Q.sel + 1} of ${R.steps.length}: ${R.steps[Q.sel].join(' ').trim()}.`);
-  set('#r-note', R.note);
-  set('#r-cost', 'Cost driver: ' + R.cost + '.');
-  document.querySelectorAll('#chips button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === Q.req)));
-}
-function sync() {
-  if (S.tab === 'ladder') syncLadder();
-  if (S.tab === 'load') syncLoad();
-  if (S.tab === 'snaps') syncSnaps();
-  if (S.tab === 'reads') syncReads();
-}
-
-const list = items => (items.length ? `<ul>${items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '');
 const SIDE = {
   model() {
-    const n = MODEL[S.model.sel];
-    return `<h2>${esc(n.t)}</h2><p>${esc(n.text)}</p>` +
+    const c = costNow(), n = MODEL[S.model.sel];
+    const dl = [['cost at this workload', `${n.l1(c)} · ${n.l2(c)}`], ['share of flow time', n.share ? pct(n.share(c)) : 'not part of the time budget']];
+    return `<h2>${esc(n.t)}</h2><p>${esc(n.text)}</p><dl>${dl.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` +
       (n.layout.length ? `<h3>layout</h3>${list(n.layout)}` : '') +
       (n.index.length ? `<h3>index</h3>${list(n.index)}` : '') +
-      `<div class="ctl"><button class="btn" data-act="demo">Write (D)</button><button class="btn" data-act="read">Read (E)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
+      `<div class="ctl"><button class="btn" data-act="write">Write (D)</button><button class="btn" data-act="read">Read (E)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   ladder() {
     return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
-      <input type="range" id="z-range" min="2" max="17" step="1" data-act="set" aria-label="Zoom">
-      <p class="note">Estimates for one dense cell: 1,900 features per km², a 1024 × 768 screen at 48° N. The band is an assumption to review.</p>
+      <input type="range" id="z-range" min="2" max="17" step="1" aria-label="Zoom level">
+      <p class="note">Estimates for one dense cell: 1,900 features per km², a 1024 × 768 screen at 48° N. The band (100 to 2,000 features on screen) is an assumption to review.</p>
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   load() {
@@ -753,9 +1072,9 @@ const SIDE = {
   },
   snaps() {
     return `<h2>Snapshot <span id="s-val"></span></h2>
-      <p>A reader pinned to snapshot s sees each row whose begin ≤ s and s &lt; end.</p>
-      <input type="range" id="s-range" min="1" max="3" step="1" data-act="set" aria-label="Snapshot">
-      <p class="note" id="s-base"></p><p class="note" id="s-row"></p>
+      <p>A reader pinned to snapshot s sees each row whose begin ≤ s and s &lt; end. A row’s thickness is its bytes.</p>
+      <input type="range" id="s-range" min="1" max="3" step="1" aria-label="Snapshot">
+      <p class="note" id="s-base"></p><p class="note" id="s-row"></p><p class="note" id="s-retained"></p>
       <div class="ctl"><button class="btn" data-act="demo">Play (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   reads() {
@@ -763,6 +1082,66 @@ const SIDE = {
       <div class="ctl"><button class="btn" data-act="demo">Demo (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
 };
+
+function syncModel() {
+  const d = S.model.demo, c = costNow();
+  if (!d) { set('#status-model', 'Click a box for its layout, cost and indexes. D replays the write path; E replays the read path.'); return; }
+  const cs = d.seq[d.i];
+  if (cs.e) set('#status-model', `Moving ${fmtBytes(cs.b)} for ${fmtTime(cs.t)} on the link or Postgres`);
+  else set('#status-model', `${MODEL[cs.box].t}: ${fmtTime(cs.t)} of work, ${MODEL[cs.box].l2(c)}`);
+}
+function syncLadder() {
+  const z = Math.round(S.ladder.z), counts = onScreen(z), pick = counts.findIndex(v => v >= 100 && v <= 2000), r = $('#z-range');
+  if (r && document.activeElement !== r) r.value = z;
+  set('#z-val', z);
+  set('#z-pick', pick < 0 ? 'No level falls in the band at this zoom. Coarser levels 6, 4 and 2 serve it.' : `Ask for ${LEVELS[pick][2]}: ${fmt(counts[pick])} features on screen, the finest level in the band, ${fmtBytes(counts[pick] * K.zst)} over the link.`);
+  set('#status-ladder', `Zoom ${z}: detail would move ${fmtBytes(counts[0] * K.zst)} (${fmtTime((counts[0] * K.zst) / W.link)}) over the link.`);
+}
+function syncLoad() {
+  const k = S.load.k, cur = k === 0 ? S.load.sel : k <= 6 ? k - 1 : 6;
+  S.load.sel = cur;
+  const st = STAGES[cur], c = costNow();
+  set('#l-title', st.t);
+  set('#l-text', st.text);
+  set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of 6: ${SUBS[k - 7]}.` : '');
+  set('#status-load', k === 0 ? 'Demo runs one upload through its seven stages.' : `Stage ${cur + 1} of 7 · ${st.t}: ${st.l1(c)}, ${st.l2(c)}.`);
+}
+function syncSnaps() {
+  const N = S.snaps, r = $('#s-range'), row = SNAP[N.sel], c = costNow();
+  if (r && document.activeElement !== r) r.value = N.s;
+  set('#s-val', N.s);
+  set('#s-base', `P1 upload that read snapshot ${N.s}: ${N.s >= 2 ? 'accepted' : '409, because P1 changed at 2'}. P2 upload: ${N.s >= 3 ? 'accepted' : '409, because P2 changed at 3'}.`);
+  set('#s-row', row ? `${row[0]}: ${row[3]} Visible from snapshot ${row[1]}${row[2] ? `, up to but not including ${row[2]}` : ' onwards'}. Size ${fmtBytes(snapBytes(row[4], c))}.` : 'Click a row for its detail.');
+  const retained = SNAP.filter(x => x[2] !== null).reduce((a, x) => a + snapBytes(x[4], c), 0);
+  set('#s-retained', `Replaced rows kept for 72 h before reaping: ${fmtBytes(retained)} at this cell size.`);
+  set('#status-snaps', `Snapshot ${N.s}: ${SNAP.filter(x => x[1] <= N.s && (x[2] === null || N.s < x[2])).length} of ${SNAP.length} rows visible.`);
+}
+function syncReads() {
+  const Q = S.reads, R = REQS[Q.req], run = R.run(costNow());
+  const st = run.steps[Q.sel] || run.steps[0];
+  set('#r-title', R.label);
+  set('#r-step', `Step ${Q.sel + 1} of ${run.steps.length}: ${st.name}.${st.db ? ` Reads ${fmtBytes(st.db)} from Postgres.` : ''}${st.net ? ` Sends ${fmtBytes(st.net)}.` : ''}${st.cpu ? ` CPU ${fmtTime(st.cpu)}.` : ''}`);
+  set('#r-note', R.note);
+  set('#r-cost', `Whole request: reads ${fmtBytes(run.db)} and returns ${fmtBytes(run.net)}${run.net >= 1024 ? ` (${fmt(run.db / run.net)}× read amplification)` : ''}, CPU ${fmtTime(run.cpu)}, about ${fmtTime(run.total)} end to end.`);
+  set('#status-reads', `${R.label}: reads ${fmtBytes(run.db)} for ${fmtBytes(run.net)} returned.`);
+  document.querySelectorAll('#chips button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === Q.req)));
+}
+function syncCosts() {
+  const typ = actions(TYPICAL), den = actions(DENSE);
+  $('#cost-body').innerHTML = typ.map((t, i) => {
+    const d = den[i];
+    return `<tr><td>${esc(t.name)}</td><td>${fmtBytes(t.net)}</td><td>${fmtBytes(t.db)}</td><td>${t.cpu ? fmtTime(t.cpu) : '—'}</td><td>${fmtBytes(d.net)}</td><td>${fmtBytes(d.db)}</td><td>${d.cpu ? fmtTime(d.cpu) : '—'}</td></tr>`;
+  }).join('');
+  set('#cost-note', `Link ${W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'} and page of ${fmt(W.page)} come from the workload bar. Measured: sizes per feature (buildings_fr) and the ingest rate on 6 cores (27–32 s per million features). Estimated: the CPU split inside an upload, Postgres at 500 MB/s, zstd decode at 1 GB/s, and a 0.1 s commit. The bars and this table use the same numbers.`);
+}
+function sync() {
+  if (S.tab === 'model') syncModel();
+  if (S.tab === 'ladder') syncLadder();
+  if (S.tab === 'load') syncLoad();
+  if (S.tab === 'snaps') syncSnaps();
+  if (S.tab === 'reads') syncReads();
+  if (S.tab === 'costs') syncCosts();
+}
 function refresh() {
   const el = $('#side-' + S.tab);
   if (el && SIDE[S.tab]) el.innerHTML = SIDE[S.tab]();
@@ -775,37 +1154,63 @@ function act(tab, name, arg) {
   f.render();
   sync();
 }
+
+const FIGS = {};
 function show(tab) {
   S.tab = tab;
   document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + tab));
+  document.querySelectorAll('main > section').forEach(t => t.classList.toggle('on', t.id === 'tab-' + tab));
   if (FIGS[tab]) FIGS[tab].show();
   refresh();
   history.replaceState(null, '', '#' + tab);
 }
+function setPressed() {
+  document.querySelectorAll('[data-link]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.link === W.link)));
+  document.querySelectorAll('[data-page]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.page === W.page)));
+  document.querySelectorAll('[data-f]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.f === W.f)));
+}
+function sizeLabel(f) {
+  if (f === 1) return 'one feature';
+  if (Math.abs(f - 12000) / 12000 < 0.25) return 'mean cell';
+  if (f >= 1e6) return 'dense cell';
+  return '';
+}
+function renderAll() {
+  for (const f of Object.values(FIGS)) f.render();
+  const c = costNow(), label = sizeLabel(W.f);
+  set('#f-out', `${fmt(W.f)} features${label ? ` · ${label}` : ''}`);
+  set('#wl-sum', `Upload ${fmtBytes(c.Wr.upload)} · ingest about ${fmtTime(c.Wr.total)} · decoded memory ${fmtBytes(c.Wr.memory)} · a page of ${fmt(Math.min(W.page, W.f))} reads ${fmtBytes(c.Rd.db)} from Postgres and returns ${fmtBytes(c.Rd.net)} · a worst-case filter on this cell reads ${fmtBytes(readFilter(W.f, W.page, W.link).db)}.`);
+  setPressed();
+}
+function workloadChanged() { renderAll(); refresh(); }
 function setTheme(name) {
   P = PAL[name];
   for (const k in P) document.documentElement.style.setProperty('--' + k, P[k]);
   document.documentElement.dataset.theme = name;
   document.documentElement.style.colorScheme = name;
-  $('#theme').textContent = 'theme: ' + name;
-  for (const f of Object.values(FIGS)) f.render();
+  set('#theme', 'theme: ' + name);
+  renderAll();
 }
 
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.tab)));
 $('#theme').addEventListener('click', () => setTheme(P === PAL.dark ? 'light' : 'dark'));
+$('#f-range').addEventListener('input', e => { W.f = Math.max(1, Math.round(10 ** +e.target.value)); workloadChanged(); });
+document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { W.f = +b.dataset.f; $('#f-range').value = Math.log10(W.f).toFixed(2); workloadChanged(); }));
+document.querySelectorAll('[data-link]').forEach(b => b.addEventListener('click', () => { W.link = +b.dataset.link; workloadChanged(); }));
+document.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', () => { W.page = +b.dataset.page; workloadChanged(); }));
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
   if (b) act(b.dataset.act === 'req' ? 'reads' : S.tab, b.dataset.act, b.dataset.arg);
 });
 document.addEventListener('input', e => {
-  if (e.target.dataset && e.target.dataset.act === 'set') act(S.tab, 'set', e.target.value);
+  if (e.target.id === 'z-range') act('ladder', 'set', e.target.value);
+  if (e.target.id === 's-range') act('snaps', 'set', e.target.value);
 });
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const order = ['model', 'ladder', 'load', 'snaps', 'reads', 'decide'];
-  if (/^[1-6]$/.test(k)) show(order[+k - 1]);
+  const order = ['model', 'ladder', 'load', 'snaps', 'reads', 'costs', 'decide'];
+  if (/^[1-7]$/.test(k)) show(order[+k - 1]);
   else if (k === 't') setTheme(P === PAL.dark ? 'light' : 'dark');
   else if (k === 'd') act(S.tab, 'demo');
   else if (k === 'e' && S.tab === 'model') act('model', 'read');
@@ -814,6 +1219,17 @@ document.addEventListener('keydown', e => {
   else if (k === 'ArrowLeft') act(S.tab, 'step', -1);
 });
 window.addEventListener('resize', () => { if (FIGS[S.tab]) FIGS[S.tab].render(); });
+
+FIGS.model = new Model();
+FIGS.ladder = new Ladder();
+FIGS.load = new Load();
+FIGS.snaps = new Snaps();
+FIGS.reads = new Reads();
+FIGS.costs = new Costs();
+FIGS.decide = new Budget();
+$('#chips').innerHTML = REQS.map((q, i) => `<button class="btn" data-act="req" data-arg="${i}">${esc(q.label)}</button>`).join('');
+$('#f-range').value = Math.log10(W.f).toFixed(2);
+setTheme('dark');
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -822,10 +1238,8 @@ function frame(now) {
   if (f && f.step(dt)) { f.render(); sync(); }
   requestAnimationFrame(frame);
 }
-$('#chips').innerHTML = REQS.map((q, i) => `<button class="btn" data-act="req" data-arg="${i}">${esc(q.label)}</button>`).join('');
-setTheme('dark');
 const start = location.hash.slice(1);
-show(['model', 'ladder', 'load', 'snaps', 'reads', 'decide'].includes(start) ? start : 'model');
+show(['model', 'ladder', 'load', 'snaps', 'reads', 'costs', 'decide'].includes(start) ? start : 'model');
 requestAnimationFrame(frame);
 </script>
 </body>
