@@ -10,7 +10,7 @@ Steps 1 to 3 are built under `/v2`, alongside the current contract. DESIGN.md is
 - **Built in step 2:** a column file per chunk, in the same row order as its FlatGeobuf; zone maps (`min`, `max` and `nulls` per column) in the chunk row (migration 0033); CQL2 and property-equality filters evaluated exactly on the column values; `numberMatched` for filter-only requests.
 - **Built in step 3:** id runs (migration 0032) and `GET /v2/collections/{id}/items/{featureID}`. Uniqueness across partitions is the loader's job, so the server checks ids only within a body (422), and a lookup that finds the id in more than one partition answers 409.
 - **Built for caching:** byte-budgeted LRUs per worker (`internal/lru`, 256 MiB each): file bytes by `file_id` (filled once per file), each snapshot's chunk list (the catalog cache, which loads the whole list rather than applying deltas; snapshots are immutable, so entries never go stale), and decoded id runs. On the 30k corpus a repeated count over 1,751 chunks falls from 0.69 s to 0.13 s, and a repeated bbox plus filter from 0.25 s to 0.11 s, both with the block cache alone; the catalog cache is not yet measured at scale.
-- **Built in step 5:** overview levels 8 and 10 per partition, level 12 for partitions above 100,000 features, and levels 6, 4 and 2 rebuilt in the same commit as each load, from the level below. Samples keep full geometry. Overview requests take a level, no filter, and are paged like detail; lookups and `numberMatched` read detail only. Conditional loads (`base=`) are built too: they answer 409 when a listed partition changed after the base snapshot.
+- **Built in step 5:** overview levels 8 and 10 per partition, level 12 for partitions above 100,000 features, and levels 6, 4 and 2 rebuilt in the same commit as each load, from the level below. Samples keep full geometry. Overview requests take a level, no filter, and are paged like detail; lookups and `numberMatched` read detail only. Conditional loads (`base=`) are built too: they answer 409 when a listed partition changed after the base snapshot. **Decided, not built:** two overview levels only, 8 and 12, each built from the upload's own cell (see Overview levels).
 - **Decided, not built:** one `.fgb.zst` per level-8 cell is the only upload, so the streaming, bucketing and spill steps go; each upload is its own snapshot; id runs are merged in the background. The `/v2` load still takes multi-cell FlatGeobuf bodies and buckets them in memory. See Write path and Decisions.
 - **Verified:**
   - `testdata/corpus/mixed.fgb` (30,000 features: every scalar type, nulls, arrays, LIKE, ranges, datetime and bbox) loaded as a v2 collection in 2.8 s. The 93 filters in `filters.txt` without a bbox return the expected count through both the item list and `numberMatched`, and the five bbox filters return their expected counts through the item list. The two `datetime` lines are v1-only and skipped.
@@ -95,11 +95,11 @@ Empty partitions have no rows at all.
 1. Decompress the file and parse its features once: key each by its bbox centre (S2 level 30), check the cell and the ids, and keep (key, id, offset).
 2. Sort by `(key, id)` and cut chunks at 2 MiB or 50,000 features.
 3. Encode each chunk: FGB (zstd), the column file in the same row order, and the zone maps.
-4. Build the cell's overviews: samples at levels 8 and 10, and at level 12 above 100,000 features. Build the cell's id run.
+4. Build the cell's samples: level 8 for the partition, and level 12 above 100,000 features. Build the cell's id run.
 5. Write every file as blocks, each in its own transaction, unpublished until the commit.
-6. Commit in one short transaction: lock the collection row, so commits serialize; check `base` against the cell's `changed` snapshot; end the cell's live chunks and overview rows; insert the new rows; rebuild the level-6, 4 and 2 ancestors from the samples below them, in the same commit; insert the id run and the snapshot row; advance the collection; publish the files.
+6. Commit in one short transaction: lock the collection row, so commits serialize; check `base` against the cell's `changed` snapshot; end the cell's live chunks and samples; insert the new rows; insert the id run and the snapshot row; advance the collection; publish the files.
 
-Cost is proportional to one cell plus its ancestors, never to the collection. Commits serialize per collection, so snapshots become visible in order. A request reads one snapshot from its first row to its last, and that snapshot's contents do not change while it runs. The commit transaction is milliseconds, because all bulk work happens before it.
+Cost is proportional to one cell, never to the collection. Commits serialize per collection, so snapshots become visible in order. A request reads one snapshot from its first row to its last, and that snapshot's contents do not change while it runs. The commit transaction is milliseconds, because all bulk work happens before it.
 
 ## Postings (cut for now; see Decisions)
 
@@ -111,13 +111,13 @@ Cost is proportional to one cell plus its ancestors, never to the collection. Co
 
 ## Overview levels
 
-Each overview level is a sampled copy of the collection in FlatGeobuf, and all of them are built: levels 8 and 10 per partition at load, level 12 for partitions above 100,000 features, and levels 6, 4 and 2 per cell in the commit. The server does not map zoom to levels; the client asks with `overview=`.
+Two overview levels, and each is built from the upload's own cell: level 8 for every partition, and level 12 for partitions above 100,000 features. There are no coarser levels and no level 10. A sample comes from the features of one cell, so no upload reads another cell's samples and the commit writes nothing outside its partition. The server does not map zoom to levels; the client asks with `overview=8` or `overview=12`.
 
-- **Sampling:** level `L` keeps, in every level-`L` S2 cell, the `cap` features with the smallest `hash(id)`, simplified with that level's Douglas–Peucker tolerance.
-  - Sparse cells keep all their features and dense ones keep `cap`, so every level covers the extent evenly.
-  - A feature kept at a coarse level is kept at every finer one, so each level is built from the next finer level, never from a rescan.
-- **Levels 10 and 8:** level 10 is finer than a partition and level 8 is the partition itself. Each has one file per partition, built at load and atomic with detail.
-- **Levels 6, 4 and 2** are coarser: one overview per level-`L` cell, at most `cap` features each, rebuilt in the commit of every upload under the cell, from the samples below it. The rebuild shares the upload's snapshot, so `base=` checks stay exact.
+- **Sampling:** each cell of the level keeps the `cap` features with the smallest `hash(id)`, with `cap` = 256. A cell with fewer features keeps all of them, so every level covers the extent evenly.
+- **Level 8** is the partition itself: one file per partition, built at load and atomic with detail.
+- **Level 12** is built only above 100,000 features: up to 256 level-12 cells per partition, each with up to 256 samples, built at load and atomic with detail.
+- **Coverage:** in a dense partition with a 1,000-feature page, level 8 serves about zoom 11 to 14 and level 12 zooms 15 and 16. Below zoom 11 no level fits one page.
+- Samples keep full geometry. Simplification is not built.
 
 ## Read path
 
@@ -132,7 +132,7 @@ Each overview level is a sampled copy of the collection in FlatGeobuf, and all o
 
   As built: steps 1 and 3, without the integer-code comparison. Zone maps hold each column's `min`, `max` and null count from the column file header, and a chunk is skipped only when no row can match. Numeric comparisons and `BETWEEN` use non-strict tests on float64 bounds, because float64 rounding is monotone and a strict test could drop a match near 2^53. `IS NULL` needs a null, and `IN` is an OR of equalities. `NOT`, `LIKE`, `<>`, text and boolean columns, and unknown columns prune nothing. There are no Bloom filters. A candidate chunk's FGB is read whole, not only the matching features. `numberMatched` is returned for filter-only requests and omitted with a bbox, as in v1, because counting it would decode geometry.
 - **By id:** each live id run is binary-searched for the id's hash. Each candidate key names a partition, and the chunks of that partition whose key range covers the key are read at the current snapshot and searched for the id. No hit answers 404, one hit answers with the feature, and more answer 409.
-- **Overview:** `overview=N` names the S2 level directly (2, 4, 6, 8, 10 or 12), and the client maps zoom to N. The response is one streamed FGB (or GeoJSON). There is no single-file `items.fgb`.
+- **Overview:** `overview=N` names the S2 level directly (8 or 12), and the client maps zoom to N. The response is one streamed FGB (or GeoJSON). There is no single-file `items.fgb`.
 - **Paging:** a cursor carries only the collection, the tier and the `(key, id)` of the last feature returned. Each page reads the latest snapshot, so an upload between two pages changes the rest of the walk: features it adds after the cursor appear, features it adds before the cursor are not returned by this walk, and a feature moved from before the cursor to after it can appear twice. Each page is still one snapshot. Cursors never expire; a malformed or foreign cursor answers 400.
 - **CQL2:** evaluation is unchanged (`internal/cql`), applied to column values.
 
@@ -211,7 +211,7 @@ The design page (`/design`) draws every figure from one cost model, so the visua
 | Id-run entry | 15 B | 13–16 B per feature per run (Identity) |
 | Chunk | 2 MiB uncompressed, about 4,460 features | Chunks section and 470 B per feature |
 | Chunk catalog row | 200 B | estimate |
-| Samples | 256 per L8 cell; 256 per L10 cell (16 per partition); 256 per L12 cell (256 per partition) above 100,000 features | Overview levels |
+| Samples | 256 per L8 cell (the partition); 256 per L12 cell (256 per partition) above 100,000 features | Overview levels |
 | Ingest CPU | 30 µs wall per feature on 6 cores | measured: 27–32 s per million features |
 | CPU split inside an upload | decode 25%, validate 5%, sort and cut 10%, encode with samples and id run 60% | estimate |
 | Commit | 0.1 s, independent of size | estimate |
@@ -257,7 +257,7 @@ Per action, for one cell of N features and a page of P features:
 2. (built) Column files and zone maps: attribute filters and exact `numberMatched`.
 3. (built) Id runs: `/items/{id}` and duplicate detection at lookup. Uniqueness across partitions stays the loader's job.
 4. Postings and the busy rule: cut from v2 for now (see Decisions).
-5. Overview levels: built (see Implementation status).
+5. Overview levels: built as 8, 10, 12, 6, 4 and 2; cut to 8 and 12 (decided, not built).
 6. Reaping after the grace period (next). Conditional loads (`base=`) are built.
 7. One upload per level-8 cell, with no streaming, bucketing or spill (decided, not built): the multi-cell body path goes, and each upload commits its own snapshot.
 8. Background id-run merge (decided, not built), then a fence index per run before lookups scale (see Risks).
@@ -266,7 +266,8 @@ Per action, for one cell of N features and a page of P features:
 
 These close the open questions. Where the gain is marginal, each one takes the option with less code.
 
-- **Overview levels:** 10 and 8 per partition at load, 12 for partitions above 100,000 features, and 6, 4 and 2 per cell, rebuilt in the same commit from the level below. `cap` = 256 at every level. Samples keep full geometry and column files, so there is no simplification step yet. Douglas–Peucker from `paulmach/orb` is the tool if response sizes need it.
+- **Overview levels:** 8 for every partition and 12 for partitions above 100,000 features, both built from the upload's own cell. Levels 10, 6, 4 and 2 and the commit-time rebuild are cut. Decided, not built yet.
+- **Ingest:** each upload is one level-8 cell. The server reads only that body and writes only that cell's rows, so no other partition is read or written. `cap` = 256 at every level. Samples keep full geometry and column files, so there is no simplification step yet. Douglas–Peucker from `paulmach/orb` is the tool if response sizes need it.
 - **Zoom mapping:** none on the server. The client asks for a level with `overview=`.
 - **Chunk target:** 2 MiB and 50,000 features, kept.
 - **Postings:** cut from v2. Zone maps and column sidecars answer filters, and the cost is a column scan per chunk in the partition. Reintroduce postings only when a measured filter on a dense partition exceeds about 1 s cold. This saves about 250 lines.
@@ -283,7 +284,7 @@ These close the open questions. Where the gain is marginal, each one takes the o
 - **Mixed snapshots:** a multi-cell reload is not one snapshot; see Decisions.
 - **Walks across uploads:** a walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one snapshot.
 - **Lookups decode whole runs:** delta coding means a lookup decodes each live run in full, held in the decoded-run LRU. At 1e9 features the runs total about 15 GB, so a fence index per run (one hash every few thousand entries) is needed before lookups scale.
-- **Coarse rebuild:** every upload reads its ancestors' sibling samples. Measure at 10 million features.
+- **Low zooms:** with no level below 8, a 1,000-feature page covers a dense view only from about zoom 11. Coarser views need a larger page: 10,000 from about zoom 9, 100,000 from about zoom 8. Measure the page sizes at 10 million features.
 - **Dense cities at zoom 13:** about 240k features on screen. Use overviews until detail is small, around zoom 16 or 17.
 - **Overview size:** overview responses carry full geometry, so they can be large.
 - **Filters on dense cells:** column files are scanned until postings exist.

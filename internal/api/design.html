@@ -80,7 +80,6 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <button role="tab" data-tab="model" aria-selected="true">Model</button>
       <button role="tab" data-tab="ladder" aria-selected="false">Ladder</button>
       <button role="tab" data-tab="load" aria-selected="false">Load</button>
-      <button role="tab" data-tab="snaps" aria-selected="false">Snapshots</button>
       <button role="tab" data-tab="reads" aria-selected="false">Reads</button>
       <button role="tab" data-tab="costs" aria-selected="false">Costs</button>
       <button role="tab" data-tab="decide" aria-selected="false">Decisions</button>
@@ -139,11 +138,6 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     <aside class="side" id="side-load"></aside>
   </section>
 
-  <section class="tab" id="tab-snaps">
-    <div class="stage" id="fig-snaps" role="img" aria-label="Snapshot visibility, with bytes retained by each row"><canvas></canvas><svg></svg></div>
-    <p class="status" id="status-snaps"></p>
-    <aside class="side" id="side-snaps"></aside>
-  </section>
 
   <section class="tab" id="tab-reads">
     <div class="chips" id="chips"></div>
@@ -178,7 +172,8 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
           <li><span class="tag built">built</span><b>Chunk size</b><br><span>2 MiB of uncompressed FGB or 50,000 features. Kept; retune only after measuring.</span></li>
           <li><span class="tag built">built</span><b>Sparse partitions</b><br><span>No packing. Every populated cell keeps at least one chunk.</span></li>
-          <li><span class="tag built">built</span><b>Overview levels</b><br><span>8 and 10 per partition; 12 for partitions above 100,000 features; 6, 4 and 2 per cell, rebuilt in the commit. Cap 256 per cell.</span></li>
+          <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition and 12 above 100,000 features, both built from the upload’s own cell. Levels 10, 6, 4 and 2 and the commit-time rebuild are cut. Cap 256 per cell.</span></li>
+          <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell. The server reads only that body and writes only that cell’s rows.</span></li>
           <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
           <li><span class="tag built">built</span><b>Conditional loads</b><br><span>base=s answers 409 when a listed cell changed after s.</span></li>
           <li><span class="tag built">built</span><b>Caches</b><br><span>Three LRUs per worker, 256 MiB each: file bytes, chunk lists, decoded id runs.</span></li>
@@ -199,7 +194,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>A reload of many cells is not one snapshot. Readers can see a mix of old and new cells until the last upload commits.</li>
           <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one snapshot.</li>
           <li>Id runs are delta-coded, so a lookup decodes each live run in full. At 1e9 features the runs total about 15 GB: a fence index per run is needed before lookups scale.</li>
-          <li>The coarse rebuild reads sibling samples on every upload. Measure at 10 million features.</li>
+          <li>Low zooms: with no level below 8, a 1,000-feature page covers a dense view only from about zoom 11. Coarser views need a larger page: 10,000 from about zoom 9, 100,000 from about zoom 8.</li>
           <li>Dense cities at zoom 13 hold about 240k features on screen, about 24 MB over the link. Use overviews until detail is small, around zoom 16 or 17.</li>
           <li>Overview responses carry full geometry, so they can be large.</li>
           <li>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</li>
@@ -220,7 +215,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
   </section>
 </main>
 
-<footer>1–7 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are measured on buildings_fr; the CPU split and Postgres speed are estimates (see Costs)</footer>
+<footer>1–6 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are measured on buildings_fr; the CPU split and Postgres speed are estimates (see Costs)</footer>
 
 <script src="https://unpkg.com/zdog@1.1.3/dist/zdog.dist.min.js"></script>
 <script>
@@ -240,7 +235,6 @@ const S = {
   model: { sel: 'catalog', lit: new Set(), demo: null },
   ladder: { z: 13, sweep: null },
   load: { k: 0, sel: 0, play: null },
-  snaps: { s: 1, sel: -1, play: null },
   reads: { req: 0, sel: 0, lit: new Set(), demo: null },
   drag: null,
 };
@@ -273,7 +267,7 @@ const wDur = t => Math.min(2.4, 0.35 + 0.4 * Math.log10(1 + t * 1000));
 
 function writeCost(f, link) {
   const chunks = Math.max(1, Math.ceil(f / PER_CHUNK));
-  const samples = Math.min(f, 256) + Math.min(f, 4096) + (f > 100000 ? Math.min(f, 65536) : 0);
+  const samples = Math.min(f, 256) + (f > 100000 ? Math.min(f, 65536) : 0);
   const cpu = f * K.sec;
   const upload = f * K.zst, memory = f * K.raw;
   const chunkBytes = f * K.zst, colBytes = f * K.col, runBytes = f * K.run;
@@ -434,17 +428,17 @@ const EDGES = [
 ];
 const EDGE_BY = Object.fromEntries(EDGES.map(([id, from, fs, to, ts, dash]) => [id, { from, fs, to, ts, dash }]));
 const BOXES = [
-  { key: 'loader', id: 'loader', x: 16, y: 30, w: 124, h: 66 }, { key: 'decode', id: 'decode', x: 180, y: 30, w: 124, h: 66 },
-  { key: 'validate', id: 'validate', x: 344, y: 30, w: 124, h: 66 }, { key: 'sort', id: 'sort', x: 508, y: 30, w: 124, h: 66 },
-  { key: 'encode', id: 'encode', x: 672, y: 30, w: 124, h: 66 }, { key: 'commit', id: 'commit', x: 836, y: 30, w: 124, h: 66 },
-  { key: 'blobsW', id: 'blobs', x: 410, y: 136, w: 214, h: 66 }, { key: 'idsW', id: 'idRuns', x: 672, y: 136, w: 124, h: 66 },
-  { key: 'catalogW', id: 'catalog', x: 836, y: 136, w: 124, h: 66 },
-  { key: 'catalogR', id: 'catalog', x: 154, y: 262, w: 116, h: 66 }, { key: 'blobsR', id: 'blobs', x: 434, y: 262, w: 116, h: 66 },
-  { key: 'idsR', id: 'idRuns', x: 854, y: 262, w: 116, h: 66 },
-  { key: 'reader', id: 'reader', x: 14, y: 360, w: 116, h: 66 }, { key: 'catalogOv', id: 'catalogOv', x: 154, y: 360, w: 116, h: 66 },
-  { key: 'prune', id: 'prune', x: 294, y: 360, w: 116, h: 66 }, { key: 'fileOv', id: 'fileOv', x: 434, y: 360, w: 116, h: 66 },
-  { key: 'fgb', id: 'fgb', x: 574, y: 360, w: 116, h: 66 }, { key: 'response', id: 'response', x: 714, y: 360, w: 116, h: 66 },
-  { key: 'idOv', id: 'idOv', x: 854, y: 360, w: 116, h: 66 },
+  { key: 'loader', id: 'loader', x: 16, y: 36, w: 124, h: 66 }, { key: 'decode', id: 'decode', x: 180, y: 36, w: 124, h: 66 },
+  { key: 'validate', id: 'validate', x: 344, y: 36, w: 124, h: 66 }, { key: 'sort', id: 'sort', x: 508, y: 36, w: 124, h: 66 },
+  { key: 'encode', id: 'encode', x: 672, y: 36, w: 124, h: 66 }, { key: 'commit', id: 'commit', x: 836, y: 36, w: 124, h: 66 },
+  { key: 'blobsW', id: 'blobs', x: 410, y: 146, w: 214, h: 66 }, { key: 'idsW', id: 'idRuns', x: 672, y: 146, w: 124, h: 66 },
+  { key: 'catalogW', id: 'catalog', x: 836, y: 146, w: 124, h: 66 },
+  { key: 'catalogR', id: 'catalog', x: 154, y: 284, w: 116, h: 66 }, { key: 'blobsR', id: 'blobs', x: 434, y: 284, w: 116, h: 66 },
+  { key: 'idsR', id: 'idRuns', x: 854, y: 284, w: 116, h: 66 },
+  { key: 'reader', id: 'reader', x: 14, y: 380, w: 116, h: 66 }, { key: 'catalogOv', id: 'catalogOv', x: 154, y: 380, w: 116, h: 66 },
+  { key: 'prune', id: 'prune', x: 294, y: 380, w: 116, h: 66 }, { key: 'fileOv', id: 'fileOv', x: 434, y: 380, w: 116, h: 66 },
+  { key: 'fgb', id: 'fgb', x: 574, y: 380, w: 116, h: 66 }, { key: 'response', id: 'response', x: 714, y: 380, w: 116, h: 66 },
+  { key: 'idOv', id: 'idOv', x: 854, y: 380, w: 116, h: 66 },
 ];
 const BOX = Object.fromEntries(BOXES.map(b => [b.key, b]));
 const anchor = (key, side) => {
@@ -493,11 +487,11 @@ const MODEL = {
     layout: ['chunk = contiguous key range', 'cut at 2 MiB or 50,000 features'], index: [] },
   encode: { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} written`,
-    text: 'Encodes each chunk (FGB and zstd), its column file and zone map, then the samples (levels 8 and 10, and 12 above 100,000 features) and the id run. This is the largest CPU share. Its files go to blobs and id runs; its chunk rows go to the commit.',
+    text: 'Encodes each chunk (FGB and zstd), its column file and zone map, then the samples (level 8, and level 12 above 100,000 features) and the id run. This is the largest CPU share. Its files go to blobs and id runs; its chunk rows go to the commit.',
     layout: ['files: fgb, cols, idrun', 'rows written unpublished, by COPY'], index: [] },
   commit: { t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total,
     l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
-    text: 'One transaction: lock the collection row, check base=s, end the cell’s live chunks, insert the new chunk rows, rebuild levels 6, 4 and 2, insert the snapshot, publish the files. Its cost does not grow with the cell.',
+    text: 'One transaction: lock the collection row, check base=s, end the cell’s live rows, insert the new rows, insert the snapshot, publish the files. Nothing outside the cell is read or written.',
     layout: ['one snapshot per upload'], index: [] },
   blobs: { t: 'blobs & files', kind: 'db', size: c => c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes,
     l1: c => `${fmtBytes(c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes)} of blocks`, l2: c => `${fmt(c.Wr.files)} files`,
@@ -568,15 +562,15 @@ function playModel(kind) {
 
 class Model extends Fig {
   constructor() {
-    super('fig-model', 1000, 452);
+    super('fig-model', 1000, 470);
     this.bytes = EDGE_BYTES(this.cur);
-    for (const [y, h, label, ty] of [[0, 214, 'upload · one worker, then the Postgres tables it writes', 18], [230, 222, 'read · Postgres tables, then worker overlays in memory, then the client', 248]]) {
+    for (const [y, h, label, ty, fill] of [[0, 222, 'UPLOAD · one worker stage, then the Postgres tables it writes', 22, 'lane'], [250, 220, 'READ · Postgres tables, then worker overlays in memory, then the client', 270, 'fill']]) {
       const lane = this.shape(0, y, 1000, h, 0, { fill: true, stroke: false });
-      this.bind(() => { lane.color = P.lane; });
-      this.text(14, ty, label, 'lab');
+      this.bind(() => { lane.color = P[fill]; });
+      this.text(14, ty, label, 't');
     }
-    const divider = this.line([[0, 222], [1000, 222]], 1);
-    this.bind(() => { divider.color = P.line; });
+    const divider = this.line([[0, 240], [1000, 240]], 1);
+this.bind(() => { divider.color = P.line; });
     for (const [id, from, fs, to, ts, dash] of EDGES) {
       const pts = [anchor(from, fs), anchor(to, ts)];
       const band = dash ? this.line(pts, 1) : null;
@@ -656,7 +650,7 @@ class Model extends Fig {
 
 const CAP = 256;
 const ZOOMS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
-const RUNGS = ['detail', 12, 10, 8, 6, 4, 2];
+const RUNGS = ['detail', 12, 8];
 const kmTile = z => (40075.017 / 2 ** z) * Math.cos((48 * Math.PI) / 180);
 const cellKm2 = L => 85010745 / 4 ** L;
 const km2 = a => (a < 10 ? a.toFixed(1) : fmt(a));
@@ -689,22 +683,20 @@ function bandText(k, bands) {
 class Ladder extends Fig {
   constructor() {
     super('fig-ladder', 1000, 440);
-    const cell = (x, y, s, tint) => {
-      const f = this.shape(x, y, s, s, 0, { fill: true, stroke: false });
-      const o = this.shape(x, y, s, s, 0, { fill: false, stroke: 1 });
-      this.bind(() => { f.color = tint ? P.lit : P.fill; o.color = P.line; });
-    };
-    const X = 30, Y = 52, S10 = 75, S12 = S10 / 4;
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(X + i * S10, Y + j * S10, S10, false);
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(X + S10 + i * S12, Y + S10 + j * S12, S12, true);
-    const hl = this.shape(X + S10, Y + S10, S10, S10, 0, { fill: false, stroke: 2 });
-    this.bind(() => { hl.color = P.mut; });
+    const X = 30, Y = 52, S = 300, N = 16, C = S / N;
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      const f = this.shape(X + i * C, Y + j * C, C, C, 0, { fill: true, stroke: false });
+      const o = this.shape(X + i * C, Y + j * C, C, C, 0, { fill: false, stroke: 1 });
+      this.bind(() => { f.color = P.fill; o.color = P.line; });
+    }
+    const tint = this.shape(X + 8 * C, Y + 8 * C, C, C, 0, { fill: true, stroke: false });
+    const hl = this.shape(X + 8 * C, Y + 8 * C, C, C, 0, { fill: false, stroke: 2 });
+    this.bind(() => { tint.color = P.lit; hl.color = P.mut; });
     this.view = this.shape(0, 0, 1, 1, 0, { fill: false, stroke: 1.8 });
     this.bind(() => { this.view.color = P.fg; });
     this.text(X, Y - 10, 'one L8 cell, about 36 km across, on average', 'lab');
-    this.text(X, Y + 318, 'L10 · 9 km · 16 per L8 cell (highlighted)', 'lab');
-    this.text(X, Y + 334, 'L12 · 2.3 km · 256 per L8 cell (16 shown)', 'lab');
-    this.viewText = this.text(X, Y + 350, '', 'lab');
+    this.text(X, Y + S + 16, 'L12 cell · 2.3 km · 256 kept per L8 cell', 'lab');
+    this.viewText = this.text(X, Y + S + 32, '', 'lab');
     this.stripLabel = this.text(370, 44, '', 'lab');
     const cw = 616 / ZOOMS.length;
     this.cells = ZOOMS.map((z, i) => {
@@ -717,23 +709,24 @@ class Ladder extends Fig {
     });
     this.rowsLabel = this.text(370, 172, '', 'lab');
     this.rows = RUNGS.map((k, i) => {
-      const y = 182 + i * 32;
+      const y = 188 + i * 62;
       return {
         k, y,
-        bg: this.shape(366, y, 620, 30, 0, { fill: true, stroke: false }),
-        bar: this.shape(600, y + 8, 1, 14, 0, { fill: true, stroke: false }),
-        name: this.text(370, y + 12, '', 'v'),
-        sub: this.text(370, y + 25, '', 'lab'),
-        val: this.text(986, y + 20, '', 'v', 'end'),
+        bg: this.shape(366, y, 620, 50, 0, { fill: true, stroke: false }),
+        bar: this.shape(600, y + 20, 1, 14, 0, { fill: true, stroke: false }),
+        name: this.text(370, y + 19, '', 'v'),
+        sub: this.text(370, y + 35, '', 'lab'),
+        val: this.text(986, y + 32, '', 'v', 'end'),
       };
     });
-    this.budget = this.shape(600, 178, 1, 226, 0, { fill: true, stroke: false });
+    this.budget = this.shape(600, 178, 1, 196, 0, { fill: true, stroke: false });
     this.bind(() => { this.budget.color = P.mut; });
-    for (const [t, x] of [['1', 600], ['1k', 677], ['1M', 753], ['1B', 830]]) this.text(x, 420, t, 'lab', 'middle');
+    for (const [t, x] of [['1', 600], ['1k', 677], ['1M', 753], ['1B', 830]]) this.text(x, 404, t, 'lab', 'middle');
     this.render();
   }
   geometry(z) {
-    const s = 300 / 36, t = kmTile(z), w = 4 * t * s, h = 3 * t * s, cx = 142.5, cy = 164.5;
+    const s = 300 / 36, t = kmTile(z), w = 4 * t * s, h = 3 * t * s;
+    const cx = 30 + 8.5 * (300 / 16), cy = 52 + 8.5 * (300 / 16);
     const x1 = Math.max(cx - w / 2, 30), y1 = Math.max(cy - h / 2, 52);
     const x2 = Math.min(cx + w / 2, 330), y2 = Math.min(cy + h / 2, 352);
     return x2 > x1 && y2 > y1 ? { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } : null;
@@ -754,7 +747,7 @@ class Ladder extends Fig {
       c.o.stroke = cur ? 2 : 1;
     }
     this.rowsLabel.textContent = `features on screen at zoom ${z} · line marks one page of ${fmt(W.page)}`;
-    this.place(this.budget, 600 + 230 * logFrac(W.page, 0, 9), 178, 1, 226);
+    this.place(this.budget, 600 + 230 * logFrac(W.page, 0, 9), 178, 1, 196);
     this.rows.forEach((r, i) => {
       const row = rows[i], chosen = !!pick && pick.k === r.k;
       r.bg.color = chosen ? P.lit : P.lane;
@@ -766,7 +759,7 @@ class Ladder extends Fig {
         return;
       }
       r.bar.color = chosen ? P.fg : P.mut;
-      this.place(r.bar, 600, r.y + 8, 230 * logFrac(row.n, 0, 9), 14);
+      this.place(r.bar, 600, r.y + 20, 230 * logFrac(row.n, 0, 9), 14);
       r.sub.textContent = `${r.k === 'detail' ? 'no cap' : `${CAP} per cell`} · ${bandText(r.k, bands)}`;
       r.val.textContent = `${row.n < 1 ? '< 1' : fmt(row.n)} · ${fmtBytes(row.n * K.zst)}`;
     });
@@ -807,10 +800,10 @@ const STAGES = [
 const SUBS = [
   'lock the collection row, so commits serialize',
   'base= check: 409 if the cell changed after s',
-  'end the cell’s live chunks',
-  'insert the chunk rows and samples at snapshot s',
-  'rebuild levels 6, 4 and 2 from the samples below, at s',
-  'insert the id run and snapshot, advance, publish the files',
+  'end the cell’s live chunks and samples',
+  'insert the chunk rows, samples and id run at snapshot s',
+  'publish the cell’s files',
+  'insert the snapshot and advance the collection',
 ];
 
 class Load extends Fig {
@@ -845,7 +838,7 @@ class Load extends Fig {
       });
     });
     this.text(10, 162, 'Data size through one upload (log scale)', 'lab');
-    const rows = [['upload, .fgb.zst', 'upload', 'net'], ['decoded in memory', 'memory', 'mut'], ['chunk FGB, zstd', 'chunkBytes', 'db'], ['column files', 'colBytes', 'db'], ['id run', 'runBytes', 'db'], ['samples L8 · L10 · L12', 'sampleBytes', 'db'], ['rows to Postgres (WAL adds 1×)', 'db', 'db']];
+    const rows = [['upload, .fgb.zst', 'upload', 'net'], ['decoded in memory', 'memory', 'mut'], ['chunk FGB, zstd', 'chunkBytes', 'db'], ['column files', 'colBytes', 'db'], ['id run', 'runBytes', 'db'], ['samples L8 · L12', 'sampleBytes', 'db'], ['rows to Postgres (WAL adds 1×)', 'db', 'db']];
     rows.forEach(([label, key, kind], i) => {
       const y = 180 + i * 22;
       this.text(10, y + 11, label, 'v');
@@ -889,65 +882,6 @@ class Load extends Fig {
   }
 }
 
-const SNAP = [
-  ['P1 detail · upload 1', 1, 2, 'Detail chunks of cell P1 from upload 1. Upload 2 replaced them.', 'detail'],
-  ['P1 detail · upload 2', 2, null, 'Detail chunks of P1 from upload 2, still current.', 'detail'],
-  ['P2 detail · upload 1', 1, 3, 'Detail chunks of cell P2 from upload 1. Upload 3 replaced them.', 'detail'],
-  ['P2 detail · upload 3', 3, null, 'Detail chunks of P2 from upload 3, still current.', 'detail'],
-  ['L6 cell · upload 1', 1, 2, 'The level-6 overview as of upload 1. Every upload under the cell rebuilds it in its own commit.', 'l6'],
-  ['L6 cell · upload 2', 2, 3, 'Rebuilt by upload 2, so it sees the new P1 sample.', 'l6'],
-  ['L6 cell · upload 3', 3, null, 'Rebuilt by upload 3, so it sees the new P2 sample too.', 'l6'],
-  ['id run · upload 1', 1, null, 'Runs stay live after a later upload. A background merge drops their stale entries.', 'idrun'],
-  ['id run · upload 2', 2, null, 'A second live run. Lookups search every live run.', 'idrun'],
-  ['id run · upload 3', 3, null, 'A third live run. The merge keeps the live count at 64 or fewer.', 'idrun'],
-];
-const snapX = s => 330 + (s - 1) * 220;
-const snapBytes = (kind, c) => (kind === 'detail' ? c.Wr.chunkBytes + c.Wr.colBytes : kind === 'l6' ? 256 * K.zst : c.Wr.runBytes);
-const rowThickness = b => Math.min(16, Math.max(3, 3 + (13 * (Math.log10(Math.max(b, 1)) - 3)) / 6));
-
-class Snaps extends Fig {
-  constructor() {
-    super('fig-snaps', 1000, 336);
-    [1, 2, 3].forEach(s => this.text(snapX(s), 22, `snapshot ${s}`, 'lab', 'middle'));
-    SNAP.forEach(([name, b, e, , kind], i) => {
-      const y = 40 + i * 26, cy = y + 12, end = e === null ? snapX(3) + 120 : snapX(e);
-      const sel = this.shape(8, y - 3, 984, 24, 0, { fill: true, stroke: false });
-      this.bind(() => { sel.color = P.lit; sel.visible = S.snaps.sel === i; });
-      this.text(16, y + 15, name, 'lab');
-      const bar = this.shape(snapX(b), cy - 5, end - snapX(b), 10, 0, { fill: true, stroke: false });
-      const size = this.text(end + 8, cy + 4, '', 's');
-      this.bind(() => {
-        const c = this.cur, vis = b <= S.snaps.s && (e === null || S.snaps.s < e), bytes = snapBytes(kind, c), th = rowThickness(bytes);
-        this.place(bar, snapX(b), cy - th / 2, end - snapX(b), th);
-        bar.color = vis ? P.fg : P.band;
-        size.textContent = fmtBytes(bytes);
-      });
-      this.hit(0, y - 3, 1000, 24, () => { S.snaps.sel = i; this.render(); refresh(); });
-    });
-    this.cursor = new Zdog.Shape({ addTo: this.illo, path: [this.pt(snapX(1), 30), this.pt(snapX(1), 318)], closed: false, stroke: 1.5, color: P.fg, fill: false });
-    this.bind(() => {
-      this.cursor.color = P.fg;
-      this.cursor.translate.x = this.x(snapX(S.snaps.s)) - this.x(snapX(1));
-    });
-    this.render();
-  }
-  step(dt) {
-    const p = S.snaps.play;
-    if (!p) return false;
-    p.t += dt;
-    S.snaps.s = Math.min(3, 1 + Math.floor(p.t));
-    if (p.t > 2.6) S.snaps.play = null;
-    return true;
-  }
-  act(name, arg) {
-    const N = S.snaps;
-    if (name === 'demo') { N.play = { t: 0 }; N.s = 1; }
-    if (name === 'reset') { N.s = 1; N.play = null; }
-    if (name === 'set') { N.s = +arg; N.play = null; }
-    if (name === 'step') { N.play = null; N.s = Math.min(3, Math.max(1, N.s + arg)); }
-  }
-}
-
 const REQS = [
   { label: 'items?bbox=', lines: [['catalog overlay,', 'latest snapshot'], ['prune: envelope', 'per chunk'], ['file bytes,', 'whole chunks'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']],
     run: c => readBBox(c.f, c.page, c.link), note: 'Reads whole chunks, not just the matching rows: a page still moves every chunk it lands in. The cursor carries only (key, id), so each page reads the latest snapshot.' },
@@ -956,7 +890,7 @@ const REQS = [
   { label: 'numberMatched', lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
     run: c => readCount(c.f, c.link), note: 'Counts from column files only, so it never decodes geometry. Omitted with a bbox alone, as in v1.' },
   { label: 'items?overview=N', lines: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['samples,', 'LRU'], ['FGB search', 'of the samples'], ['page by', '(key, id)']],
-    run: c => readOverview(c.page, c.link), note: 'N is 2, 4, 6, 8, 10 or 12, chosen by the client. No filter. Samples are small, so overviews are the cheap way to show a whole area.' },
+    run: c => readOverview(c.page, c.link), note: 'N is 8 or 12, chosen by the client. No filter. Samples are small, so overviews are the cheap way to show a whole area.' },
   { label: 'items/{id}', lines: [['id runs overlay:', 'search each run'], ['candidate keys', 'name cells'], ['catalog: chunks', 'covering the key'], ['verify the id', 'in each chunk']],
     run: c => readId(c.f, c.link), note: 'A cold lookup decodes every live run in full, which is why the id-run merge and a fence index are on the risk list.' },
   { label: 'PUT ?base=s', lines: [['lock the', 'collection row'], ['check the cell', 'changed after s'], ['accept, or', 'answer 409']],
@@ -1123,21 +1057,13 @@ const SIDE = {
   ladder() {
     return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
       <input type="range" id="z-range" min="6" max="17" step="1" aria-label="Zoom level">
-      <p>An overview level is an S2 grid. Level L keeps up to 256 features in each of its cells, the ones with the smallest hash, so they are spread evenly. A coarser level has 16 times the ground per cell, so it keeps 16 times fewer features per km².</p>
-      <p class="note">Each zoom uses the finest level that fits one page. Where a cell holds more than 256 features at a level, that level's count depends only on the view's area, not on the density.</p>
-      <p class="note">From the workload bar: the cell size is spread evenly over the view, and the page size is the budget. L12 is built only for partitions above 100,000 features.</p>
+      <p>Level 8 keeps up to 256 features in each partition, the ones with the smallest hash, so they are spread evenly. Level 12 keeps up to 256 in each of its 5 km² cells, and is built only for partitions above 100,000 features. One level 8 cell covers 256 times the ground of one level 12 cell.</p>
+      <p class="note">Each zoom uses the finest level that fits one page. From the workload bar: the cell size is spread evenly over the view, and the page size is the budget. Below zoom 11 neither level fits a 1,000-feature page, so a larger page is needed there.</p>
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   load() {
     return `<h2 id="l-title"></h2><p id="l-text"></p><p class="note" id="l-sub"></p>
       <div class="ctl"><button class="btn" data-act="demo">Demo (D)</button><button class="btn" data-act="step">Step (→)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
-  },
-  snaps() {
-    return `<h2>Snapshot <span id="s-val"></span></h2>
-      <p>A page read at snapshot s sees each row whose begin ≤ s and s &lt; end. Pages read the latest snapshot, so this slider is a timeline, not a pin. A row’s thickness is its bytes.</p>
-      <input type="range" id="s-range" min="1" max="3" step="1" aria-label="Snapshot">
-      <p class="note" id="s-base"></p><p class="note" id="s-row"></p><p class="note" id="s-retained"></p>
-      <div class="ctl"><button class="btn" data-act="demo">Play (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   reads() {
     return `<h2 id="r-title"></h2><p id="r-step"></p><p class="note" id="r-note"></p><p class="note" id="r-cost"></p>
@@ -1176,16 +1102,6 @@ function syncLoad() {
   set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of 6: ${SUBS[k - 7]}.` : '');
   set('#status-load', k === 0 ? 'Demo runs one upload through its seven stages.' : `Stage ${cur + 1} of 7 · ${st.t}: ${st.l1(c)}, ${st.l2(c)}.`);
 }
-function syncSnaps() {
-  const N = S.snaps, r = $('#s-range'), row = SNAP[N.sel], c = costNow();
-  if (r && document.activeElement !== r) r.value = N.s;
-  set('#s-val', N.s);
-  set('#s-base', `P1 upload that read snapshot ${N.s}: ${N.s >= 2 ? 'accepted' : '409, because P1 changed at 2'}. P2 upload: ${N.s >= 3 ? 'accepted' : '409, because P2 changed at 3'}.`);
-  set('#s-row', row ? `${row[0]}: ${row[3]} Visible from snapshot ${row[1]}${row[2] ? `, up to but not including ${row[2]}` : ' onwards'}. Size ${fmtBytes(snapBytes(row[4], c))}.` : 'Click a row for its detail.');
-  const retained = SNAP.filter(x => x[2] !== null).reduce((a, x) => a + snapBytes(x[4], c), 0);
-  set('#s-retained', `Replaced rows kept 15 minutes before reaping: ${fmtBytes(retained)} at this cell size.`);
-  set('#status-snaps', `Snapshot ${N.s}: ${SNAP.filter(x => x[1] <= N.s && (x[2] === null || N.s < x[2])).length} of ${SNAP.length} rows visible.`);
-}
 function syncReads() {
   const Q = S.reads, R = REQS[Q.req], run = R.run(costNow());
   const st = run.steps[Q.sel] || run.steps[0];
@@ -1208,7 +1124,6 @@ function sync() {
   if (S.tab === 'model') syncModel();
   if (S.tab === 'ladder') syncLadder();
   if (S.tab === 'load') syncLoad();
-  if (S.tab === 'snaps') syncSnaps();
   if (S.tab === 'reads') syncReads();
   if (S.tab === 'costs') syncCosts();
 }
@@ -1274,13 +1189,12 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'z-range') act('ladder', 'set', e.target.value);
-  if (e.target.id === 's-range') act('snaps', 'set', e.target.value);
 });
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const order = ['model', 'ladder', 'load', 'snaps', 'reads', 'costs', 'decide'];
-  if (/^[1-7]$/.test(k)) show(order[+k - 1]);
+  const order = ['model', 'ladder', 'load', 'reads', 'costs', 'decide'];
+  if (/^[1-6]$/.test(k)) show(order[+k - 1]);
   else if (k === 't') setTheme(P === PAL.dark ? 'light' : 'dark');
   else if (k === 'd') act(S.tab, 'demo');
   else if (k === 'e' && S.tab === 'model') act('model', 'read');
@@ -1293,7 +1207,6 @@ window.addEventListener('resize', () => { if (FIGS[S.tab]) FIGS[S.tab].render();
 FIGS.model = new Model();
 FIGS.ladder = new Ladder();
 FIGS.load = new Load();
-FIGS.snaps = new Snaps();
 FIGS.reads = new Reads();
 FIGS.costs = new Costs();
 FIGS.decide = new Budget();
@@ -1309,7 +1222,7 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 const start = location.hash.slice(1);
-show(['model', 'ladder', 'load', 'snaps', 'reads', 'costs', 'decide'].includes(start) ? start : 'model');
+show(['model', 'ladder', 'load', 'reads', 'costs', 'decide'].includes(start) ? start : 'model');
 requestAnimationFrame(frame);
 </script>
 </body>
