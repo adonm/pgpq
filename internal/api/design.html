@@ -267,7 +267,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <tr><td>Monaco enriched 5×</td><td>4,628</td><td>2</td><td>12.4 MB</td><td>4.8 MB</td><td>0.66 MB</td><td>1.9 s</td><td>mean 2,314</td></tr>
         </tbody>
       </table>
-      <p class="note">Local PostgreSQL 18, one writable worker, OSM France extracts. Enriched: 129 fields (5× the 26-field OSM schema), 1e-7 coordinates, 1 m edge segmentation. Per filled feature: 2,687 B raw, 711 B zstd upload, 1,182 B stored, 142 B columns. Building-only L4/L2 samples are empty because the subpixel filter drops footprint-sized features; mixed OSM layers keep larger features. The current chunk/Parquet path is measured; the target one-file-per-cell path is not.</p>
+      <p class="note">Local PostgreSQL 18, one writable worker, OSM France extracts. Enriched: 129 fields (5× the 26-field OSM schema), 1e-7 coordinates, 1 m edge segmentation. Per filled feature: 2,687 B raw, 711 B zstd upload, 1,182 B stored, 142 B columns. L8 cells average ~1,297 km²; 2.5M/cell is ~1,930/km², within dense-metro building densities. Luxembourg's 95,863 max is ~74/km² and rural, not a dense-city test, so 2.5M is an assumption rather than a measured maximum. Building-only L4/L2 samples are empty because the subpixel filter drops footprint-sized features; mixed OSM layers keep larger features. The current chunk/Parquet path is measured; the target one-file-per-cell path is not.</p>
     </div>
     <div class="grid2">
       <div>
@@ -304,7 +304,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>L4 samples cost about 3.7 GB globally, L6 about 59 GB and L2 is negligible; the L8 sample is gone. The saving is real but the L8 detail file still has to be read at high zoom.</li>
           <li>Subpixel features are dropped from the L2, L4 and L6 samples: areal and linear features smaller than one pixel (about 1.6 km, 400 m and 100 m at 48°N); points stay. L8 detail keeps everything. A client wanting a small polygon at a coarse zoom will not see it, but detail still has it.</li>
           <li>Building-only collections can produce empty L4/L2 samples: the subpixel filter removes footprint-sized features at those zooms. Mixed OSM layers keep larger landuse and roads. Decide whether to keep a minimum sample floor, use points/aggregates, or accept empty structure-only overviews.</li>
-          <li>The enriched benchmark uses 1 m edge segmentation; 1 cm vertex spacing would add roughly two orders of magnitude more geometry and is not modelled. The mean cell is measured from building-only Luxembourg; the 2.5M dense cell is a filled-in-structure assumption, not an OSM measurement.</li>
+          <li>The enriched benchmark uses 1 m edge segmentation; 1 cm vertex spacing would add roughly two orders of magnitude more geometry and is not modelled. The mean cell is measured from building-only Luxembourg; the 2.5M dense cell is a filled-in-structure assumption, but its density (~1,930/km²) is plausible for a dense metro.</li>
           <li>The 711 B/feature upload assumes loader-side zstd. The current API accepts uncompressed FGB, measured at 2,687 B/feature; loader compression and the per-cell file layout are target work.</li>
         </ul>
       </div>
