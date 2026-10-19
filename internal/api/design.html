@@ -1052,6 +1052,10 @@ document.addEventListener('keydown', e => {
   else if (k === 'ArrowLeft') act(S.tab, 'step', -1);
 });
 window.addEventListener('resize', () => { if (FIGS[S.tab]) FIGS[S.tab].render(); });
+window.addEventListener('hashchange', () => {
+  const t = location.hash.slice(1);
+  if (['model', 'overviews', 'load', 'reads', 'decide'].includes(t) && t !== S.tab) show(t);
+});
 
 const FIG_MAKERS = {
   model: () => new Model(),
