@@ -10,7 +10,19 @@ import (
 	"github.com/adonm/postfgb/internal/spatial"
 )
 
-func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cells []uint64, chunks []chunkRow, runFile int64, features int) (LoadResult, error) {
+var chunkColumns = []string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "begin_snapshot", "col_file", "zone", "level"}
+
+func chunkValues(name string, c chunkRow, snapshot int64) []any {
+	return []any{
+		name, spatial.ToOrdered(c.cell), int32(c.seq),
+		spatial.ToOrdered(c.first.key), c.first.id,
+		spatial.ToOrdered(c.last.key), c.last.id,
+		c.bounds[0], c.bounds[1], c.bounds[2], c.bounds[3],
+		int32(c.rows), c.fileID, snapshot, c.colFile, c.zone, c.level,
+	}
+}
+
+func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cells []uint64, chunks []chunkRow, runFile int64, features int, base int64) (LoadResult, error) {
 	columns, err := encodeColumns(ds.Columns)
 	if err != nil {
 		return LoadResult{}, err
@@ -32,6 +44,20 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 		return LoadResult{}, err
 	}
 	whole := cells == nil
+	if base > 0 {
+		var changed int
+		if whole {
+			err = tx.QueryRow(ctx, `select count(*) from pfgb.partitions where collection = $1 and changed > $2`, name, base).Scan(&changed)
+		} else {
+			err = tx.QueryRow(ctx, `select count(*) from pfgb.partitions where collection = $1 and cell = any($2) and changed > $3`, name, orderedCells(cells), base).Scan(&changed)
+		}
+		if err != nil {
+			return LoadResult{}, err
+		}
+		if changed > 0 {
+			return LoadResult{}, ErrConflict
+		}
+	}
 	if !whole && current > 0 {
 		schema, err := decodeColumns(stored)
 		if err != nil {
@@ -77,21 +103,23 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 	rows := make([][]any, len(chunks))
 	fileIDs := append(make([]int64, 0, len(chunks)+1), runFile)
 	for i, c := range chunks {
-		rows[i] = []any{
-			name, spatial.ToOrdered(c.cell), int32(c.seq),
-			spatial.ToOrdered(c.first.key), c.first.id,
-			spatial.ToOrdered(c.last.key), c.last.id,
-			c.bounds[0], c.bounds[1], c.bounds[2], c.bounds[3],
-			int32(c.rows), c.fileID, snapshot, c.colFile, c.zone, c.level,
-		}
+		rows[i] = chunkValues(name, c, snapshot)
 		fileIDs = append(fileIDs, c.fileID, c.colFile)
 	}
 	if len(rows) > 0 {
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "chunks"},
-			[]string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "begin_snapshot", "col_file", "zone", "level"},
-			pgx.CopyFromRows(rows)); err != nil {
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "chunks"}, chunkColumns, pgx.CopyFromRows(rows)); err != nil {
 			return LoadResult{}, err
 		}
+	}
+	put := func(ctx context.Context, collection, kind string, data []byte) (int64, error) {
+		return l.blocks.PutTx(ctx, tx, collection, kind, data)
+	}
+	coarse, err := l.rebuildCoarse(ctx, tx, put, Collection{Name: name, Columns: ds.Columns, IDColumn: ds.IDColumn}, touched, snapshot)
+	if err != nil {
+		return LoadResult{}, err
+	}
+	for _, row := range coarse {
+		fileIDs = append(fileIDs, row.fileID, row.colFile)
 	}
 	if _, err := tx.Exec(ctx, `insert into pfgb.snapshots (collection, id) values ($1, $2)`, name, snapshot); err != nil {
 		return LoadResult{}, err
@@ -110,7 +138,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 	if err := tx.Commit(ctx); err != nil {
 		return LoadResult{}, err
 	}
-	return LoadResult{Collection: name, Snapshot: snapshot, Features: features, Chunks: len(chunks), Partitions: len(touched)}, nil
+	return LoadResult{Collection: name, Snapshot: snapshot, Features: features, Chunks: len(chunks) + len(coarse), Partitions: len(touched)}, nil
 }
 
 func orderedCells(cells []uint64) []int64 {

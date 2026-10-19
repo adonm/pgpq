@@ -22,6 +22,11 @@ func Partition(key uint64) uint64 {
 	return uint64(s2.CellID(key).Parent(PartitionLevel))
 }
 
+func Range(cell uint64) (uint64, uint64) {
+	c := s2.CellID(cell)
+	return uint64(c.RangeMin()), uint64(c.RangeMax())
+}
+
 func Level(key uint64, level int) uint64 {
 	return uint64(s2.CellID(key).Parent(level))
 }

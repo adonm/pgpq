@@ -64,7 +64,7 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	if q.Limit <= 0 {
 		return Page{}, invalidf("limit must be positive")
 	}
-	if q.Level != detailLevel && q.Level != overviewLevel {
+	if q.Level != detailLevel && !slices.Contains(servedLevels, q.Level) {
 		return Page{}, invalidf("overview level %d is not served", q.Level)
 	}
 	if q.Level != detailLevel && q.Filter != nil {

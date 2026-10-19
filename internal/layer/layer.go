@@ -24,6 +24,7 @@ var (
 	ErrBadCursor       = errors.New("cursor does not match the collection")
 	ErrFeatureNotFound = errors.New("feature not found")
 	ErrDuplicate       = errors.New("more than one feature has this id; reload the partitions that hold it")
+	ErrConflict        = errors.New("a listed partition changed after the base snapshot")
 )
 
 const Retention = 72 * time.Hour

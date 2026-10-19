@@ -17,7 +17,7 @@ func TestSampleOverviewKeepsTheSmallestHashesPerCell(t *testing.T) {
 		id := strconv.Itoa(i)
 		entries = append(entries, entry{key: key, id: id, hash: idHash(id), cell: spatial.Partition(key)})
 	}
-	sample := sampleOverview(entries)
+	sample := sampleOverview(entries, overviewLevel)
 	if len(sample) != overviewCap {
 		t.Fatalf("sample holds %d, want %d", len(sample), overviewCap)
 	}

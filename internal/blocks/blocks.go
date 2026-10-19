@@ -14,6 +14,11 @@ import (
 
 const Size = 8120
 
+type querier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
 type Store struct {
 	pool  *pgxpool.Pool
 	cache *lru.Cache[int64, []byte]
@@ -34,6 +39,14 @@ func (s *Store) Put(ctx context.Context, collection, kind string, data []byte) (
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
+	id, err := s.PutTx(ctx, tx, collection, kind, data)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit(ctx)
+}
+
+func (s *Store) PutTx(ctx context.Context, tx pgx.Tx, collection, kind string, data []byte) (int64, error) {
 	var id int64
 	if err := tx.QueryRow(ctx, `insert into pfgb.files (collection, kind, bytes) values ($1, $2, $3) returning file_id`,
 		collection, kind, int64(len(data))).Scan(&id); err != nil {
@@ -48,9 +61,6 @@ func (s *Store) Put(ctx context.Context, collection, kind string, data []byte) (
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "blocks"}, []string{"file_id", "n", "data"}, pgx.CopyFromRows(rows)); err != nil {
 			return 0, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
 	}
 	return id, nil
 }
@@ -67,7 +77,7 @@ func (s *Store) ReadAll(ctx context.Context, fileID int64) ([]byte, error) {
 		}
 	}
 	shared, err, _ := s.loads.Do(strconv.FormatInt(fileID, 10), func() (any, error) {
-		data, err := s.read(context.WithoutCancel(ctx), fileID)
+		data, err := readFile(context.WithoutCancel(ctx), s.pool, fileID)
 		if err == nil && s.cache != nil {
 			s.cache.Add(fileID, data)
 		}
@@ -79,12 +89,16 @@ func (s *Store) ReadAll(ctx context.Context, fileID int64) ([]byte, error) {
 	return shared.([]byte), nil
 }
 
-func (s *Store) read(ctx context.Context, fileID int64) ([]byte, error) {
+func (s *Store) ReadFrom(ctx context.Context, q querier, fileID int64) ([]byte, error) {
+	return readFile(ctx, q, fileID)
+}
+
+func readFile(ctx context.Context, q querier, fileID int64) ([]byte, error) {
 	var size int64
-	if err := s.pool.QueryRow(ctx, `select bytes from pfgb.files where file_id = $1`, fileID).Scan(&size); err != nil {
+	if err := q.QueryRow(ctx, `select bytes from pfgb.files where file_id = $1`, fileID).Scan(&size); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `select n, data from pfgb.blocks where file_id = $1 order by n`, fileID)
+	rows, err := q.Query(ctx, `select n, data from pfgb.blocks where file_id = $1 order by n`, fileID)
 	if err != nil {
 		return nil, err
 	}

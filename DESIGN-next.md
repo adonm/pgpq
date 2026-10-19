@@ -10,12 +10,12 @@ Steps 1 to 3 are built under `/v2`, alongside the current contract. DESIGN.md is
 - **Built in step 2:** a column file per chunk, in the same row order as its FlatGeobuf; zone maps (`min`, `max` and `nulls` per column) in the chunk row (migration 0033); CQL2 and property-equality filters evaluated exactly on the column values; `numberMatched` for filter-only requests.
 - **Built in step 3:** id runs (migration 0032) and `GET /v2/collections/{id}/items/{featureID}`. Uniqueness across partitions is the loader's job, so the server checks ids only within a body (422), and a lookup that finds the id in more than one partition answers 409.
 - **Built for caching:** byte-budgeted LRUs per worker (`internal/lru`, 256 MiB each): file bytes by `file_id` (filled once per file), each snapshot's chunk list (the catalog cache, which loads the whole list rather than applying deltas; snapshots are immutable, so entries never go stale), and decoded id runs. On the 30k corpus a repeated count over 1,751 chunks falls from 0.69 s to 0.13 s, and a repeated bbox plus filter from 0.25 s to 0.11 s, both with the block cache alone; the catalog cache is not yet measured at scale.
-- **Built in step 5 (level 10 only):** one sample per partition, `cap` = 256 per level-10 cell, written at load as chunks with `level` = 10 and served with `overview=10`. Overview requests take no filter and are paged like detail. Lookups and `numberMatched` read detail only. Samples are not simplified, and they carry column files like detail.
+- **Built in step 5:** overview levels 8 and 10 per partition, level 12 for partitions above 100,000 features, and levels 6, 4 and 2 rebuilt in the same commit as each load, from the level below. Samples keep full geometry. Overview requests take a level, no filter, and are paged like detail; lookups and `numberMatched` read detail only. Conditional loads (`base=`) are built too: they answer 409 when a listed partition changed after the base snapshot.
 - **Verified:**
   - `testdata/corpus/mixed.fgb` (30,000 features: every scalar type, nulls, arrays, LIKE, ranges, datetime and bbox) loaded as a v2 collection in 2.8 s. The 93 filters in `filters.txt` without a bbox return the expected count through both the item list and `numberMatched`, and the five bbox filters return their expected counts through the item list. The two `datetime` lines are v1-only and skipped.
   - GDAL `ogrinfo` reads filtered FlatGeobuf over `/vsicurl/`: 30,000 features unfiltered, 12,000 for a LIKE filter and 3,340 for a bbox plus LIKE filter.
   - Lookups: a feature moved within its partition resolves to its new key, a feature moved to another partition resolves to its live copy, and a duplicate created by two partition loads answers 409.
-- **Not yet:** postings (step 4) and overview levels 8, 6, 4 and 2 (step 5); conditional `base=` loads, reaping and expired-snapshot cleanup (step 6); merging id runs (lookups scan every live run) and their Bloom filters; spill-to-disk for loads larger than memory (requests are held in memory); an R-tree (bbox pruning is a range query on chunk envelopes).
+- **Not yet:** reaping and expired-snapshot cleanup (step 6); merging id runs (decided, see Decisions); spill-to-disk for loads larger than memory (requests are held in memory); an R-tree (bbox pruning is a range query on chunk envelopes).
 - **Measured on `warm_100k`** (100k features spread thinly across ~7,600 level-8 cells):
 
   | | chunks | logical bytes | load | bbox (-5,40,10,50) |
@@ -101,11 +101,11 @@ Empty partitions have no rows at all.
 4. Commit in one short transaction:
    - lock the collection's catalog row, so commits serialize per collection and snapshot numbers follow commit order; check `base` against the listed partitions' `changed` snapshots;
    - create the new snapshot, end-snapshot the partitions' old chunk, postings and overview rows, and insert the new ones;
-   - append the id run (a whole-collection load also ends the older runs), and enqueue the partitions' level-6 ancestors.
+   - append the id run (a whole-collection load also ends the older runs), and rebuild the level-6, 4 and 2 ancestors from the level-8 samples in the same commit.
 
 Cost is proportional to the loaded partitions, never to the collection. Blocks for concurrent loads are written in parallel. Commits serialize per collection, which is what keeps a snapshot's contents fixed once it is visible: a reader pinned to snapshot `s` must never see a snapshot `s' < s` commit after it. The commit transaction is milliseconds, because all bulk work happens before it.
 
-## Postings
+## Postings (cut for now; see Decisions)
 
 - **One segment per partition** with at least 8 chunks, built during the load from the column values in hand, and so always current. Smaller partitions are scanned.
 - **Indexed columns:** low- and medium-cardinality columns and list columns. A column whose distinct count in the partition exceeds a budget is not indexed; zone maps serve it, and the id index serves ids.
@@ -227,14 +227,18 @@ Worker memory is the catalog, the id runs and a column/block cache budget. All o
 1. (built) S2 keys, level-8 partitions, chunks, catalog and blocks, whole-partition replace loads, bbox reads, streamed FGB, snapshot cursors.
 2. (built) Column files and zone maps: attribute filters and exact `numberMatched`.
 3. (built) Id runs: `/items/{id}` and duplicate detection at lookup. Uniqueness across partitions stays the loader's job.
-4. Postings and the busy rule.
-5. Overview levels: level 10 built; level 8 at load, and 6, 4 and 2 in the background.
-6. Snapshot expiry, reaping, and conditional loads (`base=`).
+4. Postings and the busy rule: cut from v2 for now (see Decisions).
+5. Overview levels: built (see Implementation status).
+6. Snapshot expiry and reaping (next). Conditional loads (`base=`) are built.
 
-## Open decisions
+## Decisions
 
-- Overview levels 8, 6, 4 and 2, `cap` and simplification tolerances. Size the overhead on a real layer first.
-- Where detail takes over in dense partitions. Level 10 gives about 400 features per screen at zoom 13 and about 25 at zoom 15, while detail is about 240k and 15k, so a level-12 sample for dense partitions may be needed.
-- The distinct-count budget above which a column is not indexed.
-- The chunk target (2 MiB / 50,000 features), to retune with measurements.
-- When to merge id runs, and whether to give them Bloom filters.
+These close the open questions. Where the gain is marginal, each one takes the option with less code.
+
+- **Overview levels:** 10 and 8 per partition at load, 12 for partitions above 100,000 features, and 6, 4 and 2 per cell, rebuilt in the same commit from the level below. `cap` = 256 at every level. Samples keep full geometry and column files, so there is no simplification step yet. Douglas–Peucker from `paulmach/orb` is the tool if response sizes need it.
+- **Zoom mapping:** none on the server. The client asks for a level with `overview=`.
+- **Chunk target:** 2 MiB and 50,000 features, kept.
+- **Postings:** cut from v2. Zone maps and column sidecars answer filters, and the cost is a column scan per chunk in the partition. Reintroduce postings only when a measured filter on a dense partition exceeds about 1 s cold. This saves about 250 lines.
+- **Id runs:** no Bloom filters, because a binary search over at most 64 runs is cheap. When a collection has more than 64 live runs, the next load rebuilds one run from the live chunks, which drops stale entries. Decided, not built yet.
+- **Reaping:** keep the 72 h retention. Chunk, run and file rows that no retained snapshot can see are deleted with their blocks. Decided, not built yet.
+- **Code budget:** 4,000 lines of production Go for v2. Today it is about 2,750, plus about 1,050 test lines and 66 SQL lines.

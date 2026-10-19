@@ -41,7 +41,16 @@ func (s *Server) putLayer(w http.ResponseWriter, r *http.Request) {
 		layerError(w, err)
 		return
 	}
-	result, err := s.layers.Load(r.Context(), name, ds, cells)
+	var base int64
+	if value := r.URL.Query().Get("base"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			http.Error(w, "base must be a snapshot number", http.StatusBadRequest)
+			return
+		}
+		base = parsed
+	}
+	result, err := s.layers.LoadIfUnchanged(r.Context(), name, ds, cells, base)
 	if err != nil {
 		layerError(w, err)
 		return
@@ -183,6 +192,8 @@ func layerError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, layer.ErrFeatureNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, layer.ErrConflict):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, layer.ErrDuplicate):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, store.ErrNotFound):
