@@ -172,7 +172,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
           <li><span class="tag built">built</span><b>Chunk size</b><br><span>2 MiB of uncompressed FGB or 50,000 features. Kept; retune only after measuring.</span></li>
           <li><span class="tag built">built</span><b>Sparse partitions</b><br><span>No packing. Every populated cell keeps at least one chunk.</span></li>
-          <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition and 12 above 100,000 features, both built from the upload’s own cell. Levels 10, 6, 4 and 2 and the commit-time rebuild are cut. Cap 256 per cell.</span></li>
+          <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, each built per upload from the cell below. Detail is a key-range lookup over the L8 chunks, not a stored level. Level 4 and 12 are cut. Cap 256 per cell.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell. The server reads only that body and writes only that cell’s rows.</span></li>
           <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
           <li><span class="tag built">built</span><b>Conditional loads</b><br><span>base=s answers 409 when a listed cell changed after s.</span></li>
@@ -487,7 +487,7 @@ const MODEL = {
     layout: ['chunk = contiguous key range', 'cut at 2 MiB or 50,000 features'], index: [] },
   encode: { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} written`,
-    text: 'Encodes each chunk (FGB and zstd), its column file and zone map, then the samples (level 8, and level 12 above 100,000 features) and the id run. This is the largest CPU share. Its files go to blobs and id runs; its chunk rows go to the commit.',
+    text: 'Encodes each chunk (FGB and zstd), its column file and zone map, then the samples (level 8 for the partition, and levels 6 and 2 for its ancestors) and the id run. This is the largest CPU share. Its files go to blobs and id runs; its chunk rows go to the commit.',
     layout: ['files: fgb, cols, idrun', 'rows written unpublished, by COPY'], index: [] },
   commit: { t: 'Commit', kind: 'mut', share: c => K.fixed / c.Wr.total,
     l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
@@ -650,20 +650,19 @@ this.bind(() => { divider.color = P.line; });
 
 const CAP = 256;
 const ZOOMS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
-const RUNGS = ['detail', 12, 8];
+const RUNGS = ['detail', 8, 6, 2];
 const kmTile = z => (40075.017 / 2 ** z) * Math.cos((48 * Math.PI) / 180);
 const cellKm2 = L => 85010745 / 4 ** L;
 const km2 = a => (a < 10 ? a.toFixed(1) : fmt(a));
+const km2short = a => (a >= 1e6 ? `${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${Math.round(a / 1e3)}k` : km2(a));
+const fmtCount = n => (n >= 0.05 ? (n < 1 ? n.toFixed(1) : fmt(n)) : '< 0.1');
+const detailAt = z => (W.f / cellKm2(8)) * 12 * kmTile(z) ** 2;
 const rungName = k => (k === 'detail' ? 'detail' : `L${k}`);
 function rungCounts(z) {
-  const area = 12 * kmTile(z) ** 2, detail = (W.f / cellKm2(8)) * area;
-  return RUNGS.map(k => {
-    if (k === 'detail') return { k, n: detail, ok: true };
-    const ok = k !== 12 || W.f > 100000;
-    return { k, n: ok ? Math.min(detail, (CAP * area) / cellKm2(k)) : 0, ok };
-  });
+  const area = 12 * kmTile(z) ** 2, detail = detailAt(z);
+  return RUNGS.map(k => ({ k, n: k === 'detail' ? detail : Math.min(detail, (CAP * area) / cellKm2(k)) }));
 }
-const pickAt = z => rungCounts(z).find(r => r.ok && r.n <= W.page) || null;
+const pickAt = z => rungCounts(z).find(r => r.n <= W.page) || null;
 function zoomBands() {
   const out = {};
   for (const z of ZOOMS) {
@@ -695,8 +694,9 @@ class Ladder extends Fig {
     this.view = this.shape(0, 0, 1, 1, 0, { fill: false, stroke: 1.8 });
     this.bind(() => { this.view.color = P.fg; });
     this.text(X, Y - 10, 'one L8 cell, about 36 km across, on average', 'lab');
-    this.text(X, Y + S + 16, 'L12 cell · 2.3 km · 256 kept per L8 cell', 'lab');
-    this.viewText = this.text(X, Y + S + 32, '', 'lab');
+    this.text(X, Y + S + 16, 'L6 cell · 285 km across · 16 L8 cells', 'lab');
+    this.text(X, Y + S + 32, 'L2 cell · 4,570 km · 4,096 L8 cells', 'lab');
+    this.viewText = this.text(X, Y + S + 48, '', 'lab');
     this.stripLabel = this.text(370, 44, '', 'lab');
     const cw = 616 / ZOOMS.length;
     this.cells = ZOOMS.map((z, i) => {
@@ -707,21 +707,21 @@ class Ladder extends Fig {
       this.text(x + w / 2, y + 56, String(z), 'lab', 'middle');
       return { z, f, o, t };
     });
-    this.rowsLabel = this.text(370, 172, '', 'lab');
+    this.rowsLabel = this.text(370, 168, '', 'lab');
     this.rows = RUNGS.map((k, i) => {
-      const y = 188 + i * 62;
+      const y = 182 + i * 54;
       return {
         k, y,
-        bg: this.shape(366, y, 620, 50, 0, { fill: true, stroke: false }),
-        bar: this.shape(600, y + 20, 1, 14, 0, { fill: true, stroke: false }),
-        name: this.text(370, y + 19, '', 'v'),
-        sub: this.text(370, y + 35, '', 'lab'),
-        val: this.text(986, y + 32, '', 'v', 'end'),
+        bg: this.shape(366, y, 620, 48, 0, { fill: true, stroke: false }),
+        bar: this.shape(600, y + 18, 1, 14, 0, { fill: true, stroke: false }),
+        name: this.text(370, y + 18, '', 'v'),
+        sub: this.text(370, y + 34, '', 'lab'),
+        val: this.text(986, y + 30, '', 'v', 'end'),
       };
     });
-    this.budget = this.shape(600, 178, 1, 196, 0, { fill: true, stroke: false });
+    this.budget = this.shape(600, 174, 1, 226, 0, { fill: true, stroke: false });
     this.bind(() => { this.budget.color = P.mut; });
-    for (const [t, x] of [['1', 600], ['1k', 677], ['1M', 753], ['1B', 830]]) this.text(x, 404, t, 'lab', 'middle');
+    for (const [t, x] of [['1', 600], ['1k', 677], ['1M', 753], ['1B', 830]]) this.text(x, 416, t, 'lab', 'middle');
     this.render();
   }
   geometry(z) {
@@ -734,10 +734,10 @@ class Ladder extends Fig {
   paint() {
     super.paint();
     const z = Math.round(S.ladder.z), rows = rungCounts(z), pick = pickAt(z), bands = zoomBands();
-    const g = this.geometry(z), t = kmTile(z);
+    const g = this.geometry(z), t = kmTile(z), detail = detailAt(z);
     this.view.visible = !!g;
     if (g) this.place(this.view, g.x, g.y, g.w, g.h);
-    this.viewText.textContent = `view at zoom ${z}: ${km2(4 * t)} × ${km2(3 * t)} km`;
+    this.viewText.textContent = `view at zoom ${z}: ${km2(4 * t)} × ${km2(3 * t)} km · detail would be ${fmtCount(detail)} features`;
     this.stripLabel.textContent = `level served at each zoom · cell ${fmt(W.f)} features · page ${fmt(W.page)}`;
     for (const c of this.cells) {
       const cur = c.z === z, p = pickAt(c.z);
@@ -747,21 +747,15 @@ class Ladder extends Fig {
       c.o.stroke = cur ? 2 : 1;
     }
     this.rowsLabel.textContent = `features on screen at zoom ${z} · line marks one page of ${fmt(W.page)}`;
-    this.place(this.budget, 600 + 230 * logFrac(W.page, 0, 9), 178, 1, 196);
+    this.place(this.budget, 600 + 230 * logFrac(W.page, 0, 9), 174, 1, 226);
     this.rows.forEach((r, i) => {
       const row = rows[i], chosen = !!pick && pick.k === r.k;
       r.bg.color = chosen ? P.lit : P.lane;
-      r.name.textContent = `${chosen ? '→ ' : ''}${rungName(r.k)} · ${r.k === 'detail' ? 'every feature' : `${km2(cellKm2(r.k))} km² cell`}`;
-      r.bar.visible = row.ok;
-      if (!row.ok) {
-        r.sub.textContent = 'not built below 100k per cell';
-        r.val.textContent = '—';
-        return;
-      }
+      r.name.textContent = `${chosen ? '→ ' : ''}${r.k === 'detail' ? 'detail · L8 range scan' : `${rungName(r.k)} · ${km2short(cellKm2(r.k))} km² cell`}`;
       r.bar.color = chosen ? P.fg : P.mut;
-      this.place(r.bar, 600, r.y + 20, 230 * logFrac(row.n, 0, 9), 14);
-      r.sub.textContent = `${r.k === 'detail' ? 'no cap' : `${CAP} per cell`} · ${bandText(r.k, bands)}`;
-      r.val.textContent = `${row.n < 1 ? '< 1' : fmt(row.n)} · ${fmtBytes(row.n * K.zst)}`;
+      this.place(r.bar, 600, r.y + 18, 230 * logFrac(row.n, 0, 9), 14);
+      r.sub.textContent = `${r.k === 'detail' ? 'no cap, whole chunks' : `${CAP} per cell`} · ${bandText(r.k, bands)}`;
+      r.val.textContent = `${fmtCount(row.n)} · ${fmtBytes(row.n * K.zst)}`;
     });
   }
   step(dt) {
@@ -838,7 +832,7 @@ class Load extends Fig {
       });
     });
     this.text(10, 162, 'Data size through one upload (log scale)', 'lab');
-    const rows = [['upload, .fgb.zst', 'upload', 'net'], ['decoded in memory', 'memory', 'mut'], ['chunk FGB, zstd', 'chunkBytes', 'db'], ['column files', 'colBytes', 'db'], ['id run', 'runBytes', 'db'], ['samples L8 · L12', 'sampleBytes', 'db'], ['rows to Postgres (WAL adds 1×)', 'db', 'db']];
+    const rows = [['upload, .fgb.zst', 'upload', 'net'], ['decoded in memory', 'memory', 'mut'], ['chunk FGB, zstd', 'chunkBytes', 'db'], ['column files', 'colBytes', 'db'], ['id run', 'runBytes', 'db'], ['samples L8 · L6 · L2', 'sampleBytes', 'db'], ['rows to Postgres (WAL adds 1×)', 'db', 'db']];
     rows.forEach(([label, key, kind], i) => {
       const y = 180 + i * 22;
       this.text(10, y + 11, label, 'v');
@@ -890,7 +884,7 @@ const REQS = [
   { label: 'numberMatched', lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
     run: c => readCount(c.f, c.link), note: 'Counts from column files only, so it never decodes geometry. Omitted with a bbox alone, as in v1.' },
   { label: 'items?overview=N', lines: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['samples,', 'LRU'], ['FGB search', 'of the samples'], ['page by', '(key, id)']],
-    run: c => readOverview(c.page, c.link), note: 'N is 8 or 12, chosen by the client. No filter. Samples are small, so overviews are the cheap way to show a whole area.' },
+    run: c => readOverview(c.page, c.link), note: 'N is 2, 6 or 8, chosen by the client. No filter. Samples are small, so overviews are the cheap way to show a whole area.' },
   { label: 'items/{id}', lines: [['id runs overlay:', 'search each run'], ['candidate keys', 'name cells'], ['catalog: chunks', 'covering the key'], ['verify the id', 'in each chunk']],
     run: c => readId(c.f, c.link), note: 'A cold lookup decodes every live run in full, which is why the id-run merge and a fence index are on the risk list.' },
   { label: 'PUT ?base=s', lines: [['lock the', 'collection row'], ['check the cell', 'changed after s'], ['accept, or', 'answer 409']],
@@ -1057,8 +1051,9 @@ const SIDE = {
   ladder() {
     return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
       <input type="range" id="z-range" min="6" max="17" step="1" aria-label="Zoom level">
-      <p>Level 8 keeps up to 256 features in each partition, the ones with the smallest hash, so they are spread evenly. Level 12 keeps up to 256 in each of its 5 km² cells, and is built only for partitions above 100,000 features. One level 8 cell covers 256 times the ground of one level 12 cell.</p>
-      <p class="note">Each zoom uses the finest level that fits one page. From the workload bar: the cell size is spread evenly over the view, and the page size is the budget. Below zoom 11 neither level fits a 1,000-feature page, so a larger page is needed there.</p>
+      <p>Level 8 is the ingest unit, and its samples are the coarse views: 256 kept in each partition, the features with the smallest hash. Level 6 keeps 256 in each of its cells, built from its 16 partitions, and level 2 from its 4,096. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
+      <p class="note">Detail is a key-range scan over the L8 chunks, not a stored level: the catalog is sorted by key, so a bbox names one contiguous range of chunks and only those are read. The row count stays bounded as the zoom rises.</p>
+      <p class="note">Each zoom uses the finest option that fits one page. From the workload bar: the cell size is spread evenly over the view, and the page size is the budget. A larger page lets a fine view use detail sooner instead of a sparse sample.</p>
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   load() {
@@ -1082,15 +1077,16 @@ function syncLadder() {
   const z = Math.round(S.ladder.z), rows = rungCounts(z), pick = pickAt(z), r = $('#z-range');
   if (r && document.activeElement !== r) r.value = z;
   set('#z-val', z);
-  const detail = rows[0].n;
+  const detail = detailAt(z);
   if (!pick) {
     set('#z-pick', `No level fits one page of ${fmt(W.page)} at this zoom.`);
     set('#status-ladder', `Zoom ${z}: no level fits one page of ${fmt(W.page)}.`);
     return;
   }
   const want = pick.k === 'detail' ? 'detail' : `overview=${pick.k}`;
-  set('#z-pick', `Ask for ${want}: ${fmt(pick.n)} features, ${fmtBytes(pick.n * K.zst)} over the link (${fmtTime((pick.n * K.zst) / W.link)}). Detail would be ${fmt(detail)} features.`);
-  set('#status-ladder', `Zoom ${z}: ask for ${want}, ${fmt(pick.n)} features. Detail: ${fmt(detail)}.`);
+  const sparse = pick.k !== 'detail' && pick.n < 1 ? ` The sample is too sparse at this zoom; read detail with a page of about ${fmt(Math.ceil(detail))}.` : '';
+  set('#z-pick', `Ask for ${want}: ${fmtCount(pick.n)} features, ${fmtBytes(pick.n * K.zst)} over the link (${fmtTime((pick.n * K.zst) / W.link)}). Detail would be ${fmtCount(detail)} features.${sparse}`);
+  set('#status-ladder', `Zoom ${z}: ask for ${want}, ${fmtCount(pick.n)} features. Detail: ${fmtCount(detail)}.`);
 }
 
 function syncLoad() {
