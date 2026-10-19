@@ -119,7 +119,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <thead><tr><th>cell</th><th>cells</th><th>upload / cell</th><th>upload total</th><th>stored</th><th>ingest</th></tr></thead>
       <tbody id="totals"></tbody>
     </table>
-    <p class="note">Upload bytes scale with features, so both classes total the same. Stored bytes and ingest time scale with the cell count: 83k mean cells pay 83k commits and three sample files each, while 400 dense cells pay 400 large commits.</p>
+    <p class="note">Upload and the id index scale with features, so both classes pay the same 186 GB up and 74.5 GB of id rows. Detail storage and ingest time grow with the cell count: 83k mean cells pay 83k commits and three sample files each, while 400 dense cells pay 400 large commits.</p>
     <aside class="side" id="side-model"></aside>
   </section>
 
@@ -225,6 +225,17 @@ const CPU_SHARE = { receive: 0.25, validate: 0.15, derive: 0.35, compress: 0.25 
 const FEAT_PER_BLOCK = Math.max(1, Math.floor(K.block / K.raw));
 const rtreeBytes = f => Math.ceil(f / 16) * 1.07 * K.node;
 const fenceBytes = f => Math.ceil(f / K.fenceEvery) * K.fence;
+const l6Cells = cells => Math.ceil(cells / 16);
+const l2Cells = cells => Math.ceil(cells / 4096);
+const sampleFileBytes = n => n * (K.zst + K.col) + rtreeBytes(n) + fenceBytes(n);
+function collectionStored(f) {
+  const cells = Math.ceil(W.n / f);
+  const detail = cells * (f * K.zst + rtreeBytes(f) + fenceBytes(f) + f * K.col);
+  const samples = sampleFileBytes(Math.min(f, 256) * cells) + sampleFileBytes(256 * l6Cells(cells)) + sampleFileBytes(256 * l2Cells(cells));
+  const ids = W.n * K.idxRow;
+  const rows = 6 * cells + 3 * l6Cells(cells) + 3 * l2Cells(cells);
+  return { cells, detail, samples, ids, rows, rowBytes: rows * K.meta, total: detail + samples + ids + rows * K.meta };
+}
 const TYPICAL = 12000, DENSE = 2500000;
 const W = { n: 1000000000, f: 12000, link: 125e6, page: 1000 };
 const TYPES = [{ name: 'mean', f: 12000 }, { name: 'dense', f: 2500000 }];
@@ -299,7 +310,8 @@ function readFilter(f, page, link) {
   return steps([
     { name: 'partition row', db: K.meta },
     { name: 'column sidecar', db: f * K.col, cpu: (f * K.col) / K.dec },
-    { name: 'fence + matched blocks', db: f * K.zst, cpu: (f * K.zst + f * K.raw) / K.dec },
+    { name: 'fence + matched blocks', db: f * K.zst, cpu: (f * K.zst) / K.dec },
+    { name: 'decode matches', cpu: (f * K.raw) / K.dec },
     { name: 'matches, page', net: n * K.up, cpu: n * 1e-6 },
   ], link);
 }
@@ -311,10 +323,12 @@ function readCount(f, link) {
   ], link);
 }
 function readOverview(page, link) {
+  const files = Math.max(1, Math.ceil(page / 256)), idx = files * rtreeBytes(256);
   return steps([
-    { name: 'file row at level N', db: K.meta },
-    { name: 'sample index', db: rtreeBytes(page), cpu: rtreeBytes(page) / K.dec },
-    { name: 'sample blocks', db: page * K.zst, cpu: (page * K.raw) / K.dec },
+    { name: `${files} file rows at level N`, db: files * K.meta },
+    { name: 'sample indexes', db: idx, cpu: idx / K.dec },
+    { name: 'sample blocks', db: page * K.zst, cpu: (page * K.zst) / K.dec },
+    { name: 'decode samples', cpu: (page * K.raw) / K.dec },
     { name: 'response', net: page * K.up },
   ], link);
 }
@@ -487,9 +501,9 @@ const MODEL = {
     l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
     text: `Receives one canonical zstd FlatGeobuf per level-8 cell, about ${K.up} B per feature (estimated from OSM Layercake). The loader writes it in (key, id) order with its R-tree, so the server never sorts or re-encodes.`,
     layout: ['body: canonical zstd FlatGeobuf, one cell', `upload bytes = features × ${K.up} B`], index: [] },
-  decode: { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total,
-    l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => 'order, cell, ids',
-    text: 'Parses the canonical file once and checks that features are in (key, id) order, inside the cell, with unique ids, and that the index root matches the file. A failure answers 422.',
+  decode: { t: 'Validate', kind: 'cpu', share: c => (c.Wr.stage.receive + c.Wr.stage.validate) / c.Wr.total,
+    l1: c => `${fmtTime(c.Wr.stage.receive + c.Wr.stage.validate)} CPU`, l2: () => 'order, cell, ids',
+    text: 'Decompresses and parses the canonical file once, then checks that features are in (key, id) order, inside the cell, with unique ids, and that the index root matches the file. A failure answers 422.',
     layout: ['the order is checked, not produced'], index: [] },
   validate: { t: 'Derive', kind: 'cpu', share: c => c.Wr.stage.derive / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.derive)} CPU`, l2: () => 'fence, columns, ids',
@@ -508,7 +522,7 @@ const MODEL = {
     text: 'One transaction: lock the collection row, delete the cell’s old files, insert the new file rows, rebuild levels 6 and 2 for its ancestors, replace the cell’s id index rows, bump the version. A reader that listed a file just before it was deleted retries once. Cost grows with the cell.',
     layout: ['files replaced in place'], index: [] },
   blobs: { t: 'blobs & files', kind: 'db', size: c => c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes + c.Wr.sampleBytes,
-    l1: c => `${fmtBytes(c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes + c.Wr.sampleBytes)} per cell`, l2: c => `${fmtBytes(typeTotals(W.f).stored)} total`,
+    l1: c => `${fmtBytes(c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes)} per cell`, l2: () => `${fmtBytes(collectionStored(W.f).detail + collectionStored(W.f).samples)} total`,
     text: `One virtual FlatGeobuf per partition, sliced into ${fmt(K.block)}-byte uncompressed pieces and zstd-compressed into block rows, one per heap page. Its R-tree, key fence and column sidecar are stored the same way. The files table lists each file and its kind.`,
     layout: ['blocks: file_id bigint, n int, data bytea (storage plain)', 'files: file_id identity, collection_id smallint, kind, bytes, published, created'], index: ['blocks pk (file_id, n)', 'files pk (file_id)'] },
   idRuns: { t: 'id index', kind: 'db', size: c => c.Wr.f * K.idxRow,
@@ -516,7 +530,7 @@ const MODEL = {
     text: 'One row per feature: the hash of its id and the key that locates it. A lookup reads the rows for a hash, jumps to the key in the partition file through its fence, and checks the id exactly. The rows are replaced with the cell on every upload.',
     layout: ['ids: collection_id smallint, hash, key', 'one row per feature'], index: ['pk (collection_id, hash, key)'] },
   catalog: { t: 'catalog', kind: 'db', size: c => c.Wr.files * K.meta,
-    l1: c => `${fmt(c.Wr.files)} rows/cell`, l2: c => `${fmt(Math.ceil(W.n / W.f) * c.Wr.files)} rows total`,
+    l1: c => `${fmt(c.Wr.files)} rows/upload`, l2: () => `${fmt(collectionStored(W.f).rows)} rows stored`,
     text: 'One row per stored file: a partition’s detail file or an overview sample, with its key range, envelope and sizes, keyed by the 2-byte collection id. The collections row holds the name, version and column list, so a worker can tell a cached file list from a stale one. A commit replaces a cell’s files and bumps the version.',
     layout: ['files: file_id identity pk, collection_id smallint, cell, level, first_key, last_key, minx, miny, maxx, maxy, features, fgb_file, fence_file, col_file, bytes', 'collections: id smallint pk, name unique, version, id_column, columns_json', 'ids: collection_id smallint, hash, key'],
     index: ['files (collection_id, cell, level)', 'collections pk (id), unique (name)', 'ids pk (collection_id, hash, key)'] },
@@ -1093,7 +1107,7 @@ function costRows() {
 
 function typeTotals(f) {
   const cells = Math.ceil(W.n / f), w = writeCost(f, W.link);
-  return { cells, per: w, upload: cells * w.upload, stored: cells * w.db, time: cells * (w.cpu + w.tDb + K.fixed) };
+  return { cells, per: w, upload: cells * w.upload, stored: collectionStored(f).total, time: cells * (w.cpu + w.tDb + K.fixed) };
 }
 
 function syncTotals() {
@@ -1118,7 +1132,7 @@ function syncOverviews() {
   if (r && document.activeElement !== r) r.value = z;
   set('#z-val', z);
   const cells = Math.ceil(W.n / W.f);
-  set('#ov-counts', `At ${fmtBig(W.n)} features over ${fmt(W.f)}-feature cells: ${fmt(cells)} detail files, ${fmt(Math.ceil(cells / 16))} L6 files and ${fmt(Math.ceil(cells / 4096))} L2 files.`);
+  set('#ov-counts', `At ${fmtBig(W.n)} features over ${fmt(W.f)}-feature cells: ${fmt(cells)} partitions, ${fmt(l6Cells(cells))} L6 cells and ${fmt(l2Cells(cells))} L2 cells.`);
   const detail = detailAt(z);
   if (!pick) {
     set('#z-pick', `No level fits one page of ${fmt(W.page)} at this zoom.`);
