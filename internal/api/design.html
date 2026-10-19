@@ -221,8 +221,8 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     </div>
     <div class="box">
       <h3>Code size</h3>
-      <p>v2 target: 4,000 lines of production Go. The tree is still mixed with v1: about 11,800 production lines across all packages, plus tests.</p>
-      <p class="note">Once v1 is gone, this becomes a progress bar again.</p>
+      <p>v2 target: 4,000 lines of production Go. After removing v1 the tree is 6,447 production lines plus tests; the remaining gap is the storage alignment.</p>
+      <p class="note">v1 is gone from the tree. The next pass replaces chunks with one file per cell.</p>
     </div>
     <div class="grid2">
       <div>
@@ -231,10 +231,10 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
           <li><span class="tag decided">decided</span><b>Upload contract</b><br><span>A canonical FlatGeobuf in (key, id) order with its R-tree, written by the loader. The server validates it and derives the fence, columns and id rows. Sort and encode do not run on the server. Not built.</span></li>
           <li><span class="tag decided">decided</span><b>Partition file</b><br><span>One FlatGeobuf per L8 cell, sliced into 8 KB uncompressed pieces and block-compressed, with a key fence every 256 features. The code still chunks.</span></li>
-          <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, built per upload from the cell below. Detail reads the L8 file through its R-tree. The code still builds 8, 10, 12, 6, 4 and 2.</span></li>
+          <li><span class="tag built">built</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, built per upload from the cell below. Detail reads the L8 file through its R-tree.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell; the server reads only that body and writes only that cell’s rows. Not built: the /v2 load still takes multi-cell bodies.</span></li>
           <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
-          <li><span class="tag built">built</span><b>Caches</b><br><span>Two LRUs per worker, 256 MiB each: file bytes and per-cell file rows, keyed by cell and version.</span></li>
+          <li><span class="tag built">built</span><b>Caches</b><br><span>Two LRUs per worker, 256 MiB each: block bytes and the collection catalog. Target: per-cell file rows, keyed by cell and version.</span></li>
           <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the current rows, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
           <li><span class="tag built">built</span><b>Id index</b><br><span>One row per feature: its id hash and key. Replaced with the cell on every upload. No runs, merges or Bloom filters.</span></li>
           <li><span class="tag decided">decided</span><b>Collection id</b><br><span>A smallint id in every table; the name lives only in collections. That caps collections at 32,767, and int is the fallback beyond it. Not built: the code still uses the bigint uid.</span></li>
