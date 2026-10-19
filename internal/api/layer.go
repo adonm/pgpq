@@ -41,16 +41,7 @@ func (s *Server) putLayer(w http.ResponseWriter, r *http.Request) {
 		layerError(w, err)
 		return
 	}
-	var base int64
-	if value := r.URL.Query().Get("base"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			http.Error(w, "base must be a snapshot number", http.StatusBadRequest)
-			return
-		}
-		base = parsed
-	}
-	result, err := s.layers.LoadIfUnchanged(r.Context(), name, ds, cells, base)
+	result, err := s.layers.Load(r.Context(), name, ds, cells)
 	if err != nil {
 		layerError(w, err)
 		return
@@ -106,7 +97,7 @@ func (s *Server) layerItems(w http.ResponseWriter, r *http.Request) {
 	}
 	var matched *int64
 	if bbox == nil && level == 0 && r.URL.Query().Get("numberMatched") == "true" {
-		n, err := s.layers.Count(r.Context(), r.PathValue("id"), page.Snapshot, filter)
+		n, err := s.layers.Count(r.Context(), r.PathValue("id"), filter)
 		if err != nil {
 			layerError(w, err)
 			return
@@ -118,7 +109,6 @@ func (s *Server) layerItems(w http.ResponseWriter, r *http.Request) {
 
 type layerFeatureCollection struct {
 	Type           string          `json:"type"`
-	Snapshot       int64           `json:"snapshot"`
 	NumberMatched  *int64          `json:"numberMatched,omitempty"`
 	NumberReturned int             `json:"numberReturned"`
 	Features       []chunk.Feature `json:"features"`
@@ -128,7 +118,6 @@ type layerFeatureCollection struct {
 func writeLayerGeoJSON(w http.ResponseWriter, page layer.Page, next string, matched *int64) {
 	out := layerFeatureCollection{
 		Type:           "FeatureCollection",
-		Snapshot:       page.Snapshot,
 		NumberMatched:  matched,
 		NumberReturned: len(page.Hits),
 		Features:       make([]chunk.Feature, 0, len(page.Hits)),
@@ -190,8 +179,6 @@ func layerError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, layer.ErrFeatureNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, layer.ErrConflict):
-		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, layer.ErrDuplicate):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, store.ErrNotFound):

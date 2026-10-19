@@ -20,23 +20,20 @@ type chunkSample struct {
 	input chunk.InputFeature
 }
 
-func (l *Layer) rebuildCoarse(ctx context.Context, tx pgx.Tx, put blobPut, coll Collection, dirty []uint64, snapshot int64) ([]chunkRow, error) {
+func (l *Layer) rebuildCoarse(ctx context.Context, tx pgx.Tx, put blobPut, coll Collection, dirty []uint64) ([]chunkRow, error) {
 	var all []chunkRow
 	children := dirty
 	for _, step := range coarseSteps {
 		parents := ancestors(children, step.level)
-		if _, err := tx.Exec(ctx, `update pfgb.chunks set end_snapshot = $3 where collection = $1 and cell = any($2) and end_snapshot is null`, coll.Name, orderedCells(parents), snapshot); err != nil {
-			return nil, err
-		}
 		var rows []chunkRow
 		for _, parent := range parents {
-			built, err := l.coarseChunks(ctx, tx, put, coll, parent, step.level, step.from, snapshot)
+			built, err := l.coarseChunks(ctx, tx, put, coll, parent, step.level, step.from)
 			if err != nil {
 				return nil, err
 			}
 			rows = append(rows, built...)
 		}
-		if err := insertChunks(ctx, tx, coll.Name, rows, snapshot); err != nil {
+		if err := insertChunks(ctx, tx, coll.Name, rows); err != nil {
 			return nil, err
 		}
 		all = append(all, rows...)
@@ -45,10 +42,10 @@ func (l *Layer) rebuildCoarse(ctx context.Context, tx pgx.Tx, put blobPut, coll 
 	return all, nil
 }
 
-func (l *Layer) coarseChunks(ctx context.Context, tx pgx.Tx, put blobPut, coll Collection, parent uint64, level, from int, snapshot int64) ([]chunkRow, error) {
+func (l *Layer) coarseChunks(ctx context.Context, tx pgx.Tx, put blobPut, coll Collection, parent uint64, level, from int) ([]chunkRow, error) {
 	lo, hi := spatial.Range(parent)
-	fileRows, err := tx.Query(ctx, `select file_id from pfgb.chunks where collection = $1 and level = $2 and cell between $3 and $4 and begin_snapshot <= $5 and (end_snapshot is null or end_snapshot > $5)`,
-		coll.Name, from, spatial.ToOrdered(lo), spatial.ToOrdered(hi), snapshot)
+	fileRows, err := tx.Query(ctx, `select file_id from pfgb.chunks where collection = $1 and level = $2 and cell between $3 and $4`,
+		coll.Name, from, spatial.ToOrdered(lo), spatial.ToOrdered(hi))
 	if err != nil {
 		return nil, err
 	}
@@ -162,13 +159,13 @@ func ancestors(cells []uint64, level int) []uint64 {
 	return out
 }
 
-func insertChunks(ctx context.Context, tx pgx.Tx, name string, rows []chunkRow, snapshot int64) error {
+func insertChunks(ctx context.Context, tx pgx.Tx, name string, rows []chunkRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	values := make([][]any, len(rows))
 	for i, c := range rows {
-		values[i] = chunkValues(name, c, snapshot)
+		values[i] = chunkValues(name, c)
 	}
 	_, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "chunks"}, chunkColumns, pgx.CopyFromRows(values))
 	return err

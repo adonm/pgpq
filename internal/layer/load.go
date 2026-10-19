@@ -64,17 +64,12 @@ type chunkRow struct {
 
 type LoadResult struct {
 	Collection string `json:"collection"`
-	Snapshot   int64  `json:"snapshot"`
 	Features   int    `json:"features"`
 	Chunks     int    `json:"chunks"`
 	Partitions int    `json:"partitions"`
 }
 
 func (l *Layer) Load(ctx context.Context, name string, ds ingest.Dataset, cells []uint64) (LoadResult, error) {
-	return l.LoadIfUnchanged(ctx, name, ds, cells, 0)
-}
-
-func (l *Layer) LoadIfUnchanged(ctx context.Context, name string, ds ingest.Dataset, cells []uint64, base int64) (LoadResult, error) {
 	if ds.IDColumn == "" {
 		return LoadResult{}, invalidf("the collection needs an id column")
 	}
@@ -82,10 +77,6 @@ func (l *Layer) LoadIfUnchanged(ctx context.Context, name string, ds ingest.Data
 		return LoadResult{}, invalidf("a whole-collection load needs features")
 	}
 	entries, err := indexFeatures(ds, cells)
-	if err != nil {
-		return LoadResult{}, err
-	}
-	runFile, err := l.blocks.Put(ctx, name, "idrun", encodeRun(entries))
 	if err != nil {
 		return LoadResult{}, err
 	}
@@ -101,7 +92,7 @@ func (l *Layer) LoadIfUnchanged(ctx context.Context, name string, ds ingest.Data
 		}
 		chunks = append(chunks, rows...)
 	}
-	return l.commit(ctx, name, ds, cells, chunks, runFile, len(entries), base)
+	return l.commit(ctx, name, ds, cells, chunks, entries)
 }
 
 func sampleOverview(entries []entry, level int) []entry {

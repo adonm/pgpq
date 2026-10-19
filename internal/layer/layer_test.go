@@ -169,7 +169,7 @@ func TestLayerLoadPagesAndReplacesPartitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Snapshot != 1 || res.Features != 900 {
+	if res.Features != 900 {
 		t.Fatalf("load = %+v", res)
 	}
 
@@ -206,9 +206,6 @@ func TestLayerLoadPagesAndReplacesPartitions(t *testing.T) {
 	res, err = l.Load(ctx, name, datasetOf(t, name, testColumns, newParis), cells)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if res.Snapshot != 2 {
-		t.Fatalf("partition load snapshot = %d, want 2", res.Snapshot)
 	}
 
 	current := readAll(t, l, name, Query{BBox: box(paris), Limit: 100})
@@ -260,11 +257,8 @@ func TestLayerLoadPagesAndReplacesPartitions(t *testing.T) {
 	if _, err := l.Items(ctx, name, Query{BBox: box(paris), Limit: 10, Cursor: &Cursor{UID: cursor.UID + 1, Level: cursor.Level, Key: cursor.Key, ID: cursor.ID}}); !errors.Is(err, ErrBadCursor) {
 		t.Fatalf("cursor for another collection: %v", err)
 	}
-	if _, err := l.pool.Exec(ctx, `update pfgb.snapshots set created = now() - interval '73 hours' where collection = $1 and id = 1`, name); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := l.Items(ctx, name, Query{BBox: box(paris), Limit: 10, Cursor: cursor}); err != nil {
-		t.Fatalf("cursor after 73 hours: %v", err)
+		t.Fatalf("cursor reuse: %v", err)
 	}
 }
 
@@ -298,8 +292,8 @@ func TestLookupFollowsLoadsAndFlagsDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	var live int
-	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.id_runs where collection = $1 and end_snapshot is null`, name).Scan(&live); err != nil || live != 1 {
-		t.Fatalf("live id runs after a whole load = %d (%v)", live, err)
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.ids where collection = $1`, name).Scan(&live); err != nil || live != 400 {
+		t.Fatalf("id index rows after a whole load = %d (%v)", live, err)
 	}
 	if hit, err := l.Lookup(ctx, name, "paris-0007"); err != nil || hit.ID != "paris-0007" {
 		t.Fatalf("lookup paris-0007: %v", err)

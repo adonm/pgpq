@@ -86,10 +86,6 @@ func TestItemsAndCountFollowFeatureValues(t *testing.T) {
 	if _, err := l.Load(ctx, name, datasetOf(t, name, cols, features), nil); err != nil {
 		t.Fatal(err)
 	}
-	coll, err := l.Collection(ctx, name)
-	if err != nil {
-		t.Fatal(err)
-	}
 	all := readAll(t, l, name, Query{Limit: 64})
 	if len(all) != len(features) {
 		t.Fatalf("read %d features, loaded %d", len(all), len(features))
@@ -106,7 +102,7 @@ func TestItemsAndCountFollowFeatureValues(t *testing.T) {
 		if !slices.Equal(sortedIDs(got), want) {
 			t.Fatalf("%s: got %d features, want %d", text, len(got), len(want))
 		}
-		count, err := l.Count(ctx, name, coll.Snapshot, expr)
+		count, err := l.Count(ctx, name, expr)
 		if err != nil || count != int64(len(want)) {
 			t.Fatalf("%s: count %d (%v), want %d", text, count, err, len(want))
 		}

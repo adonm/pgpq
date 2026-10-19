@@ -2,6 +2,7 @@ package blocks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -13,6 +14,8 @@ import (
 )
 
 const Size = 8120
+
+var ErrNotFound = errors.New("blocks: file not found")
 
 type querier interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -96,6 +99,9 @@ func (s *Store) ReadFrom(ctx context.Context, q querier, fileID int64) ([]byte, 
 func readFile(ctx context.Context, q querier, fileID int64) ([]byte, error) {
 	var size int64
 	if err := q.QueryRow(ctx, `select bytes from pfgb.files where file_id = $1`, fileID).Scan(&size); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 	rows, err := q.Query(ctx, `select n, data from pfgb.blocks where file_id = $1 order by n`, fileID)

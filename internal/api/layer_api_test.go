@@ -113,10 +113,9 @@ func TestLayerRoutesRoundTrip(t *testing.T) {
 		t.Fatalf("put = %d: %s", put.Code, put.Body.String())
 	}
 	var loaded struct {
-		Snapshot int64 `json:"snapshot"`
-		Features int   `json:"features"`
+		Features int `json:"features"`
 	}
-	if err := json.Unmarshal(put.Body.Bytes(), &loaded); err != nil || loaded.Snapshot != 1 || loaded.Features != 40 {
+	if err := json.Unmarshal(put.Body.Bytes(), &loaded); err != nil || loaded.Features != 40 {
 		t.Fatalf("put response %s (%v)", put.Body.String(), err)
 	}
 

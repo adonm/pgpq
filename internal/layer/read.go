@@ -8,6 +8,7 @@ import (
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
+	"github.com/adonm/postfgb/internal/blocks"
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/spatial"
@@ -31,7 +32,6 @@ type Hit struct {
 
 type Page struct {
 	Collection string
-	Snapshot   int64
 	Hits       []Hit
 	Next       *Cursor
 }
@@ -54,11 +54,19 @@ type located struct {
 type catalogKey struct {
 	collection string
 	uid        int64
-	snapshot   int64
+	version    int64
 	level      int
 }
 
 func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
+	page, err := l.items(ctx, name, q, false)
+	if errors.Is(err, ErrStale) {
+		page, err = l.items(ctx, name, q, true)
+	}
+	return page, err
+}
+
+func (l *Layer) items(ctx context.Context, name string, q Query, fresh bool) (Page, error) {
 	if q.Limit <= 0 {
 		return Page{}, invalidf("limit must be positive")
 	}
@@ -75,12 +83,11 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	if q.Cursor != nil && (q.Cursor.UID != coll.UID || q.Cursor.Level != q.Level) {
 		return Page{}, ErrBadCursor
 	}
-	snapshot := coll.Snapshot
-	metas, err := l.catalog(ctx, coll, snapshot, q.Level)
+	metas, err := l.catalogOf(ctx, coll, q.Level, fresh)
 	if err != nil {
 		return Page{}, err
 	}
-	page := Page{Collection: name, Snapshot: snapshot}
+	page := Page{Collection: name}
 	for _, meta := range metas {
 		if len(page.Hits) == q.Limit {
 			break
@@ -118,12 +125,12 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	return page, nil
 }
 
-func (l *Layer) Count(ctx context.Context, name string, snapshot int64, filter cql.Expr) (int64, error) {
+func (l *Layer) Count(ctx context.Context, name string, filter cql.Expr) (int64, error) {
 	coll, err := l.Collection(ctx, name)
 	if err != nil {
 		return 0, err
 	}
-	metas, err := l.catalog(ctx, coll, snapshot, detailLevel)
+	metas, err := l.catalog(ctx, coll, detailLevel)
 	if err != nil {
 		return 0, err
 	}
@@ -153,12 +160,25 @@ func (l *Layer) Count(ctx context.Context, name string, snapshot int64, filter c
 	return total, nil
 }
 
-func (l *Layer) catalog(ctx context.Context, coll Collection, snapshot int64, level int) ([]chunkMeta, error) {
-	key := catalogKey{collection: coll.Name, uid: coll.UID, snapshot: snapshot, level: level}
+func (l *Layer) catalogOf(ctx context.Context, coll Collection, level int, fresh bool) ([]chunkMeta, error) {
+	if fresh {
+		key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level}
+		metas, err := l.loadCatalog(ctx, coll.Name, level)
+		if err != nil {
+			return nil, err
+		}
+		l.catalogs.Add(key, metas)
+		return metas, nil
+	}
+	return l.catalog(ctx, coll, level)
+}
+
+func (l *Layer) catalog(ctx context.Context, coll Collection, level int) ([]chunkMeta, error) {
+	key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level}
 	if metas, ok := l.catalogs.Get(key); ok {
 		return metas, nil
 	}
-	metas, err := l.loadCatalog(ctx, coll.Name, snapshot, level)
+	metas, err := l.loadCatalog(ctx, coll.Name, level)
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +186,8 @@ func (l *Layer) catalog(ctx context.Context, coll Collection, snapshot int64, le
 	return metas, nil
 }
 
-func (l *Layer) loadCatalog(ctx context.Context, name string, snapshot int64, level int) ([]chunkMeta, error) {
-	rows, err := l.pool.Query(ctx, `select file_id, col_file, features, minx, miny, maxx, maxy, last_key, last_id, zone from pfgb.chunks where collection = $1 and begin_snapshot <= $2 and (end_snapshot is null or end_snapshot > $2) and level = $3 order by first_key, first_id collate "C"`, name, snapshot, level)
+func (l *Layer) loadCatalog(ctx context.Context, name string, level int) ([]chunkMeta, error) {
+	rows, err := l.pool.Query(ctx, `select file_id, col_file, features, minx, miny, maxx, maxy, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 order by first_key, first_id collate "C"`, name, level)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +216,7 @@ func catalogSize(metas []chunkMeta) int64 {
 func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q Query) ([]Hit, error) {
 	data, err := l.blocks.ReadAll(ctx, meta.fileID)
 	if err != nil {
-		return nil, err
+		return nil, stale(err)
 	}
 	c, err := chunk.Open(data)
 	if err != nil {
@@ -254,7 +274,7 @@ func (l *Layer) rowMask(ctx context.Context, meta chunkMeta, filter cql.Expr, ro
 	}
 	data, err := l.blocks.ReadAll(ctx, meta.colFile)
 	if err != nil {
-		return nil, err
+		return nil, stale(err)
 	}
 	reader, ok := chunk.OpenAttrs(data)
 	if !ok {
@@ -305,6 +325,13 @@ func featureBounds(c *chunk.Chunk, f *flattypes.Feature) ([4]float64, error) {
 		return [4]float64{}, errors.New("layer: stored feature has no extent")
 	}
 	return bounds, nil
+}
+
+func stale(err error) error {
+	if errors.Is(err, blocks.ErrNotFound) {
+		return ErrStale
+	}
+	return err
 }
 
 func intersects(bounds [4]float64, bbox *[4]float64) bool {

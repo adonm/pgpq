@@ -182,15 +182,11 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, each built per upload from the cell below. Detail is not stored: it reads the L8 chunks whose envelope meets the bbox. Level 4 and 12 are cut. Cap <span id="f-cap2"></span> per cell.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell. The server reads only that body and writes only that cell’s rows.</span></li>
           <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
-          <li><span class="tag built">built</span><b>Conditional loads</b><br><span>base=s answers 409 when a listed cell changed after s.</span></li>
-          <li><span class="tag built">built</span><b>Caches</b><br><span>Three LRUs per worker, <span id="f-cache"></span> each: file bytes, chunk lists, decoded id runs.</span></li>
+          <li><span class="tag built">built</span><b>Caches</b><br><span>Two LRUs per worker, <span id="f-cache"></span> each: file bytes and the chunk list.</span></li>
           <li><span class="tag decided">decided</span><b>Upload</b><br><span>One .fgb.zst per L8 cell. No streaming, bucketing or spill. Not built: the /v2 load still takes multi-cell bodies.</span></li>
-          <li><span class="tag decided">decided</span><b>Snapshot per upload</b><br><span>Each upload is one commit. A multi-cell reload is not atomic: readers can see old and new cells together until it ends.</span></li>
-          <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the latest snapshot, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
-          <li><span class="tag next">next</span><b>Id runs</b><br><span>One run per upload. Lookups search every live run. Above <span id="f-runsmax"></span> live runs, a background merge combines the <span id="f-runsmerge"></span> smallest and drops stale entries.</span></li>
-          <li><span class="tag next">next</span><b>Reaping</b><br><span>Replaced rows and files stay <span id="f-grace"></span>, then are deleted. No cursor pins a snapshot, so there is no snapshot retention.</span></li>
-          <li><span class="tag cut">cut</span><b>Postings</b><br><span>Zone maps and column files answer filters for now. Revisit if a dense-cell filter takes over 1 s cold.</span></li>
-          <li><span class="tag cut">cut</span><b>Id-run Bloom filters</b><br><span>A binary search over at most <span id="f-runsmax2"></span> runs is cheap.</span></li>
+          <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the current rows, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
+          <li><span class="tag built">built</span><b>Id index</b><br><span>One row per feature: its id hash and cell. Replaced with the cell on every upload. No runs, merges or Bloom filters.</span></li>
+          <li><span class="tag built">built</span><b>Cleanup</b><br><span>Replaced rows and files are deleted in the same commit as the new ones. A read that raced a commit retries once.</span></li>
         </ul>
       </div>
       <div>
@@ -198,13 +194,13 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
         <ul>
           <li>Loads are held in memory and nothing spills. The densest cell (about <span id="f-dense"></span> features) decodes to about <span id="f-densemem"></span> and sets the worker’s memory.</li>
           <li>A filter on a dense cell reads every chunk until postings exist: about <span id="f-filter"></span> per request in the worst case (see Costs).</li>
-          <li>A reload of many cells is not one snapshot. Readers can see a mix of old and new cells until the last upload commits.</li>
-          <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one snapshot.</li>
-          <li>Id runs are delta-coded, so a lookup decodes each live run in full. At <span id="f-billion"></span> features the runs total about <span id="f-runsat1e9"></span>: a fence index per run is needed before lookups scale.</li>
+          <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one read.</li>
+          <li>The id index holds one row per feature. At <span id="f-billion"></span> features that is about <span id="f-idx1e9"></span> in Postgres, and a lookup reads one hash’s rows plus a cell’s chunks.</li>
+          <li>A read can list a chunk just before a commit deletes it. It retries once against the new list, so under a heavy write rate some requests are slower.</li>
           <li>Coarse zoom, dense data: below about zoom <span id="f-coarsezoom"></span> a dense view is served by levels 6 and 2. A page that lags the zoom overscans: at zoom 7 a <span id="f-page"></span>-feature page falls through to level 2 while the view holds about <span id="f-z7n"></span> features.</li>
           <li>Dense cities at zoom 13 hold about <span id="f-z13n"></span> features on screen, about <span id="f-z13b"></span> over the link. Use overviews until detail is small, around zoom <span id="f-zdense"></span>.</li>
           <li>Overview responses carry full geometry, so they can be large.</li>
-          <li>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</li>
+          <li>Collections loaded before migration 0035 need a reload: the row layout changed and snapshots are gone.</li>
         </ul>
         <h3>Terms</h3>
         <ul>
@@ -212,9 +208,9 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><b>Partition</b>: an S2 level-8 cell, the unit of upload, load and replacement.</li>
           <li><b>Chunk</b>: an immutable FlatGeobuf with a column file and a zone map, and one catalog row.</li>
           <li><b>Sample</b>: the <span id="f-cap"></span> smallest-hash features of a cell, stored as chunks with level = N.</li>
-          <li><b>Id run</b>: sorted (hash, key) pairs, one per upload.</li>
-          <li><b>Snapshot</b>: one upload’s commit. A row is visible at s when begin ≤ s and s &lt; end.</li>
-          <li><b>Cursor</b>: the (key, id) of the last feature a page returned. It carries no snapshot; each page reads the latest one.</li>
+          <li><b>Id index</b>: one row per feature, mapping the hash of its id to its cell.</li>
+          <li><b>Version</b>: a counter on the collection, bumped by every commit. A worker caches the chunk list under it, so a commit makes the cache stale rather than wrong.</li>
+          <li><b>Cursor</b>: the (key, id) of the last feature a page returned. Each page reads the current rows.</li>
           <li><b>Virtual file</b>: a file’s bytes stored as block rows, read back through the file-bytes overlay.</li>
         </ul>
       </div>
@@ -222,7 +218,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
   </section>
 </main>
 
-<footer>1–6 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are measured on buildings_fr; the CPU split and Postgres speed are estimates (see Costs)</footer>
+<footer>1–6 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are estimates from OSM Layercake data; the CPU split and Postgres speed are also estimates (see Costs)</footer>
 
 <script src="https://unpkg.com/zdog@1.1.3/dist/zdog.dist.min.js"></script>
 <script>
@@ -232,15 +228,15 @@ const PAL = {
 };
 let P = PAL.dark;
 
-const K = { raw: 470, zst: 100, col: 20, run: 15, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, grace: 15 * 60, runsMax: 64, runsMerge: 16, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 940, zst: 200, col: 40, run: 30, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
 const fmtMiB = b => `${+(b / 1048576).toFixed(1)} MiB`;
 const fmtRate = b => (b >= 1e9 ? `${+(b / 1e9).toFixed(b % 1e9 ? 1 : 0)} GB/s` : `${Math.round(b / 1e6)} MB/s`);
 const INPUTS = [
-  ['Raw FGB per feature', () => `${K.raw} B`, 'measured, buildings_fr'],
-  ['Stored FGB per feature, zstd', () => `${K.zst} B`, 'measured, buildings_fr'],
-  ['Column files per feature', () => `${K.col} B`, 'measured, buildings_fr'],
-  ['Id-run entry', () => `${K.run} B`, '13–16 B measured'],
+  ['Raw FGB per feature', () => `${K.raw} B`, 'estimate, OSM Layercake'],
+  ['Stored FGB per feature, zstd', () => `${K.zst} B`, 'estimate, OSM Layercake'],
+  ['Column files per feature', () => `${K.col} B`, 'estimate, OSM Layercake'],
+  ['Id index row', () => `${K.run} B`, 'estimate, one row per feature'],
   ['Chunk', () => `${fmtMiB(K.chunk)} uncompressed, about ${fmt(PER_CHUNK)} features`, 'target'],
   ['Chunk catalog row', () => `${K.meta} B`, 'estimate'],
   ['Samples per cell', () => `${CAP}`, 'design'],
@@ -248,7 +244,7 @@ const INPUTS = [
   ['CPU split in an upload', () => `${pct(CPU_SHARE.decode)} decode · ${pct(CPU_SHARE.validate)} validate · ${pct(CPU_SHARE.sort)} sort · ${pct(CPU_SHARE.encode)} encode`, 'estimate'],
   ['Commit', () => fmtTime(K.fixed), 'estimate'],
   ['Postgres throughput', () => fmtRate(K.db), 'estimate'],
-  ['Decode: zstd, id runs', () => fmtRate(K.dec), 'estimate'],
+  ['Decode: zstd', () => fmtRate(K.dec), 'estimate'],
   ['Block row', () => `${fmt(K.block)} B, one per ${K.pageBytes / 1024} KB page`, 'schema'],
   ['Worker cache, each', () => fmtMiB(K.cache), 'setting'],
   ['Network', () => (W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'), 'workload bar'],
@@ -351,20 +347,17 @@ function readOverview(page, link) {
 function readId(f, link) {
   const per = Math.min(f, PER_CHUNK);
   return steps([
-    { name: 'id runs, decoded', db: f * K.run, cpu: (f * K.run) / K.dec },
+    { name: 'id index row', db: 64, cpu: 1e-6 },
     { name: 'candidate chunk', db: per * K.zst, cpu: (per * K.raw) / K.dec },
     { name: 'verify, respond', net: K.zst },
   ], link);
-}
-function readBase(link) {
-  return steps([{ name: 'lock collection row' }, { name: 'count changed cells', db: 64 }, { name: 'accept or 409', net: 64 }], link);
 }
 function costNow() {
   return { f: W.f, link: W.link, page: W.page, Wr: writeCost(W.f, W.link), Rd: readBBox(W.f, W.page, W.link) };
 }
 function actions(f) {
   const Wr = writeCost(f, W.link), B = readBBox(f, W.page, W.link), F = readFilter(f, W.page, W.link);
-  const C = readCount(f, W.link), I = readId(f, W.link), O = readOverview(W.page, W.link), Bs = readBase(W.link);
+  const C = readCount(f, W.link), I = readId(f, W.link), O = readOverview(W.page, W.link);
   return [
     { name: 'Upload one cell', net: Wr.upload, db: 0, cpu: Wr.cpu },
     { name: 'Ingest writes to Postgres', net: 0, db: Wr.db, cpu: 0 },
@@ -373,7 +366,6 @@ function actions(f) {
     { name: 'numberMatched with filter', net: C.net, db: C.db, cpu: C.cpu },
     { name: 'Id lookup, uncached', net: I.net, db: I.db, cpu: I.cpu },
     { name: `Overview page of ${fmt(W.page)}`, net: O.net, db: O.db, cpu: O.cpu },
-    { name: 'Base check', net: Bs.net, db: Bs.db, cpu: 0 },
   ];
 }
 
@@ -531,12 +523,12 @@ const EDGE_BYTES = c => ({
 const MODEL = {
   loader: { t: 'Loader', kind: 'net', share: c => c.Wr.tUp / c.Wr.total,
     l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
-    text: 'Uploads one zstd-compressed FlatGeobuf per level-8 cell, about 100 B per feature (measured on buildings_fr). Every feature in the file falls in that cell, so a reload is one upload per cell. The meter is the share of network time.',
-    layout: ['body: zstd FlatGeobuf, one cell', 'upload bytes = features × 100 B'], index: [] },
+    text: `Uploads one zstd-compressed FlatGeobuf per level-8 cell, about ${K.zst} B per feature (estimated from OSM Layercake). Every feature in the file falls in that cell, so a reload is one upload per cell. The meter is the share of network time.`,
+    layout: ['body: zstd FlatGeobuf, one cell', `upload bytes = features × ${K.zst} B`], index: [] },
   decode: { t: 'Decode', kind: 'cpu', share: c => c.Wr.stage.decode / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.decode)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
-    text: 'Decompresses the whole file into memory and parses it once. The decoded file costs about 470 B per feature of memory, the largest memory cost of an upload.',
-    layout: ['no streaming, bucketing or spill', 'peak memory ≈ features × 470 B'], index: [] },
+    text: `Decompresses the whole file into memory and parses it once. The decoded file costs about ${K.raw} B per feature of memory, the largest memory cost of an upload.`,
+    layout: ['no streaming, bucketing or spill', `peak memory ≈ features × ${K.raw} B`], index: [] },
   validate: { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
     text: 'Checks that every feature is inside the cell, that ids are unique in the file, and that geometry is usable.',
@@ -547,32 +539,32 @@ const MODEL = {
     layout: ['chunk = contiguous key range', 'cut at 2 MiB or 50,000 features'], index: [] },
   encode: { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} written`,
-    text: 'Encodes each chunk (FGB and zstd), its column file and zone map, then the samples (level 8 for the partition, and levels 6 and 2 for its ancestors) and the id run. This is the largest CPU share. Its files go to blobs and id runs; its chunk rows go to the commit.',
-    layout: ['files: fgb, cols, idrun', 'rows written unpublished, by COPY'], index: [] },
+    text: 'Encodes each chunk (FGB and zstd), its column file and zone map, then the samples (level 8 for the partition, and levels 6 and 2 for its ancestors). This is the largest CPU share. Its files go to blobs; its chunk rows go to the commit.',
+    layout: ['files: fgb, cols', 'chunk rows written by COPY'], index: [] },
   commit: { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total,
-    l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
-    text: 'One transaction: lock the collection row, check base=s, end the cell’s live rows, insert the new rows, rebuild levels 6 and 2 for its ancestors from the samples below, insert the snapshot, publish the files. It reads its own samples and the sibling samples under its ancestors.',
-    layout: ['one snapshot per upload'], index: [] },
+    l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one transaction',
+    text: 'One transaction: lock the collection row, delete the cell’s old chunks and files, insert the new ones, rebuild levels 6 and 2 for its ancestors from the samples below, replace the cell’s id index rows, bump the collection version. A reader that listed a file just before it was deleted retries once against the new list.',
+    layout: ['files and rows replaced in place'], index: [] },
   blobs: { t: 'blobs & files', kind: 'db', size: c => c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes,
     l1: c => `${fmtBytes(c.Wr.chunkBytes + c.Wr.colBytes + c.Wr.sampleBytes)} of blocks`, l2: c => `${fmt(c.Wr.files)} files`,
-    text: `Virtual files: each file is stored as ${fmt(K.block)}-byte rows, one per ${K.pageBytes / 1024} KB heap page, inline and without TOAST. The files table lists each file (fgb, cols or idrun), its size and whether it is published. One COPY per file writes the rows before the commit; the read path reads them back through the file-bytes overlay.`,
+    text: `Virtual files: each file is stored as ${fmt(K.block)}-byte rows, one per ${K.pageBytes / 1024} KB heap page, inline and without TOAST. The files table lists each file (fgb or cols), its size and whether it is published. One COPY per file writes the rows before the commit; the read path reads them back through the file-bytes overlay.`,
     layout: ['blocks: file_id bigint, n int, data bytea (storage plain)', 'files: file_id identity, collection, kind, bytes, published, created'], index: ['blocks pk (file_id, n)', 'files pk (file_id)'] },
-  idRuns: { t: 'id runs', kind: 'db', size: c => c.Wr.runBytes,
-    l1: c => `${fmtBytes(c.Wr.runBytes)} of runs`, l2: () => 'one per upload',
-    text: 'One sorted run per upload: (hash of id, key) pairs, written by the encode step and published by the commit. An upload does not end older runs; a background merge drops their stale entries. Lookups search every live run.',
-    layout: ['id_runs: file_id pk, collection, entries, begin_snapshot, end_snapshot'], index: ['(collection) where end_snapshot is null'] },
+  idRuns: { t: 'id index', kind: 'db', size: c => c.Wr.runBytes,
+    l1: c => `${fmt(c.Wr.f)} rows`, l2: c => `${fmtBytes(c.Wr.runBytes)} of rows`,
+    text: 'One row per feature: the hash of its id and the cell that holds it. A lookup reads the rows for a hash, then that cell’s chunks, and checks the id exactly. The rows are replaced with the cell on every upload, so there are no runs to merge.',
+    layout: ['ids: collection, hash, cell', 'one row per feature'], index: ['pk (collection, hash, cell)'] },
   catalog: { t: 'catalog', kind: 'db', size: c => c.Wr.chunkBytes,
     l1: c => `${fmt(c.Wr.chunks)} chunk rows`, l2: c => `${fmtBytes(c.Wr.chunkBytes)} of FGB`,
-    text: 'The chunk rows that make up each snapshot: key range, envelope, zone map and the file they point to, with a snapshot range. Partitions record the snapshot that last changed each cell, collections the current snapshot and column list, and snapshots each commit. Rows an upload replaces stay 15 minutes for requests already running.',
-    layout: ['chunks: chunk_id identity pk, collection, cell, seq, first and last key and id', 'chunks: minx, miny, maxx, maxy, features, file_id, col_file, zone (JSON text), level, begin_snapshot, end_snapshot', 'partitions: collection, cell, changed', 'collections: name pk, uid, current_snapshot, id_column, columns_json', 'snapshots: collection, id, created'],
-    index: ['chunks (collection, begin_snapshot)', 'chunks (collection, cell) where end_snapshot is null', 'partitions pk (collection, cell)', 'collections pk (name)', 'snapshots pk (collection, id)'] },
+    text: 'The chunk rows for the collection as it is now: key range, envelope, zone map and the file they point to. The collections row holds the version and column list, so a worker can tell a cached chunk list from a stale one. A commit replaces a cell’s rows in one transaction and bumps the version.',
+    layout: ['chunks: chunk_id identity pk, collection, cell, seq, first and last key and id', 'chunks: minx, miny, maxx, maxy, features, file_id, col_file, zone (JSON text), level', 'collections: name pk, uid, version, id_column, columns_json', 'ids: collection, hash, cell'],
+    index: ['chunks (collection, cell, level)', 'collections pk (name)', 'ids pk (collection, hash, cell)'] },
   reader: { t: 'Reader', kind: 'mut', role: 'client', l1: c => `${fmt(c.page)} features`, l2: () => 'one request',
-    text: 'A request: items with bbox, filter or overview=N; items/{id}; numberMatched; or PUT ?base=s. Each page reads the latest snapshot.',
+    text: 'A request: items with bbox, filter or overview=N; items/{id}; or numberMatched. Each page reads the current rows.',
     layout: [], index: [] },
   catalogOv: { t: 'Catalog', kind: 'db', role: 'cache', share: c => c.Rd.steps[0].t / c.Rd.total,
     l1: () => 'overlay · LRU', l2: c => `${fmtBytes(c.Rd.steps[0].db)} metadata`,
-    text: 'Overlay on the catalog. One query per snapshot loads the chunk list: the chunks whose snapshot range covers it. A page reads the latest snapshot, so it uses the current list.',
-    layout: ['where collection = $1', 'and begin_snapshot ≤ s', 'and (end_snapshot is null or end_snapshot > s)'], index: ['uses (collection, begin_snapshot)'] },
+    text: 'Overlay on the catalog. One query loads the collection’s chunk list, cached under the collection version. A commit bumps the version, so the next read loads the new list.',
+    layout: ['where collection = $1 and level = $2', 'order by first_key, first_id'], index: ['chunks (collection, cell, level)'] },
   prune: { t: 'Prune', kind: 'cpu', share: c => c.Rd.steps[1].t / c.Rd.total,
     l1: c => `${fmtTime(c.Rd.steps[1].cpu)} CPU`, l2: () => 'envelopes',
     text: 'In memory: the bbox is tested against chunk envelopes, and filters against zone maps. The list is scanned; there is no R-tree yet.',
@@ -587,12 +579,12 @@ const MODEL = {
     layout: [], index: [] },
   response: { t: 'Response', kind: 'net', share: c => c.Rd.steps[4].t / c.Rd.total,
     l1: c => `${fmtBytes(c.Rd.steps[4].net)} out`, l2: c => `${fmtTime(c.Rd.steps[4].net / c.link)} to send`,
-    text: 'Features stream out in (key, id) order, as zstd when the client accepts it. The cursor carries only the last (key, id): each page reads the latest snapshot, so an upload between pages shows in the rest of the walk. Cursors never expire.',
+    text: 'Features stream out in (key, id) order, as zstd when the client accepts it. The cursor carries only the last (key, id): each page reads the current rows, so an upload between pages shows in the rest of the walk. Cursors never expire.',
     layout: [], index: [] },
-  idOv: { t: 'Id lookup', kind: 'db', role: 'cache', size: c => c.Wr.runBytes,
-    l1: () => 'overlay · LRU', l2: () => 'decodes the runs',
-    text: `Overlay on id runs: decoded runs in a ${fmtMiB(K.cache)} LRU. A lookup binary-searches every live run, then reads the candidate chunk to verify the id. A cold lookup decodes all of a run’s bytes.`,
-    layout: ['a miss decodes the whole run'], index: [] },
+  idOv: { t: 'Id lookup', kind: 'db', role: 'step', size: c => c.Wr.runBytes,
+    l1: () => 'hash → cell', l2: () => 'verify in chunks',
+    text: 'Reads the id index row for the hash, then that cell’s chunks, and checks the id exactly. No worker cache is involved.',
+    layout: [], index: [] },
 };
 
 function seqFor(kind, c) {
@@ -850,28 +842,27 @@ class Overviews extends Fig {
 
 const STAGES = [
   { t: 'Upload', kind: 'net', share: c => c.Wr.tUp / c.Wr.total, l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
-    text: 'The loader sends one zstd-compressed FlatGeobuf per level-8 cell. Its size is about 100 B per feature after zstd; the network time is that size divided by the link speed.' },
+    text: `The loader sends one zstd-compressed FlatGeobuf per level-8 cell. Its size is about ${K.zst} B per feature after zstd; the network time is that size divided by the link speed.` },
   { t: 'Decode', kind: 'cpu', share: c => c.Wr.stage.decode / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.decode)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
-    text: 'Decompresses the whole file into memory and parses it once. Memory is the biggest cost here: the decoded file takes about 470 B per feature. No streaming, bucketing or spill.' },
+    text: `Decompresses the whole file into memory and parses it once. Memory is the biggest cost here: the decoded file takes about ${K.raw} B per feature. No streaming, bucketing or spill.` },
   { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
     text: 'Checks that each feature is inside the cell, that ids are unique in the file, and that geometry is usable.' },
   { t: 'Sort & cut', kind: 'cpu', share: c => c.Wr.stage.sort / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.sort)} CPU`, l2: c => `${fmt(c.Wr.chunks)} chunks`,
     text: 'Sorts by (key, id), then cuts chunks of about 2 MiB of uncompressed FGB, roughly 4,400 buildings each.' },
   { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} out`,
-    text: 'Encodes each chunk (FGB, zstd) and its column file, then builds the samples and the id run. This stage has the largest CPU share.' },
+    text: 'Encodes each chunk (FGB, zstd) and its column file, then builds the samples. This stage has the largest CPU share.' },
   { t: 'Write blobs', kind: 'db', share: c => c.Wr.tDb / c.Wr.total, l1: c => `${fmtBytes(c.Wr.db)} COPY`, l2: c => `${fmtTime(c.Wr.tDb)} to Postgres`,
     text: `Writes every file as ${fmt(K.block)}-byte block rows, one per ${K.pageBytes / 1024} KB page, each file in its own transaction, unpublished until the commit. WAL writes about the same bytes again.` },
-  { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total, l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one snapshot',
-    text: 'One transaction. Everything the upload changes becomes visible at one snapshot, or nothing does. Its cost does not depend on the cell size.' },
+  { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total, l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one transaction',
+    text: 'One transaction. The commit replaces the cell’s rows and files, or nothing. Its cost does not depend on the cell size.' },
 ];
 const SUBS = [
   'lock the collection row, so commits serialize',
-  'base= check: 409 if the cell changed after s',
-  'end the cell’s live chunks and samples',
-  'insert the chunk rows and samples at snapshot s',
-  'rebuild levels 6 and 2 for the ancestors from the samples below',
-  'insert the id run and snapshot, advance the collection',
-  'publish the cell’s files and commit',
+  'delete the cell’s old chunks and files',
+  'insert the new chunk rows and samples',
+  'rebuild levels 6 and 2 for the ancestors',
+  'replace the cell’s id index rows',
+  'bump the version and commit',
 ];
 
 class Load extends Fig {
@@ -908,7 +899,7 @@ class Load extends Fig {
       });
     });
     this.text(10, 162, 'Data size through one upload (log scale)', 'lab');
-    const rows = [['upload, .fgb.zst', 'upload', 'net'], ['decoded in memory', 'memory', 'mut'], ['chunk FGB, zstd', 'chunkBytes', 'db'], ['column files', 'colBytes', 'db'], ['id run', 'runBytes', 'db'], ['samples L8 · L6 · L2', 'sampleBytes', 'db'], ['rows to Postgres (WAL adds 1×)', 'db', 'db']];
+    const rows = [['upload, .fgb.zst', 'upload', 'net'], ['decoded in memory', 'memory', 'mut'], ['chunk FGB, zstd', 'chunkBytes', 'db'], ['column files', 'colBytes', 'db'], ['id index rows', 'runBytes', 'db'], ['samples L8 · L6 · L2', 'sampleBytes', 'db'], ['rows to Postgres (WAL adds 1×)', 'db', 'db']];
     rows.forEach(([label, key, kind], i) => {
       const y = 180 + i * 22;
       this.text(10, y + 11, label, 'v');
@@ -926,7 +917,7 @@ class Load extends Fig {
     const panel = this.shape(10, 352, 980, 126, 6, { fill: true, stroke: false });
     const edge = this.shape(10, 352, 980, 126, 6, { fill: false, stroke: 1.2 });
     this.bind(() => { panel.color = P.fill; edge.color = P.line; });
-    this.text(24, 374, 'COMMIT · one transaction, one snapshot', 'v');
+    this.text(24, 374, 'COMMIT · one transaction, no snapshots', 'v');
     this.subs = SUBS.map((s, j) => this.text(24, 389 + j * 14, `${j + 1}. ${s}`, 'v'));
     this.render();
   }
@@ -940,31 +931,29 @@ class Load extends Fig {
     const p = S.load.play;
     if (!p) return false;
     p.t += dt;
-    S.load.k = Math.min(13, 1 + Math.floor(p.t / 0.8));
-    if (S.load.k >= 13) S.load.play = null;
+    S.load.k = Math.min(12, 1 + Math.floor(p.t / 0.8));
+    if (S.load.k >= 12) S.load.play = null;
     return true;
   }
   act(name, arg) {
     const L = S.load;
     if (name === 'demo') { L.play = { t: 0 }; L.k = 1; }
-    if (name === 'step') { L.play = null; L.k = Math.min(13, Math.max(0, L.k + (arg || 1))); }
+    if (name === 'step') { L.play = null; L.k = Math.min(12, Math.max(0, L.k + (arg || 1))); }
     if (name === 'reset') { L.k = 0; L.play = null; }
   }
 }
 
 const REQS = [
-  { label: 'items?bbox=', roles: ['cache', 'step', 'cache', 'step', 'net'], lines: [['catalog overlay,', 'latest snapshot'], ['prune: envelope', 'per chunk'], ['file bytes,', 'whole chunks'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']],
-    run: c => readBBox(c.f, c.page, c.link), note: 'Reads whole chunks, not just the matching rows: a page still moves every chunk it lands in. The cursor carries only (key, id), so each page reads the latest snapshot.' },
-  { label: 'items?filter=', roles: ['cache', 'step', 'db', 'cache', 'net'], lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']],
+  { label: 'items?bbox=', roles: ['cache', 'step', 'cache', 'step', 'net'], lines: [['catalog overlay,', 'current list'], ['prune: envelope', 'per chunk'], ['file bytes,', 'whole chunks'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']],
+    run: c => readBBox(c.f, c.page, c.link), note: 'Reads whole chunks, not just the matching rows: a page still moves every chunk it lands in. The cursor carries only (key, id), so each page reads the current rows.' },
+  { label: 'items?filter=', roles: ['cache', 'step', 'db', 'cache', 'net'], lines: [['catalog overlay,', 'current list'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']],
     run: c => readFilter(c.f, c.page, c.link), note: 'Worst case: no postings yet, so every chunk of the cell is a candidate and each one is read whole. Postings would remove most of this cost.' },
-  { label: 'numberMatched', roles: ['cache', 'step', 'db', 'net'], lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
+  { label: 'numberMatched', roles: ['cache', 'step', 'db', 'net'], lines: [['catalog overlay,', 'current list'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
     run: c => readCount(c.f, c.link), note: 'Counts from column files only, so it never decodes geometry. Omitted with a bbox alone, as in v1.' },
   { label: 'items?overview=N', roles: ['cache', 'step', 'cache', 'step', 'net'], lines: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['samples,', 'LRU'], ['FGB search', 'of the samples'], ['page by', '(key, id)']],
     run: c => readOverview(c.page, c.link), note: 'N is 2, 6 or 8, chosen by the client. No filter. Samples are small, so overviews are the cheap way to show a whole area.' },
-  { label: 'items/{id}', roles: ['cache', 'step', 'cache', 'db'], lines: [['id runs overlay:', 'search each run'], ['candidate keys', 'name cells'], ['catalog: chunks', 'covering the key'], ['verify the id', 'in each chunk']],
-    run: c => readId(c.f, c.link), note: 'A cold lookup decodes every live run in full, which is why the id-run merge and a fence index are on the risk list.' },
-  { label: 'PUT ?base=s', roles: ['db', 'db', 'net'], lines: [['lock the', 'collection row'], ['check the cell', 'changed after s'], ['accept, or', 'answer 409']],
-    run: c => readBase(c.link), note: 'Only the uploaded cell is checked. The blobs are written before the lock is taken, so the lock covers a few rows.' },
+  { label: 'items/{id}', roles: ['db', 'cache', 'cache', 'net'], lines: [['id index:', 'hash to cell'], ['catalog: chunks', 'of that cell'], ['verify the id', 'in each chunk'], ['respond', 'or 404']],
+    run: c => readId(c.f, c.link), note: 'The id index names the cells that may hold the id; each candidate chunk is read and the id is checked exactly.' },
 ];
 const reqGeom = n => {
   const BOX = 160, gap = (1000 - 40 - n * BOX) / Math.max(1, n - 1);
@@ -1193,7 +1182,7 @@ function syncCosts() {
     const d = den[i];
     return `<tr><td>${esc(t.name)}</td><td>${fmtBytes(t.net)}</td><td>${fmtBytes(t.db)}</td><td>${t.cpu ? fmtTime(t.cpu) : '—'}</td><td>${fmtBytes(d.net)}</td><td>${fmtBytes(d.db)}</td><td>${d.cpu ? fmtTime(d.cpu) : '—'}</td></tr>`;
   }).join('');
-  set('#cost-note', `Link ${W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'} and page of ${fmt(W.page)} come from the workload bar. Measured: sizes per feature (buildings_fr) and ingest at ${fmtTime(K.sec)} per feature on 6 cores. Estimated: the CPU split inside an upload, Postgres at ${fmtRate(K.db)}, decoding at ${fmtRate(K.dec)}, and a ${fmtTime(K.fixed)} commit. The bars, the table and the inputs below read the same numbers.`);
+  set('#cost-note', `Link ${W.link === 125e6 ? '1 Gbit/s' : '100 Mbit/s'} and page of ${fmt(W.page)} come from the workload bar. Estimated: sizes per feature (OSM Layercake) and ingest at ${fmtTime(K.sec)} per feature on 6 cores. Estimated: the CPU split inside an upload, Postgres at ${fmtRate(K.db)}, decoding at ${fmtRate(K.dec)}, and a ${fmtTime(K.fixed)} commit. The bars, the table and the inputs below read the same numbers.`);
   $('#input-body').innerHTML = INPUTS.map(([name, value, src]) => `<tr><td>${esc(name)}</td><td>${esc(value())}</td><td>${esc(src)}</td></tr>`).join('');
 }
 function syncFacts() {
@@ -1201,10 +1190,6 @@ function syncFacts() {
   const coarse = ZOOMS.find(z => { const p = pickFor(DENSE, z); return p && p.k === 8; });
   const fine = ZOOMS.find(z => detailFor(DENSE, z) <= W.page);
   set('#f-cache', fmtMiB(K.cache));
-  set('#f-grace', fmtTime(K.grace));
-  set('#f-runsmax', fmt(K.runsMax));
-  set('#f-runsmax2', fmt(K.runsMax));
-  set('#f-runsmerge', fmt(K.runsMerge));
   set('#f-chunk', fmtMiB(K.chunk));
   set('#f-maxf', fmt(K.maxFeatures));
   set('#f-cap', fmt(CAP));
@@ -1214,7 +1199,7 @@ function syncFacts() {
   set('#f-densemem', fmtBytes(DENSE * K.raw));
   set('#f-filter', fmtBytes(readFilter(DENSE, W.page, W.link).db));
   set('#f-billion', fmtBig(1e9));
-  set('#f-runsat1e9', fmtBytes(1e9 * K.run));
+  set('#f-idx1e9', fmtBytes(1e9 * K.run));
   set('#f-coarsezoom', coarse === undefined ? '—' : coarse);
   set('#f-page', fmt(W.page));
   set('#f-z7n', fmtBig(d7));

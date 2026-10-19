@@ -22,7 +22,7 @@ var (
 	ErrBadCursor       = errors.New("cursor does not match the collection")
 	ErrFeatureNotFound = errors.New("feature not found")
 	ErrDuplicate       = errors.New("more than one feature has this id; reload the partitions that hold it")
-	ErrConflict        = errors.New("a listed partition changed after the base snapshot")
+	ErrStale           = errors.New("the chunk list changed under the read")
 )
 
 const cacheBytes = 256 << 20
@@ -30,7 +30,6 @@ const cacheBytes = 256 << 20
 type Layer struct {
 	pool     *pgxpool.Pool
 	blocks   *blocks.Store
-	runs     *lru.Cache[int64, *idRun]
 	catalogs *lru.Cache[catalogKey, []chunkMeta]
 }
 
@@ -38,7 +37,6 @@ func New(pool *pgxpool.Pool) *Layer {
 	return &Layer{
 		pool:     pool,
 		blocks:   blocks.New(pool, cacheBytes),
-		runs:     lru.New[int64, *idRun](cacheBytes, runSize),
 		catalogs: lru.New[catalogKey, []chunkMeta](cacheBytes, catalogSize),
 	}
 }
@@ -46,7 +44,7 @@ func New(pool *pgxpool.Pool) *Layer {
 type Collection struct {
 	Name     string
 	UID      int64
-	Snapshot int64
+	Version  int64
 	IDColumn string
 	Columns  []chunk.Column
 }
@@ -79,8 +77,8 @@ func decodeColumns(data []byte) ([]chunk.Column, error) {
 func (l *Layer) Collection(ctx context.Context, name string) (Collection, error) {
 	var c Collection
 	var columns []byte
-	err := l.pool.QueryRow(ctx, `select uid, current_snapshot, coalesce(id_column, ''), columns_json from pfgb.collections where name = $1`, name).
-		Scan(&c.UID, &c.Snapshot, &c.IDColumn, &columns)
+	err := l.pool.QueryRow(ctx, `select uid, version, coalesce(id_column, ''), columns_json from pfgb.collections where name = $1`, name).
+		Scan(&c.UID, &c.Version, &c.IDColumn, &columns)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, store.ErrNotFound
 	}

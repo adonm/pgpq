@@ -2,7 +2,6 @@ package layer
 
 import (
 	"cmp"
-	"errors"
 	"slices"
 	"testing"
 
@@ -79,29 +78,5 @@ func TestReloadRebuildsCoarseLevels(t *testing.T) {
 	detail := readAll(t, l, name, Query{Limit: 64})
 	for _, level := range []int{2, 6} {
 		checkTopPerCell(t, l, name, level, detail)
-	}
-}
-
-func TestLoadIfUnchangedRejectsAStaleBase(t *testing.T) {
-	l, ctx := openTest(t)
-	name := "layer_test_base"
-	dropCollection(t, l, name)
-	t.Cleanup(func() { dropCollection(t, l, name) })
-	features := cityFeatures("paris", paris, 40, 71)
-	cells := cellsOf(t, features)
-	ds := datasetOf(t, name, testColumns, features)
-	first, err := l.Load(ctx, name, ds, cells)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := l.LoadIfUnchanged(ctx, name, ds, cells, first.Snapshot)
-	if err != nil {
-		t.Fatalf("load on the base it read: %v", err)
-	}
-	if _, err := l.LoadIfUnchanged(ctx, name, ds, cells, first.Snapshot); !errors.Is(err, ErrConflict) {
-		t.Fatalf("load on a stale base: %v", err)
-	}
-	if _, err := l.LoadIfUnchanged(ctx, name, ds, cells, second.Snapshot); err != nil {
-		t.Fatalf("load on the newer base: %v", err)
 	}
 }
