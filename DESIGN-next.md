@@ -11,6 +11,7 @@ Steps 1 to 3 are built under `/v2`, alongside the current contract. DESIGN.md is
 - **Built in step 3:** id runs (migration 0032) and `GET /v2/collections/{id}/items/{featureID}`. Uniqueness across partitions is the loader's job, so the server checks ids only within a body (422), and a lookup that finds the id in more than one partition answers 409.
 - **Built for caching:** byte-budgeted LRUs per worker (`internal/lru`, 256 MiB each): file bytes by `file_id` (filled once per file), each snapshot's chunk list (the catalog cache, which loads the whole list rather than applying deltas; snapshots are immutable, so entries never go stale), and decoded id runs. On the 30k corpus a repeated count over 1,751 chunks falls from 0.69 s to 0.13 s, and a repeated bbox plus filter from 0.25 s to 0.11 s, both with the block cache alone; the catalog cache is not yet measured at scale.
 - **Built in step 5:** overview levels 8 and 10 per partition, level 12 for partitions above 100,000 features, and levels 6, 4 and 2 rebuilt in the same commit as each load, from the level below. Samples keep full geometry. Overview requests take a level, no filter, and are paged like detail; lookups and `numberMatched` read detail only. Conditional loads (`base=`) are built too: they answer 409 when a listed partition changed after the base snapshot.
+- **Decided, not built:** one `.fgb.zst` per level-8 cell is the only upload, so the streaming, bucketing and spill steps go; each upload is its own snapshot; id runs are merged in the background. The `/v2` load still takes multi-cell FlatGeobuf bodies and buckets them in memory. See Write path and Decisions.
 - **Verified:**
   - `testdata/corpus/mixed.fgb` (30,000 features: every scalar type, nulls, arrays, LIKE, ranges, datetime and bbox) loaded as a v2 collection in 2.8 s. The 93 filters in `filters.txt` without a bbox return the expected count through both the item list and `numberMatched`, and the five bbox filters return their expected counts through the item list. The two `datetime` lines are v1-only and skipped.
   - GDAL `ogrinfo` reads filtered FlatGeobuf over `/vsicurl/`: 30,000 features unfiltered, 12,000 for a LIKE filter and 3,340 for a bbox plus LIKE filter.
@@ -74,36 +75,31 @@ Empty partitions have no rows at all.
 
 - Every feature carries an id that is present and unique within its collection. Ids are the only stable external reference; `(chunk, ord)` addresses are internal to one snapshot.
 - **Uniqueness is the loader's job.** The server rejects an id repeated within one body (422) and does not check other partitions on write. A duplicate that two loads create is reported at lookup, as 409 naming the id, rather than one copy being silently chosen.
-- **Id index:** append-only sorted runs mapping `hash(id)` to the feature's key. Each load writes one run: FNV-1a 64-bit hashes of the canonical id text in ascending order, delta-coded as varints, with an 8-byte key each. A whole-collection load ends every older run; a partition load adds one and leaves older runs live. Runs are not merged or Bloom-filtered yet.
+- **Id index:** sorted runs mapping `hash(id)` to the feature's key. Each upload writes one run: FNV-1a 64-bit hashes of the canonical id text in ascending order, delta-coded as varints, with an 8-byte key each. An upload does not end older runs; a background merge drops their stale entries (see Decisions). Runs are not merged or Bloom-filtered yet.
 - **Lookups:** every live run is binary-searched for the id's hash. Each candidate key names a partition, and that partition's chunks whose key range covers the key are read at the current snapshot and searched for the id. Stale entries (features since removed or moved) find nothing and are ignored; merges will drop them later.
 - **Size:** about 13–16 B per feature per run, before merging, held in worker memory.
 
 ## Write path
 
-### The load request
+### The upload
 
-- **Request:** the loader sends a FlatGeobuf body plus the partitions it replaces, as level-8 cells or coarser cells expanded to level 8. Route name to be decided.
-- **Replace semantics:** the body is the complete new contents of the listed partitions. Their old chunks are retired without being read.
-- **Validation:** a feature outside the listed partitions answers 422, and so do missing or duplicate ids within the body. An empty body empties the listed partitions.
-- **Conditional loads:** `base=<snapshot>` answers 409 if any listed partition changed after that snapshot, so a loader's read-modify-write cannot overwrite a concurrent change.
-- **Whole-collection replace:** `PUT /collections/{id}` with a FlatGeobuf body replaces every partition.
-- **No per-feature writes.** Deletes and corrections are reloads of the partitions involved.
-- **Request size:** the densest partition is the largest single unit, about 2.5M features and 1.2 GB of FGB upload. At the measured ingest rate (27–32 s per 1M features on 6 cores) it builds in about 1–1.5 minutes, and it needs the spilling sort in step 1.
+- **One upload is one level-8 cell.** The loader sends a zstd-compressed FlatGeobuf (`.fgb.zst`) holding exactly that cell's features. Route name to be decided.
+- **Replace semantics:** the file is the complete new contents of its cell. An empty file empties the cell.
+- **Validation:** a feature outside the cell, a duplicate id in the file, or unusable geometry answers 422. `base=<snapshot>` answers 409 if the cell changed after that snapshot, so a loader's read-modify-write cannot overwrite a concurrent change.
+- **A reload is many uploads:** one per cell, each its own load, snapshot and commit.
+- **No streaming, bucketing or spill.** The worker decompresses the file into memory and parses it once. The densest cell (about 2.5M features, about 1.2 GB of FGB) therefore sets the worker's memory.
+- **No per-feature writes.** Deletes and corrections are uploads of the cells involved.
 
-### Steps
+### Steps for one upload
 
-1. Stream the body once (`ParseFlat`, `DecodePropertyText`), key every feature and bucket it by partition, spilling to temporary files beyond a memory budget.
-2. For each partition, in parallel:
-   - sort by `(key, id)` and cut chunks;
-   - encode each chunk's FGB, column file and zone maps;
-   - build the partition's postings segment and its level-10 and level-8 overview files.
-3. Write every file as blocks, each in its own transaction. Files stay unpublished until the commit.
-4. Commit in one short transaction:
-   - lock the collection's catalog row, so commits serialize per collection and snapshot numbers follow commit order; check `base` against the listed partitions' `changed` snapshots;
-   - create the new snapshot, end-snapshot the partitions' old chunk, postings and overview rows, and insert the new ones;
-   - append the id run (a whole-collection load also ends the older runs), and rebuild the level-6, 4 and 2 ancestors from the level-8 samples in the same commit.
+1. Decompress the file and parse its features once: key each by its bbox centre (S2 level 30), check the cell and the ids, and keep (key, id, offset).
+2. Sort by `(key, id)` and cut chunks at 2 MiB or 50,000 features.
+3. Encode each chunk: FGB (zstd), the column file in the same row order, and the zone maps.
+4. Build the cell's overviews: samples at levels 8 and 10, and at level 12 above 100,000 features. Build the cell's id run.
+5. Write every file as blocks, each in its own transaction, unpublished until the commit.
+6. Commit in one short transaction: lock the collection row, so commits serialize; check `base` against the cell's `changed` snapshot; end the cell's live chunks and overview rows; insert the new rows; rebuild the level-6, 4 and 2 ancestors from the samples below them, in the same commit; insert the id run and the snapshot row; advance the collection; publish the files.
 
-Cost is proportional to the loaded partitions, never to the collection. Blocks for concurrent loads are written in parallel. Commits serialize per collection, which is what keeps a snapshot's contents fixed once it is visible: a reader pinned to snapshot `s` must never see a snapshot `s' < s` commit after it. The commit transaction is milliseconds, because all bulk work happens before it.
+Cost is proportional to one cell plus its ancestors, never to the collection. Commits serialize per collection, which is what keeps a snapshot's contents fixed once it is visible: a reader pinned to snapshot `s` must never see a snapshot `s' < s` commit after it. The commit transaction is milliseconds, because all bulk work happens before it.
 
 ## Postings (cut for now; see Decisions)
 
@@ -115,18 +111,18 @@ Cost is proportional to the loaded partitions, never to the collection. Blocks f
 
 ## Overview levels
 
-Each overview level is a sampled copy of the collection in FlatGeobuf. Level 10 is built: one sample per partition, `cap` = 256 per level-10 cell, precomputed at load and served with `overview=10`. Levels 8, 6, 4 and 2 are still proposed, and there is no zoom mapping yet.
+Each overview level is a sampled copy of the collection in FlatGeobuf, and all of them are built: levels 8 and 10 per partition at load, level 12 for partitions above 100,000 features, and levels 6, 4 and 2 per cell in the commit. The server does not map zoom to levels; the client asks with `overview=`.
 
 - **Sampling:** level `L` keeps, in every level-`L` S2 cell, the `cap` features with the smallest `hash(id)`, simplified with that level's Douglas–Peucker tolerance.
   - Sparse cells keep all their features and dense ones keep `cap`, so every level covers the extent evenly.
   - A feature kept at a coarse level is kept at every finer one, so each level is built from the next finer level, never from a rescan.
 - **Levels 10 and 8:** level 10 is finer than a partition and level 8 is the partition itself. Each has one file per partition, built at load and atomic with detail.
-- **Levels 6, 4 and 2** are coarser: one file per level-`L` cell, at most `cap` features each, rebuilt in the background from the dirty-cell queue. They may lag from minutes to an hour while loading, and a stale file only shows older data.
+- **Levels 6, 4 and 2** are coarser: one overview per level-`L` cell, at most `cap` features each, rebuilt in the commit of every upload under the cell, from the samples below it. The rebuild shares the upload's snapshot, so `base=` checks stay exact.
 
 ## Read path
 
-- **Worker catalog:** for each collection, each worker holds the current snapshot's catalog — partitions, chunks (with key ranges, envelopes, counts, files and zone maps; about 300k at 1e9), postings, overview files and id runs. It loads the catalog once, then applies deltas by snapshot.
-- **bbox:** an in-memory R-tree over chunk envelopes (`tidwall/rtree`) selects chunk FGBs, and each chunk's own R-tree tests the features.
+- **Worker catalog:** for each collection, each worker holds the current snapshot's catalog — partitions, chunks (with key ranges, envelopes, counts, files and zone maps; about 300k at 1e9), postings, overview files and id runs. As built, each snapshot's chunk list is loaded whole, since snapshots never change.
+- **bbox:** as built, a linear scan of the snapshot's chunk list tests each chunk envelope, and each candidate chunk's packed R-tree tests its features. An in-memory R-tree over the envelopes (`tidwall/rtree`) is planned, not built.
 - **Attributes:**
   1. Zone maps prune chunks.
   2. Postings give exact chunk sets for rare values.
@@ -136,7 +132,7 @@ Each overview level is a sampled copy of the collection in FlatGeobuf. Level 10 
 
   As built: steps 1 and 3, without the integer-code comparison. Zone maps hold each column's `min`, `max` and null count from the column file header, and a chunk is skipped only when no row can match. Numeric comparisons and `BETWEEN` use non-strict tests on float64 bounds, because float64 rounding is monotone and a strict test could drop a match near 2^53. `IS NULL` needs a null, and `IN` is an OR of equalities. `NOT`, `LIKE`, `<>`, text and boolean columns, and unknown columns prune nothing. There are no Bloom filters. A candidate chunk's FGB is read whole, not only the matching features. `numberMatched` is returned for filter-only requests and omitted with a bbox, as in v1, because counting it would decode geometry.
 - **By id:** each live id run is binary-searched for the id's hash. Each candidate key names a partition, and the chunks of that partition whose key range covers the key are read at the current snapshot and searched for the id. No hit answers 404, one hit answers with the feature, and more answer 409.
-- **Overview:** the requested zoom maps to an S2 level, and that level's files cover the view (detail when finer than level 10). The response is one streamed FGB (or GeoJSON). There is no single-file `items.fgb`.
+- **Overview:** `overview=N` names the S2 level directly (2, 4, 6, 8, 10 or 12), and the client maps zoom to N. The response is one streamed FGB (or GeoJSON). There is no single-file `items.fgb`.
 - **Paging:** a cursor carries its snapshot and the `(key, id)` of the last feature it returned. A pagination must complete within the 72 h snapshot retention; an older cursor answers 410.
 - **CQL2:** evaluation is unchanged (`internal/cql`), applied to column values.
 
@@ -145,7 +141,7 @@ Each overview level is a sampled copy of the collection in FlatGeobuf. Level 10 
 ### Blocks
 
 - Blocks live in our own schema, using the pgvfs layout but written by our own Go code. Every artifact is an immutable file stored as 8,120-byte rows keyed `(file_id, n)`, one per 8 KB heap page, inline and without TOAST.
-- A file is written with one binary `COPY` and read by primary-key range, at most 8 MB per read.
+- A file is written with one binary `COPY` and read whole: its rows are selected in `(file_id, n)` order and assembled into the file-bytes LRU.
 - Workers cache file bytes by `file_id` in a byte-budgeted LRU, filled once per file and shared by concurrent readers (256 MiB per worker for now). Files are immutable, so an entry is never stale; eviction is the only way out.
 - Autovacuum on the block table runs at 1 % dead rows. WAL is about 1× the bytes written.
 
@@ -153,17 +149,17 @@ Each overview level is a sampled copy of the collection in FlatGeobuf. Level 10 
 
 The catalog is small and mutable, and lives in the same database:
 
-| Table | Columns |
-| --- | --- |
-| `collections` | name, uid, current snapshot, schema |
-| `snapshots` | |
-| `partitions` | collection, cell, changed snapshot |
-| `chunks` | collection, partition, seq, `chunk_id`, key range, envelope, rows, FGB file, column file, zone maps, begin/end snapshot |
-| `postings` | collection, partition, file, begin/end |
-| `overviews` | collection, level, cell (a partition for levels 10 and 8), file, begin/end |
-| `id_runs` | collection, file, entries, begin/end |
-| `dirty_cells` | |
-| `files` | `file_id`, collection, kind, bytes, published, reap after |
+| Table | Columns | Indexes |
+| --- | --- | --- |
+| `collections` | `name` pk, `uid` identity, `current_snapshot`, `id_column`, `columns_json`, `created` | pk (`name`) |
+| `snapshots` | `collection`, `id`, `created` | pk (`collection`, `id`) |
+| `partitions` | `collection`, `cell`, `changed` | pk (`collection`, `cell`) |
+| `files` | `file_id` identity pk, `collection`, `kind` (`fgb`, `cols` or `idrun`), `bytes`, `published`, `created` | pk (`file_id`) |
+| `blocks` | `file_id`, `n`, `data` (`bytea`, stored plain: one 8,120-byte row) | pk (`file_id`, `n`) |
+| `chunks` | `chunk_id` identity pk, `collection`, `cell`, `seq`, first and last `key` and `id`, `minx`, `miny`, `maxx`, `maxy`, `features`, `file_id`, `col_file`, `zone` (JSON text), `level`, `begin_snapshot`, `end_snapshot` | `(collection, begin_snapshot)`; `(collection, cell)` where `end_snapshot` is null |
+| `id_runs` | `file_id` pk, `collection`, `entries`, `begin_snapshot`, `end_snapshot` | `(collection)` where `end_snapshot` is null |
+
+Overview levels are chunks with `level` set, so there is no overview table. Postings and the dirty-cell queue are not built, and the `reap after` column waits for reaping.
 
 ### Snapshots and retention
 
@@ -230,6 +226,8 @@ Worker memory is the catalog, the id runs and a column/block cache budget. All o
 4. Postings and the busy rule: cut from v2 for now (see Decisions).
 5. Overview levels: built (see Implementation status).
 6. Snapshot expiry and reaping (next). Conditional loads (`base=`) are built.
+7. One upload per level-8 cell, with no streaming, bucketing or spill (decided, not built): the multi-cell body path goes, and each upload commits its own snapshot.
+8. Background id-run merge (decided, not built), then a fence index per run before lookups scale (see Risks).
 
 ## Decisions
 
@@ -239,6 +237,19 @@ These close the open questions. Where the gain is marginal, each one takes the o
 - **Zoom mapping:** none on the server. The client asks for a level with `overview=`.
 - **Chunk target:** 2 MiB and 50,000 features, kept.
 - **Postings:** cut from v2. Zone maps and column sidecars answer filters, and the cost is a column scan per chunk in the partition. Reintroduce postings only when a measured filter on a dense partition exceeds about 1 s cold. This saves about 250 lines.
-- **Id runs:** no Bloom filters, because a binary search over at most 64 runs is cheap. When a collection has more than 64 live runs, the next load rebuilds one run from the live chunks, which drops stale entries. Decided, not built yet.
+- **Upload:** one `.fgb.zst` per level-8 cell. No streaming, bucketing or spill: the worker holds the decompressed cell in memory, so the densest cell sets the memory budget. Decided, not built yet.
+- **Snapshot per upload:** each upload is one commit with its own snapshot. A reload of many cells is therefore not atomic: readers can see old and new cells together until the last upload commits. A commit that spans uploads would make it atomic (about 60 lines, not built). Decided.
+- **Id runs:** one run per upload. Above 64 live runs, a background merge combines the 16 smallest into one run and drops stale entries. No Bloom filters, because a binary search over at most 64 runs is cheap. Decided, not built yet.
 - **Reaping:** keep the 72 h retention. Chunk, run and file rows that no retained snapshot can see are deleted with their blocks. Decided, not built yet.
-- **Code budget:** 4,000 lines of production Go for v2. Today it is about 2,750, plus about 1,050 test lines and 66 SQL lines.
+- **Code budget:** 4,000 lines of production Go for v2. Today it is about 1,920 (1,628 in the v2 packages and about 290 in API routes and shared code), plus about 1,070 test lines and 66 SQL lines. The earlier figure of about 2,750 counted test files.
+
+## Risks
+
+- **Memory per upload:** the densest cell (about 2.5M features, about 1.2 GB of FGB) is held in memory whole, and nothing spills.
+- **Mixed snapshots:** a multi-cell reload is not one snapshot; see Decisions.
+- **Lookups decode whole runs:** delta coding means a lookup decodes each live run in full, held in the decoded-run LRU. At 1e9 features the runs total about 15 GB, so a fence index per run (one hash every few thousand entries) is needed before lookups scale.
+- **Coarse rebuild:** every upload reads its ancestors' sibling samples. Measure at 10 million features.
+- **Dense cities at zoom 13:** about 240k features on screen. Use overviews until detail is small, around zoom 16 or 17.
+- **Overview size:** overview responses carry full geometry, so they can be large.
+- **Filters on dense cells:** column files are scanned until postings exist.
+- **Old collections:** collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.

@@ -1,180 +1,832 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>postfgb v2 design</title>
+<title>postfgb v2 · design</title>
 <style>
-:root { --ink:#1d2430; --muted:#5b6575; --line:#d9dee7; --bg:#f6f7f9; --built:#2f7d32; --next:#b26a00; --cut:#6b7280; --accent:#2f6fc2; }
-* { box-sizing:border-box; }
-body { margin:0; font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
-header { background:#fff; border-bottom:1px solid var(--line); padding:26px 32px; }
-header h1 { margin:0 0 6px; font-size:26px; }
-main { padding:8px 16px 40px; }
-section { background:#fff; border:1px solid var(--line); border-radius:10px; padding:20px 24px; margin:16px auto; max-width:1120px; }
-h2 { margin:0 0 10px; font-size:19px; }
-.sub { color:var(--muted); margin:6px 0; }
-code { background:#eef1f5; padding:0 5px; border-radius:4px; font-size:13px; }
-.chip { display:inline-block; padding:1px 9px; border-radius:99px; font-size:12px; font-weight:600; color:#fff; white-space:nowrap; }
-.built { background:var(--built); } .next { background:var(--next); } .cut { background:var(--cut); }
-.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
-.card { border:1px solid var(--line); border-radius:8px; padding:13px 15px; background:#fcfdfe; }
-.card b { display:block; margin-bottom:3px; }
-table { width:100%; border-collapse:collapse; font-size:14px; }
-th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
-.flow { display:flex; flex-wrap:wrap; gap:8px; align-items:stretch; }
-.step { flex:1 1 180px; border:1px solid var(--line); border-radius:8px; padding:11px 13px; background:#fcfdfe; }
-.step .n { color:var(--accent); font-weight:700; font-size:12px; letter-spacing:.04em; }
-.arrow { align-self:center; color:var(--muted); font-size:20px; }
-.ladder .row { display:grid; grid-template-columns:86px 1fr 380px; gap:14px; align-items:center; padding:9px 0; border-bottom:1px solid var(--line); }
-.track { background:#eef1f5; border-radius:6px; height:24px; overflow:hidden; }
-.bar { height:100%; background:linear-gradient(90deg,#a9c3ea,#2f6fc2); border-radius:6px; }
-.meter { height:18px; background:#eef1f5; border-radius:99px; overflow:hidden; margin:6px 0 2px; }
-.meter > span { display:block; height:100%; background:var(--accent); }
-footer { color:var(--muted); font-size:13px; text-align:center; padding:12px; }
-@media (max-width:760px) { .ladder .row { grid-template-columns:1fr; } }
+:root{--bg:#101112;--fill:#17181a;--lane:#141517;--line:#34373d;--fg:#d8dadf;--mut:#868b94;--accent:#f2a93b;--band:#2a2f36;--lit:#2d2a22;--fillLit:#2b2619;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+header{position:sticky;top:0;z-index:2;display:flex;align-items:center;flex-wrap:wrap;gap:12px 28px;padding:12px 20px;background:var(--bg);border-bottom:1px solid var(--line)}
+.brand{font-weight:600}
+nav{display:flex;flex-wrap:wrap;gap:6px 18px}
+button{font:inherit;color:var(--mut);background:none;border:0;padding:4px 0;cursor:pointer}
+button:hover{color:var(--fg)}
+nav button[aria-selected=true]{color:var(--fg);box-shadow:inset 0 -2px 0 var(--accent)}
+.btn{padding:6px 10px;border:1px solid var(--line);border-radius:4px;color:var(--fg)}
+.btn[aria-pressed=true]{border-color:var(--accent)}
+#theme{margin-left:auto}
+.tab{display:none;grid-template-columns:minmax(0,1fr);gap:20px;max-width:1200px;margin:0 auto;padding:20px}
+.tab.on{display:grid}
+.chips{display:flex;flex-wrap:wrap;gap:8px;grid-column:1 / -1}
+.stage{position:relative;width:100%;border:1px solid var(--line);border-radius:6px;background:var(--lane);overflow:hidden}
+.stage canvas,.stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+.stage svg{pointer-events:none}
+.t{font-size:13px;font-weight:600;fill:var(--fg)}
+.s{font-size:10.5px;fill:var(--mut)}
+.lab{font-size:11px;letter-spacing:.06em;fill:var(--mut)}
+.v{font-size:13px;fill:var(--fg)}
+.a{font-size:13px;fill:var(--accent)}
+.m{font-size:13px;fill:var(--mut)}
+.r{font-size:12px;fill:var(--mut)}
+.hit{fill:transparent;pointer-events:all;cursor:pointer}
+.side{border:1px solid var(--line);border-radius:6px;padding:16px 20px;background:var(--fill)}
+.side h2{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.side h3{margin:16px 0 4px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.side p{margin:0 0 10px}
+.side ul{margin:0 0 10px;padding-left:16px;color:var(--mut);font-size:12px}
+.note{color:var(--mut);font-size:12px}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+input[type=range]{width:100%;accent-color:var(--accent);margin:6px 0 12px}
+.box{border:1px solid var(--line);border-radius:6px;padding:16px;background:var(--fill);margin-bottom:20px}
+.box h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.box p{margin:6px 0}
+.budget{margin:10px 0 12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.grid2 h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.grid2 ul{margin:0 0 20px;padding-left:18px}
+.grid2 li{margin:0 0 8px}
+.grid2 li span{color:var(--mut)}
+.grid2 ul.dec{list-style:none;padding-left:0}
+.tag{display:inline-block;min-width:64px;padding:0 6px;margin-right:6px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);color:var(--mut)}
+.tag.built{color:var(--fg)}
+.tag.decided,.tag.next{color:var(--accent);border-color:var(--accent)}
+.tag.cut{text-decoration:line-through}
+footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;border-top:1px solid var(--line)}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <header>
-<h1>postfgb v2: the design on one page</h1>
-<p class="sub">Review copy of <code>DESIGN-next.md</code>, state at commit <code>9c97846</code>. Served at <code>/design</code>, next to <code>/viewer</code>.</p>
-<p><span class="chip built">built</span> <span class="chip next">next</span> <span class="chip cut">cut</span></p>
+  <div class="brand">postfgb v2 · design</div>
+  <nav role="tablist" aria-label="Figure">
+    <button role="tab" data-tab="model" aria-selected="true">Model</button>
+    <button role="tab" data-tab="ladder" aria-selected="false">Ladder</button>
+    <button role="tab" data-tab="load" aria-selected="false">Load</button>
+    <button role="tab" data-tab="snaps" aria-selected="false">Snapshots</button>
+    <button role="tab" data-tab="reads" aria-selected="false">Reads</button>
+    <button role="tab" data-tab="decide" aria-selected="false">Decisions</button>
+  </nav>
+  <button id="theme" class="btn" aria-label="Switch light or dark">theme: dark</button>
 </header>
 
-<main>
-
-<section>
-<h2>The model in three ideas</h2>
-<div class="grid">
-<div class="card"><b>Everything is immutable.</b>Features live in FlatGeobuf chunks, one catalog row per chunk. A load writes new files and new rows, and never edits old ones.</div>
-<div class="card"><b>Partitions are the unit.</b>Every feature belongs to one S2 level-8 cell, about 36 km across. Loads and replacements work on whole partitions. Reads find chunks by key range.</div>
-<div class="card"><b>Overviews are capped samples.</b>A cell keeps at most 256 features: the ones with the smallest hash of their id. Coarser levels are built from finer ones, so one rule holds at every zoom.</div>
-</div>
+<section class="tab on" id="tab-model">
+  <div class="stage" id="fig-model"><canvas></canvas><svg></svg></div>
+  <aside class="side" id="side-model"></aside>
 </section>
 
-<section>
-<h2>Level ladder</h2>
-<p class="sub">Bar length follows log cell size. Each level keeps at most 256 features per cell, so a finer level shows more features on screen.</p>
-<div class="ladder">
-<div class="row"><div><b>L12</b> <small>~2.3 km</small></div><div class="track"><div class="bar" style="width:18%"></div></div><div>Dense partitions only (above 100,000 features). Up to 256 per cell. <span class="chip built">built</span></div></div>
-<div class="row"><div><b>L10</b> <small>~9 km</small></div><div class="track"><div class="bar" style="width:35%"></div></div><div>Every partition. Up to 256 per cell, so up to 4,096 per partition. <span class="chip built">built</span></div></div>
-<div class="row"><div><b>L8</b> <small>~36 km</small></div><div class="track"><div class="bar" style="width:51%"></div></div><div>Every partition, which is also the storage unit. 256 per partition. <span class="chip built">built</span></div></div>
-<div class="row"><div><b>L6</b> <small>~145 km</small></div><div class="track"><div class="bar" style="width:67%"></div></div><div>Coarse. Built from the level-8 samples in the same commit as each load. <span class="chip built">built</span></div></div>
-<div class="row"><div><b>L4</b> <small>~580 km</small></div><div class="track"><div class="bar" style="width:84%"></div></div><div>Coarse. Built from level 6. <span class="chip built">built</span></div></div>
-<div class="row"><div><b>L2</b> <small>~2,300 km</small></div><div class="track"><div class="bar" style="width:100%"></div></div><div>Coarse. Built from level 4. Continent and world views. <span class="chip built">built</span></div></div>
-</div>
-<p class="sub">Detail (every feature) sits below the finest level, in chunks. The client picks a level with <code>overview=N</code>. The server does not map zoom to level.</p>
+<section class="tab" id="tab-ladder">
+  <div class="stage" id="fig-ladder"><canvas></canvas><svg></svg></div>
+  <aside class="side" id="side-ladder"></aside>
 </section>
 
-<section>
-<h2>Why level 12 exists</h2>
-<p class="sub">Estimates for a dense partition (about 1,900 features per km², from the design's density figures) on a 1024×768 screen at 48°N. Measure on <code>buildings_fr</code> before trusting the numbers.</p>
-<table>
-<tr><th>Zoom</th><th>Detail in view</th><th>Level 8 sample</th><th>Level 10 sample</th><th>Level 12 sample</th></tr>
-<tr><td>13</td><td>~240k</td><td>~26</td><td>~400</td><td>~6k</td></tr>
-<tr><td>14</td><td>~60k</td><td>~6</td><td>~100</td><td>~1,600</td></tr>
-<tr><td>15</td><td>~15k</td><td>~2</td><td>~25</td><td>~400</td></tr>
-</table>
-<p class="sub">Detail is too large to draw at these zooms, and level 10 alone is too sparse at 14 and 15. Level 12 covers that gap, and only for dense partitions, so the storage cost stays small.</p>
+<section class="tab" id="tab-load">
+  <div class="stage" id="fig-load"><canvas></canvas><svg></svg></div>
+  <aside class="side" id="side-load"></aside>
 </section>
 
-<section>
-<h2>Load: one request, one snapshot</h2>
-<div class="flow">
-<div class="step"><div class="n">1 · STREAM</div>Read the body. Canonical ids and geometry checks. 422 for duplicate ids, bad geometry, or features outside the listed cells.</div>
-<div class="arrow">→</div>
-<div class="step"><div class="n">2 · BUCKET</div>Group features by level-8 partition, in memory. Spilling to disk is not built.</div>
-<div class="arrow">→</div>
-<div class="step"><div class="n">3 · WRITE BLOBS</div>In parallel: detail chunks, samples at levels 8 and 10, level 12 for dense partitions, and the id run. Blobs are immutable and written before the commit.</div>
-<div class="arrow">→</div>
-<div class="step"><div class="n">4 · COMMIT</div>One transaction: lock the collection, end replaced rows, insert new rows at snapshot s, rebuild levels 6, 4 and 2 from the children at s, publish the files.</div>
-</div>
-<p class="sub"><code>PUT ?base=s</code> fails with 409 if any listed partition changed after snapshot s.</p>
+<section class="tab" id="tab-snaps">
+  <div class="stage" id="fig-snaps"><canvas></canvas><svg></svg></div>
+  <aside class="side" id="side-snaps"></aside>
 </section>
 
-<section>
-<h2>Read: which path serves a request</h2>
-<table>
-<tr><th>Request</th><th>Path</th><th>Cost driver</th><th>Status</th></tr>
-<tr><td><code>items?bbox=</code></td><td>Catalog for the snapshot, cached. Chunks whose envelope meets the bbox. FlatGeobuf search. Paged by (key, id).</td><td>Chunks touched</td><td><span class="chip built">built</span></td></tr>
-<tr><td><code>items?filter=</code></td><td>Zone maps prune chunks. Column sidecars evaluate the predicate. Only matched features are read.</td><td>Column scan of unpruned chunks</td><td><span class="chip built">built</span> <small>no postings</small></td></tr>
-<tr><td><code>numberMatched=true</code></td><td>Sidecars are counted. No geometry is read.</td><td>As the filter</td><td><span class="chip built">built</span> <small>omitted with a bbox</small></td></tr>
-<tr><td><code>items?overview=N&amp;bbox=</code></td><td>Samples at level N that meet the bbox. Paged. No filter.</td><td>Features in view</td><td><span class="chip built">built</span> <small>N = 2, 4, 6, 8, 10, 12</small></td></tr>
-<tr><td><code>items/{id}</code></td><td>Id runs give candidate keys. Each key names a partition. The chunk covering the key is read and the id verified. 404 for none, 409 for more than one.</td><td>Live runs, no merge yet</td><td><span class="chip built">built</span></td></tr>
-</table>
+<section class="tab" id="tab-reads">
+  <div class="chips" id="chips"></div>
+  <div class="stage" id="fig-reads"><canvas></canvas><svg></svg></div>
+  <aside class="side" id="side-reads"></aside>
 </section>
 
-<section>
-<h2>Storage</h2>
-<div class="grid">
-<div class="card"><b>files, blocks</b>Immutable files in 8,120-byte rows, in schema <code>pfgb</code>.</div>
-<div class="card"><b>chunks</b>One row per chunk: partition, level, seq, first and last (key, id), envelope, rows, file ids, zone map JSON, begin and end snapshot.</div>
-<div class="card"><b>partitions</b>Last changed snapshot per partition. Used by <code>base=</code>.</div>
-<div class="card"><b>id_runs</b>One run per load: sorted (hash of id, key) pairs. Live until a whole load replaces it.</div>
-<div class="card"><b>snapshots, collections</b>Snapshot times, for 72 h retention. Current snapshot and schema per collection.</div>
-<div class="card"><b>Caches</b>Three LRUs per worker, 256 MiB each: file bytes, chunk lists per snapshot, decoded id runs.</div>
-</div>
+<section class="tab wide" id="tab-decide">
+  <div class="box">
+    <h3>Code budget · production Go for v2</h3>
+    <div class="stage budget" id="fig-budget"><canvas></canvas><svg></svg></div>
+    <p>Now: about 1,920 of 4,000 lines (48%).</p>
+    <p>With the id-run merge and reaping: about 2,000 lines (50%).</p>
+    <p class="note">Outside the budget: about 1,070 lines of tests and 66 lines of SQL.</p>
+  </div>
+  <div class="grid2">
+    <div>
+      <h3>Decisions</h3>
+      <ul class="dec">
+        <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
+        <li><span class="tag built">built</span><b>Chunk size</b><br><span>2 MiB or 50,000 features. Kept; retune only after measuring.</span></li>
+        <li><span class="tag built">built</span><b>Sparse partitions</b><br><span>No packing. Every populated cell keeps at least one chunk.</span></li>
+        <li><span class="tag built">built</span><b>Overview levels</b><br><span>8 and 10 per cell; 12 above 100,000 features; 6, 4 and 2 per cell, rebuilt in the commit. Cap 256.</span></li>
+        <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification yet. No zoom mapping on the server: the client asks for overview=N.</span></li>
+        <li><span class="tag built">built</span><b>Conditional loads</b><br><span>base=s answers 409 when a listed cell changed after s.</span></li>
+        <li><span class="tag built">built</span><b>Caches</b><br><span>Three LRUs per worker, 256 MiB each: file bytes, chunk lists, decoded id runs.</span></li>
+        <li><span class="tag decided">decided</span><b>Upload</b><br><span>One .fgb.zst per L8 cell. No streaming, bucketing or spill. Not built: the /v2 load still takes multi-cell bodies.</span></li>
+        <li><span class="tag decided">decided</span><b>Snapshot per upload</b><br><span>Each upload is one commit. A multi-cell reload is not atomic: readers can see old and new cells together until it ends.</span></li>
+        <li><span class="tag next">next</span><b>Id runs</b><br><span>One run per upload. Lookups search every live run. Above 64 live runs, a background merge combines the smallest and drops stale entries.</span></li>
+        <li><span class="tag next">next</span><b>Reaping</b><br><span>Keep 72 h retention. Delete rows and files that no retained snapshot can see.</span></li>
+        <li><span class="tag cut">cut</span><b>Postings</b><br><span>Zone maps and column files answer filters for now. Revisit if a dense-cell filter takes over 1 s cold.</span></li>
+        <li><span class="tag cut">cut</span><b>Id-run Bloom filters</b><br><span>A binary search over at most 64 runs is cheap.</span></li>
+      </ul>
+    </div>
+    <div>
+      <h3>Risks</h3>
+      <ul>
+        <li>Loads are held in memory and nothing spills. The densest cell (about 1.2 GB of FGB at 1e9 features) sets the worker’s memory.</li>
+        <li>A reload of many cells is not one snapshot. Readers can see a mix of old and new cells until the last upload commits.</li>
+        <li>Id runs are delta-coded, so a lookup decodes each live run in full. At 1e9 features the runs total about 15 GB: a fence index per run is needed before lookups scale.</li>
+        <li>The coarse rebuild reads sibling samples on every upload. Measure at 10 million features.</li>
+        <li>Dense cities at zoom 13 hold about 240k features on screen. Use overviews until detail is small, around zoom 16 or 17.</li>
+        <li>Overview responses carry full geometry, so they can be large.</li>
+        <li>Filters on dense cells scan column files until postings exist.</li>
+        <li>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</li>
+      </ul>
+      <h3>Terms</h3>
+      <ul>
+        <li><b>Key</b>: the S2 level-30 cell of a feature’s bbox centre. Sets the storage order.</li>
+        <li><b>Partition</b>: an S2 level-8 cell, the unit of upload, load and replacement.</li>
+        <li><b>Chunk</b>: an immutable FlatGeobuf with a column file and a zone map, and one catalog row.</li>
+        <li><b>Sample</b>: the 256 smallest-hash features of a cell, stored as chunks with level = N.</li>
+        <li><b>Id run</b>: sorted (hash, key) pairs, one per upload.</li>
+        <li><b>Snapshot</b>: one upload’s commit. A row is visible at s when begin ≤ s &lt; end.</li>
+        <li><b>Virtual file</b>: a file’s bytes stored as block rows, read back through the file-bytes overlay.</li>
+      </ul>
+    </div>
+  </div>
 </section>
 
-<section>
-<h2>Decisions</h2>
-<table>
-<tr><th>Topic</th><th>Choice</th><th>Why</th><th>Status</th></tr>
-<tr><td>Partition unit</td><td>S2 level 8</td><td>Fixed grid, no per-collection setting</td><td><span class="chip built">built</span></td></tr>
-<tr><td>Chunk size</td><td>2 MiB or 50,000 features</td><td>Kept; retune only after measuring</td><td><span class="chip built">built</span></td></tr>
-<tr><td>Packing sparse partitions</td><td>No. Every populated partition keeps at least one chunk</td><td>Simplest; the per-chunk overhead is accepted</td><td><span class="chip built">built</span></td></tr>
-<tr><td>Overview levels</td><td>8 and 10 per partition; 12 for dense partitions; 6, 4 and 2 per cell; cap 256</td><td>Coarse levels cost about 1% of samples</td><td><span class="chip built">built</span></td></tr>
-<tr><td>Simplification</td><td>None. Samples keep full geometry</td><td>Saves a Douglas–Peucker step. Use orb later if sizes need it</td><td><span class="chip built">built</span></td></tr>
-<tr><td>Zoom mapping</td><td>None on the server. The client sends <code>overview=N</code></td><td>No zoom logic to build or test</td><td><span class="chip built">built</span></td></tr>
-<tr><td>Snapshots per load</td><td>One. Coarse levels commit with the load</td><td>Simple numbering; exact <code>base=</code> checks</td><td><span class="chip built">built</span></td></tr>
-<tr><td>Conditional loads</td><td><code>base=s</code> returns 409 if a listed partition changed</td><td>A few lines</td><td><span class="chip built">built</span></td></tr>
-<tr><td>Postings</td><td>Cut</td><td>About 250 lines. Zone maps and sidecars answer filters. Revisit if a filter on a dense partition takes over 1 s cold</td><td><span class="chip cut">cut</span></td></tr>
-<tr><td>Id-run Bloom filters</td><td>Cut</td><td>A binary search over at most 64 runs is cheap</td><td><span class="chip cut">cut</span></td></tr>
-<tr><td>Id-run merge</td><td>When a collection has more than 64 live runs, rebuild one run from the live chunks</td><td>Bounds lookups. About 40 lines</td><td><span class="chip next">next</span></td></tr>
-<tr><td>Reaping</td><td>Keep 72 h retention. Delete rows and files that no retained snapshot can see</td><td>Bounds storage. About 40 lines</td><td><span class="chip next">next</span></td></tr>
-</table>
-</section>
+<footer id="hint">1–6 figures · D demo · E read demo · R reset · ← → step or zoom · T theme</footer>
 
-<section>
-<h2>Code budget</h2>
-<p class="sub">Target: 4,000 lines of production Go for the full v2 implementation.</p>
-<p><b>Production Go, v2, now:</b> 2,752 lines (69%)</p>
-<div class="meter"><span style="width:69%"></span></div>
-<p><b>With id-run merge and reaping (about 80 lines):</b> about 2,830 lines (71%)</p>
-<div class="meter"><span style="width:71%"></span></div>
-<p class="sub">Outside the budget: about 1,050 lines of tests, and 66 lines of SQL in migrations 0031 to 0034.</p>
-</section>
+<script src="https://unpkg.com/zdog@1.1.3/dist/zdog.dist.min.js"></script>
+<script>
+const PAL = {
+  dark: { bg: '#101112', fill: '#17181a', lane: '#141517', line: '#34373d', fg: '#d8dadf', mut: '#868b94', accent: '#f2a93b', band: '#2a2f36', lit: '#2d2a22', fillLit: '#2b2619' },
+  light: { bg: '#fafaf9', fill: '#ffffff', lane: '#f1f2f3', line: '#cdd1d6', fg: '#1c1d1f', mut: '#6a6f77', accent: '#b3600a', band: '#dde3ea', lit: '#f7ead7', fillLit: '#fbf1e4' },
+};
+let P = PAL.dark;
+const EDGE_T = 0.6;
+const S = {
+  tab: 'model',
+  model: { sel: 'chunks', lit: new Set(), demo: null },
+  ladder: { z: 13, sweep: null },
+  load: { k: 0, sel: 0, play: null },
+  snaps: { s: 1, sel: -1, play: null },
+  reads: { req: 0, sel: 0, lit: new Set(), demo: null },
+};
+const NS = 'http://www.w3.org/2000/svg';
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
-<section>
-<h2>Risks and next steps</h2>
-<table>
-<tr><th>Item</th><th>Note</th></tr>
-<tr><td>Coarse rebuild cost</td><td>A load reads every sibling's level-8 sample. Fine at test sizes. Measure at 10 million features before trusting it.</td></tr>
-<tr><td>Dense cities at zoom 13</td><td>Detail is about 240k features per screen. The client should use overviews until detail is small, around zoom 16.</td></tr>
-<tr><td>Overview payloads</td><td>Samples keep full geometry, so pages can be large. Simplification is the lever if they are.</td></tr>
-<tr><td>Filters on dense partitions</td><td>Column sidecars are scanned until postings exist.</td></tr>
-<tr><td>Older collections</td><td>Collections loaded before migrations 0032 to 0034 need a reload before lookups and filters work.</td></tr>
-<tr><td>Next, in order</td><td>1. Id-run merge. 2. Reaping. 3. Measure at 10 million features: coarse rebuild, lookup, filter latency.</td></tr>
-</table>
-</section>
+const WRITE_SEQ = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7'];
+const READ_SEQ = ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'];
+const BAND_Y = { w: 30, p: 164, r: 308 };
+const MODEL = {
+  loader: { band: 'w', col: 0, t: 'Loader', s: ['one .fgb.zst', 'per L8 cell'], text: 'Uploads one zstd-compressed FlatGeobuf per level-8 cell. Every feature in the file falls in that cell, so a reload is one upload per cell.', layout: ['body: zstd FlatGeobuf', 'one L8 cell per upload'], index: [] },
+  decode: { band: 'w', col: 1, t: 'Decode', s: ['zstd → FGB', 'in memory'], text: 'The worker decompresses the whole file into memory and parses it once. Each feature gets its key (bbox centre, S2 level 30) and its id.', layout: ['no streaming, bucketing or spill', 'densest cell is about 1.2 GB of FGB'], index: [] },
+  validate: { band: 'w', col: 2, t: 'Validate', s: ['cell · ids · geom', '422 on failure'], text: '422 for a feature outside the cell, a duplicate id in the file, or unusable geometry. base=s is checked in the commit.', layout: [], index: [] },
+  sort: { band: 'w', col: 3, t: 'Sort & cut', s: ['(key, id)', '2 MiB or 50,000'], text: 'Sort by (key, id), then cut chunks at 2 MiB or 50,000 features, whichever comes first. Each chunk is a contiguous key range.', layout: ['chunk = contiguous key range', 'rows keep key order'], index: [] },
+  encode: { band: 'w', col: 4, t: 'Encode', s: ['FGB · col · zone', 'samples · id run'], text: 'Per chunk: an FGB (zstd), a column file in the same row order, and a zone map. Per cell: samples at levels 8 and 10 (12 above 100,000 features) and one id run.', layout: ['files: fgb, cols, idrun', 'written unpublished, by COPY'], index: [] },
+  commit: { band: 'w', col: 5, t: 'Commit', s: ['one tx', 'one snapshot'], text: 'One transaction: lock the collection row, check base=s, end the cell’s live chunks, insert the new rows, rebuild levels 6, 4 and 2, insert the snapshot, publish the files.', layout: ['one snapshot per upload'], index: [] },
+  collections: { band: 'p', col: 0, t: 'collections', s: ['uid · snapshot', 'schema, id_col'], text: 'One row per collection. The commit locks it FOR UPDATE, so commits serialize per collection.', layout: ['name text pk', 'uid bigint identity', 'current_snapshot, id_column', 'columns_json jsonb'], index: ['pk (name)'] },
+  chunks: { band: 'p', col: 1, t: 'chunks', s: ['key, bbox, zone', 'begin · end snap'], text: 'One row per chunk. A chunk is visible at snapshot s when begin ≤ s and s < end. The zone map is stored as JSON text.', layout: ['chunk_id pk, collection, cell, seq', 'first and last key and id', 'minx, miny, maxx, maxy, features', 'file_id, col_file, zone, level', 'begin_snapshot, end_snapshot'], index: ['(collection, begin_snapshot)', '(collection, cell) where end_snapshot is null'] },
+  partitions: { band: 'p', col: 2, t: 'partitions', s: ['cell · changed'], text: 'The last snapshot that changed each cell. base=s answers 409 when a listed cell changed after s.', layout: ['collection, cell, changed'], index: ['pk (collection, cell)'] },
+  blocks: { band: 'p', col: 3, t: 'blocks', s: ['file_id, n', '8,120 B rows'], text: 'Virtual files: each file is split into 8,120-byte rows, one per 8 KB heap page, stored inline without TOAST. Written by COPY before the commit.', layout: ['file_id bigint', 'n int', 'data bytea, storage plain'], index: ['pk (file_id, n)'] },
+  files: { band: 'p', col: 4, t: 'files', s: ['kind · bytes', 'published'], text: 'One row per virtual file. kind is fgb, cols or idrun. A file becomes readable when the commit sets published.', layout: ['file_id identity pk', 'collection, kind, bytes', 'published, created'], index: ['pk (file_id)'] },
+  snapshots: { band: 'p', col: 5, t: 'snapshots', s: ['(collection, id)'], text: 'One row per snapshot, the commit that created it. Cursors pin one; retention is 72 h.', layout: ['collection, id', 'created'], index: ['pk (collection, id)'] },
+  id_runs: { band: 'p', col: 6, t: 'id_runs', s: ['file · entries', 'begin · end'], text: 'One row per id run, one per upload. An upload does not end older runs; a background merge drops their stale entries.', layout: ['file_id pk, collection', 'entries, begin_snapshot, end_snapshot'], index: ['(collection) where end_snapshot is null'] },
+  reader: { band: 'r', col: 0, t: 'Reader', s: ['items, id, count'], text: 'A request: items with bbox, filter or overview=N; items/{id}; numberMatched; or PUT ?base=s.', layout: [], index: [] },
+  catalog: { band: 'r', col: 1, t: 'Catalog', s: ['chunk list at s', 'cached per snap'], text: 'Overlay on the chunks table. One query loads the chunk list for (collection, s). Kept in a 256 MiB LRU per worker.', layout: ['where collection = $1', 'and begin_snapshot ≤ s', 'and (end_snapshot is null or > s)'], index: ['uses (collection, begin_snapshot)'] },
+  prune: { band: 'r', col: 2, t: 'Prune', s: ['envelope · zones'], text: 'In memory: the bbox is tested against chunk envelopes, and filters against zone maps. The list is scanned; there is no R-tree yet.', layout: [], index: [] },
+  fileov: { band: 'r', col: 3, t: 'File bytes', s: ['LRU by file_id', '256 MiB'], text: 'Overlay on blocks. A miss reads the file’s block rows in (file_id, n) order and keeps the bytes; a hit costs no query.', layout: ['select n, data from blocks', 'where file_id = $1 order by n'], index: ['pk (file_id, n)'] },
+  fgb: { band: 'r', col: 4, t: 'FGB search', s: ['packed R-tree', 'per chunk'], text: 'A bbox read searches each candidate chunk’s packed R-tree. A filter reads the candidate chunk whole and keeps the matching rows.', layout: [], index: [] },
+  response: { band: 'r', col: 5, t: 'Response', s: ['page · cursor', 'FGB or GeoJSON'], text: 'Features stream out in (key, id) order. The cursor pins the snapshot and carries the last (key, id). A cursor older than 72 h answers 410.', layout: [], index: [] },
+  idov: { band: 'r', col: 6, t: 'Id runs', s: ['decoded LRU', '256 MiB'], text: 'Overlay on id_runs: decoded runs kept in a 256 MiB LRU. A lookup binary-searches every live run, then reads the candidate chunk to verify the id.', layout: ['a miss decodes the whole run'], index: ['(collection) where end_snapshot is null'] },
+};
+const MODEL_ORDER = Object.keys(MODEL);
+const EDGES = [
+  ['e1', 'loader', 'decode', false], ['e2', 'decode', 'validate', false], ['e3', 'validate', 'sort', false],
+  ['e4', 'sort', 'encode', false], ['e5', 'encode', 'blocks', true, 118], ['e6', 'encode', 'commit', false],
+  ['e7', 'commit', 'chunks', true, 136],
+  ['r1', 'reader', 'catalog', false], ['r2', 'chunks', 'catalog', true], ['r3', 'catalog', 'prune', false],
+  ['r4', 'prune', 'fileov', false], ['r5', 'blocks', 'fileov', true], ['r6', 'fileov', 'fgb', false],
+  ['r7', 'fgb', 'response', false], ['r8', 'id_runs', 'idov', true],
+];
+const edgeOf = id => EDGES.find(e => e[0] === id);
+const boxOf = id => {
+  const n = MODEL[id], wr = n.band === 'w';
+  return { x: 14 + n.col * (wr ? 164 : 142), y: BAND_Y[n.band], w: wr ? 128 : 122, h: 64 };
+};
+function route(a, b, mid) {
+  const ax = a.x + a.w / 2, bx = b.x + b.w / 2;
+  if (a.y === b.y) {
+    const y = a.y + a.h / 2;
+    return a.x < b.x ? [[a.x + a.w, y], [b.x, y]] : [[a.x, y], [b.x + b.w, y]];
+  }
+  const y1 = a.y + a.h, y2 = b.y;
+  if (ax === bx) return [[ax, y1], [bx, y2]];
+  const m = mid ?? (y1 + y2) / 2;
+  return [[ax, y1], [ax, m], [bx, m], [bx, y2]];
+}
+function along(pts, t) {
+  const segs = [];
+  let total = 0;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const d = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    segs.push(d);
+    total += d;
+  }
+  let d = Math.min(1, Math.max(0, t)) * total;
+  for (let i = 0; i < segs.length; i++) {
+    if (d <= segs[i] || i === segs.length - 1) {
+      const k = segs[i] ? Math.min(1, d / segs[i]) : 0;
+      return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * k, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * k];
+    }
+    d -= segs[i];
+  }
+  return pts[0];
+}
+function hotEdge() {
+  const d = S.model.demo;
+  return d ? d.seq[d.i] : null;
+}
 
-<section>
-<h2>Glossary</h2>
-<div class="grid">
-<div class="card"><b>Key</b>The S2 level-30 cell of a feature's bbox centre. Sets the storage order.</div>
-<div class="card"><b>Partition</b>An S2 level-8 cell. The unit of load and replacement.</div>
-<div class="card"><b>Chunk</b>An immutable FlatGeobuf (zstd) with a column sidecar and a zone map, and one catalog row.</div>
-<div class="card"><b>Sample</b>The 256 smallest-hash features of a cell, stored as chunks with <code>level = N</code>.</div>
-<div class="card"><b>Zone map</b>Per-column min, max and null count for a chunk. Prunes filters.</div>
-<div class="card"><b>Id run</b>Sorted (hash of id, key) pairs written with each load. Used by lookups.</div>
-<div class="card"><b>Snapshot</b>One load's commit. A row is visible at snapshot s when begin ≤ s &lt; end.</div>
-<div class="card"><b>base=</b>The snapshot a loader read. The load fails if a listed partition changed since.</div>
-</div>
-</section>
+class Fig {
+  constructor(id, vw, vh) {
+    this.vw = vw;
+    this.vh = vh;
+    this.binds = [];
+    this.el = document.getElementById(id);
+    this.el.style.aspectRatio = vw + ' / ' + vh;
+    this.svg = this.el.querySelector('svg');
+    this.svg.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
+    this.illo = new Zdog.Illustration({
+      element: this.el.querySelector('canvas'),
+      resize: true,
+      onResize(w) { if (w > 0) this.zoom = w / vw; },
+    });
+  }
+  x(v) { return v - this.vw / 2; }
+  y(v) { return v - this.vh / 2; }
+  pt(x, y) { return { x: this.x(x), y: this.y(y) }; }
+  shape(x, y, w, h, r, opts) {
+    return new Zdog[r ? 'RoundedRect' : 'Rect']({ addTo: this.illo, width: w, height: h, cornerRadius: r, translate: this.pt(x + w / 2, y + h / 2), ...opts });
+  }
+  bind(fn) { this.binds.push(fn); fn(); }
+  line(pts, lw) { return new Zdog.Shape({ addTo: this.illo, path: pts.map(([x, y]) => this.pt(x, y)), closed: false, stroke: lw, fill: false }); }
+  dashes(pts, lw) {
+    const out = [];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [x1, y1] = pts[i], [x2, y2] = pts[i + 1], L = Math.hypot(x2 - x1, y2 - y1);
+      if (!L) continue;
+      const ux = (x2 - x1) / L, uy = (y2 - y1) / L;
+      for (let d = 0; d < L; d += 9) {
+        const e = Math.min(L, d + 5);
+        out.push(this.line([[x1 + ux * d, y1 + uy * d], [x1 + ux * e, y1 + uy * e]], lw));
+      }
+    }
+    return out;
+  }
+  head(pts) {
+    const [x1, y1] = pts[pts.length - 2], [x2, y2] = pts[pts.length - 1];
+    const L = Math.hypot(x2 - x1, y2 - y1) || 1, ux = (x2 - x1) / L, uy = (y2 - y1) / L;
+    const bx = x2 - ux * 7, by = y2 - uy * 7;
+    return new Zdog.Shape({ addTo: this.illo, path: [this.pt(x2, y2), this.pt(bx - uy * 3.5, by + ux * 3.5), this.pt(bx + uy * 3.5, by - ux * 3.5)], closed: true, fill: true, stroke: false });
+  }
+  text(x, y, str, cls = 'v', anchor = 'start') {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', x);
+    t.setAttribute('y', y);
+    t.setAttribute('class', cls);
+    t.setAttribute('text-anchor', anchor);
+    t.textContent = str;
+    this.svg.appendChild(t);
+    return t;
+  }
+  hit(x, y, w, h, fn) {
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', x);
+    r.setAttribute('y', y);
+    r.setAttribute('width', w);
+    r.setAttribute('height', h);
+    r.setAttribute('class', 'hit');
+    r.addEventListener('click', fn);
+    this.svg.appendChild(r);
+    return r;
+  }
+  paint() { for (const fn of this.binds) fn(); }
+  render() { this.paint(); this.illo.updateRenderGraph(); }
+  show() { this.illo.onWindowResize(); this.render(); }
+  step() { return false; }
+}
 
-</main>
-<footer>Static review page. Edit <code>internal/api/design.html</code>; no build step.</footer>
+class Model extends Fig {
+  constructor() {
+    super('fig-model', 1000, 396);
+    [[0, 112, 'write · one worker, one L8 cell per upload', 12, 18, 'start'], [136, 140, 'postgres · tables, and blocks as virtual files', 988, 152, 'end'], [288, 108, 'read · virtual overlays in worker memory', 12, 388, 'start']].forEach(([y, h, label, x, ty, anchor]) => {
+      const lane = this.shape(0, y, 1000, h, 0, { fill: true, stroke: false });
+      this.bind(() => { lane.color = P.lane; });
+      this.text(x, ty, label, 'lab', anchor);
+    });
+    for (const [id, from, to, dash, mid] of EDGES) {
+      const pts = route(boxOf(from), boxOf(to), mid);
+      const lines = dash ? this.dashes(pts, 1.25) : [this.line(pts, 1.25)];
+      const head = this.head(pts);
+      this.bind(() => {
+        const hot = hotEdge() === id;
+        for (const l of lines) { l.color = hot ? P.accent : P.mut; l.stroke = hot ? 2 : 1.25; }
+        head.color = hot ? P.accent : P.mut;
+      });
+    }
+    for (const id of MODEL_ORDER) {
+      const n = MODEL[id], b = boxOf(id);
+      const f = this.shape(b.x, b.y, b.w, b.h, 6, { fill: true, stroke: false });
+      const e = this.shape(b.x, b.y, b.w, b.h, 6, { fill: false, stroke: 1.2 });
+      this.bind(() => {
+        const sel = S.model.sel === id;
+        f.color = S.model.lit.has(id) ? P.fillLit : P.fill;
+        e.color = sel ? P.accent : P.line;
+        e.stroke = sel ? 2.4 : 1.2;
+      });
+      this.text(b.x + 8, b.y + 19, n.t, 't');
+      n.s.forEach((ln, i) => this.text(b.x + 8, b.y + 35 + i * 13, ln, 's'));
+      this.hit(b.x, b.y, b.w, b.h, () => { S.model.sel = id; this.render(); refresh(); });
+    }
+    this.dot = new Zdog.Ellipse({ addTo: this.illo, diameter: 10, fill: true, stroke: false, visible: false });
+    this.render();
+  }
+  paint() {
+    super.paint();
+    this.dot.color = P.accent;
+    const d = S.model.demo;
+    this.dot.visible = !!d;
+    if (d) {
+      const [, from, to, , mid] = edgeOf(d.seq[d.i]);
+      const [x, y] = along(route(boxOf(from), boxOf(to), mid), d.t / EDGE_T);
+      this.dot.translate.x = this.x(x);
+      this.dot.translate.y = this.y(y);
+    }
+  }
+  step(dt) {
+    const d = S.model.demo;
+    if (!d) return false;
+    d.t += dt;
+    if (d.t >= EDGE_T) {
+      S.model.lit.add(edgeOf(d.seq[d.i])[2]);
+      d.i++;
+      d.t = 0;
+      if (d.i >= d.seq.length) S.model.demo = null;
+    }
+    return true;
+  }
+  act(name) {
+    if (name === 'demo') playModel(WRITE_SEQ);
+    if (name === 'read') playModel(READ_SEQ);
+    if (name === 'reset') { S.model.lit = new Set(); S.model.demo = null; }
+  }
+}
+function playModel(seq) {
+  S.model.lit = new Set([edgeOf(seq[0])[1]]);
+  S.model.demo = { seq, i: 0, t: 0 };
+}
+
+const LEVELS = [['Detail', null, 'detail, with no overview'], ['Level 12 sample', 5.07, 'overview=12'], ['Level 10 sample', 81.1, 'overview=10'], ['Level 8 sample', 1297.3, 'overview=8']];
+const kmTile = z => (40075.017 / 2 ** z) * Math.cos((48 * Math.PI) / 180);
+const fmt = v => Math.round(v).toLocaleString('en-GB');
+function counts(z) {
+  const t = kmTile(z), area = 12 * t * t, detail = 1900 * area;
+  return LEVELS.map(([, cell]) => (cell === null ? detail : Math.min(detail, (256 * area) / cell)));
+}
+const barPos = v => Math.min(1, Math.max(0, Math.log10(Math.max(v, 1)) / 6)) * 420;
+
+class Ladder extends Fig {
+  constructor() {
+    super('fig-ladder', 1000, 440);
+    const cell = (x, y, w, hi) => {
+      const f = this.shape(x, y, w, w, 0, { fill: true, stroke: false });
+      const e = this.shape(x, y, w, w, 0, { fill: false, stroke: hi ? 2 : 1 });
+      this.bind(() => { f.color = P.fill; e.color = hi ? P.accent : P.line; });
+    };
+    cell(40, 24, 380, false);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(40 + i * 95, 24 + j * 95, 95, i === 1 && j === 1);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) cell(135 + i * 23.75, 119 + j * 23.75, 23.75, false);
+    this.text(46, 16, 'L8 cell · about 36 km', 'lab');
+    this.scr = this.shape(135, 119, 1, 1, 0, { fill: true, stroke: false });
+    this.scrEdge = this.shape(135, 119, 1, 1, 0, { fill: false, stroke: 1.6 });
+    this.bind(() => { this.scr.color = P.band; this.scrEdge.color = P.accent; });
+    this.bars = LEVELS.map(([name], i) => {
+      const y = 96 + i * 84;
+      const back = this.shape(520, y, 420, 26, 0, { fill: true, stroke: false });
+      const band = this.shape(520 + barPos(100), y, barPos(2000) - barPos(100), 26, 0, { fill: true, stroke: false });
+      const fill = this.shape(520, y, 1, 26, 0, { fill: true, stroke: false });
+      this.bind(() => { back.color = P.lane; band.color = P.band; });
+      this.text(520, y - 12, name, 'lab');
+      const val = this.text(940, y - 12, '', 'v', 'end');
+      return { fill, val, y };
+    });
+    this.text(520, 430, 'band: 100 to 2,000 features on screen (assumed)', 'lab');
+    this.render();
+  }
+  geometry(z) {
+    const t = kmTile(z), k = 380 / 36, w = 4 * t * k, h = 3 * t * k;
+    const rx = 182.5 - w / 2, ry = 166.5 - h / 2;
+    const x1 = Math.max(rx, 40), y1 = Math.max(ry, 24), x2 = Math.min(rx + w, 420), y2 = Math.min(ry + h, 404);
+    return x2 > x1 && y2 > y1 ? { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } : null;
+  }
+  place(s, g) {
+    s.visible = !!g;
+    if (!g) return;
+    s.width = g.w;
+    s.height = g.h;
+    s.translate.x = this.x(g.x + g.w / 2);
+    s.translate.y = this.y(g.y + g.h / 2);
+    s.updatePath();
+  }
+  paint() {
+    super.paint();
+    const z = Math.round(S.ladder.z), c = counts(z), g = this.geometry(z);
+    this.place(this.scr, g);
+    this.place(this.scrEdge, g);
+    LEVELS.forEach((_, i) => {
+      const b = this.bars[i], val = c[i], ok = val >= 100 && val <= 2000;
+      b.fill.color = ok ? P.accent : P.mut;
+      const w = Math.max(0.001, barPos(val));
+      b.fill.width = w;
+      b.fill.height = 26;
+      b.fill.translate.x = this.x(520 + w / 2);
+      b.fill.translate.y = this.y(b.y + 13);
+      b.fill.updatePath();
+      b.val.textContent = fmt(val);
+    });
+  }
+  act(name, arg) {
+    const L = S.ladder;
+    if (name === 'demo') L.sweep = { t: 0 };
+    if (name === 'reset') { L.z = 13; L.sweep = null; }
+    if (name === 'set') { L.z = +arg; L.sweep = null; }
+    if (name === 'step') { L.sweep = null; L.z = Math.min(17, Math.max(2, Math.round(L.z) + arg)); }
+  }
+  step(dt) {
+    const s = S.ladder.sweep;
+    if (!s) return false;
+    s.t += dt;
+    S.ladder.z = 2 + 15 * Math.min(1, s.t / 12);
+    if (s.t >= 12) S.ladder.sweep = null;
+    return true;
+  }
+}
+
+const STAGES = [
+  ['Upload', ['one .fgb.zst', 'per L8 cell'], 'One zstd-compressed FlatGeobuf per level-8 cell. The loader sends each cell as its own upload, and each upload is its own snapshot.'],
+  ['Decode', ['zstd → FGB', 'in memory'], 'Decompress the whole file into memory and parse it once. No streaming, bucketing or spill: the densest cell, about 1.2 GB of FGB, must fit in the worker.'],
+  ['Validate', ['cell · ids · geom', '422 on failure'], '422 for a feature outside the cell, a duplicate id in the file, or unusable geometry.'],
+  ['Sort & cut', ['(key, id)', '2 MiB or 50,000'], 'Sort by (key, id), then cut chunks at 2 MiB or 50,000 features, whichever comes first.'],
+  ['Encode', ['FGB · col · zone', 'samples · id run'], 'Per chunk: an FGB (zstd), a column file in the same row order, and a zone map. Per cell: samples at levels 8 and 10 (12 above 100,000 features), and one id run.'],
+  ['Write blobs', ['blocks, COPY', 'unpublished'], 'Each file is written as 8,120-byte block rows in its own transaction. It stays unpublished until the commit.'],
+  ['Commit', ['one tx', 'one snapshot'], 'One transaction. Everything the upload changes becomes visible at one snapshot, or nothing does.'],
+];
+const SUBS = [
+  'lock the collection row, so commits serialize',
+  'base= check: 409 if the cell changed after s',
+  'end the cell’s live chunks',
+  'insert the chunk rows and samples at snapshot s',
+  'rebuild levels 6, 4 and 2 from the samples below, at s',
+  'insert the id run and snapshot, advance, publish the files',
+];
+
+class Load extends Fig {
+  constructor() {
+    super('fig-load', 1000, 330);
+    this.boxes = STAGES.map(([title, lines], i) => {
+      const x = 10 + i * 144;
+      const f = this.shape(x, 30, 120, 92, 6, { fill: true, stroke: false });
+      const e = this.shape(x, 30, 120, 92, 6, { fill: false, stroke: 1.2 });
+      this.bind(() => {
+        const on = i === active(), done = i < (S.load.k >= 7 ? 6 : active());
+        f.color = done ? P.fillLit : P.fill;
+        e.color = on ? P.accent : P.line;
+        e.stroke = on ? 2.4 : 1.2;
+      });
+      this.text(x + 8, 50, title, 'v');
+      lines.forEach((ln, j) => this.text(x + 8, 66 + j * 14, ln, 's'));
+      this.hit(x, 30, 120, 92, () => { S.load.sel = i; S.load.k = i < 6 ? i + 1 : 7; S.load.play = null; this.render(); refresh(); });
+      if (i < 6) {
+        const arrow = [[x + 120, 76], [x + 144, 76]];
+        this.line(arrow, 1.25);
+        this.head(arrow);
+      }
+    });
+    const panel = this.shape(10, 150, 980, 170, 6, { fill: true, stroke: false });
+    const edge = this.shape(10, 150, 980, 170, 6, { fill: false, stroke: 1.2 });
+    this.bind(() => { panel.color = P.fill; edge.color = P.line; });
+    this.text(24, 176, 'COMMIT · one transaction, one snapshot', 'a');
+    this.subs = SUBS.map((s, j) => this.text(24, 204 + j * 22, `${j + 1}. ${s}`, 'v'));
+    this.render();
+    function active() { return S.load.k === 0 ? -1 : S.load.k <= 6 ? S.load.k - 1 : 6; }
+  }
+  paint() {
+    super.paint();
+    const sub = S.load.k >= 7 ? S.load.k - 7 : -1;
+    this.subs.forEach((t, j) => t.setAttribute('class', j < sub ? 'v' : j === sub ? 'a' : 'm'));
+  }
+  step(dt) {
+    const p = S.load.play;
+    if (!p) return false;
+    p.t += dt;
+    S.load.k = Math.min(12, 1 + Math.floor(p.t / 0.7));
+    if (S.load.k >= 12) S.load.play = null;
+    return true;
+  }
+  act(name, arg) {
+    const L = S.load;
+    if (name === 'demo') { L.play = { t: 0 }; L.k = 1; }
+    if (name === 'step') { L.play = null; L.k = Math.min(12, Math.max(0, L.k + 1)); }
+    if (name === 'reset') { L.k = 0; L.play = null; }
+  }
+}
+
+const SNAP = [
+  ['P1 detail · upload 1', 1, 2, 'Detail chunks of cell P1 from upload 1. Upload 2 replaced them.'],
+  ['P1 detail · upload 2', 2, null, 'Detail chunks of P1 from upload 2, still current.'],
+  ['P2 detail · upload 1', 1, 3, 'Detail chunks of cell P2 from upload 1. Upload 3 replaced them.'],
+  ['P2 detail · upload 3', 3, null, 'Detail chunks of P2 from upload 3, still current.'],
+  ['L6 cell · upload 1', 1, 2, 'The level-6 overview as of upload 1. Every upload under the cell rebuilds it in its own commit.'],
+  ['L6 cell · upload 2', 2, 3, 'Rebuilt by upload 2, so it sees the new P1 sample.'],
+  ['L6 cell · upload 3', 3, null, 'Rebuilt by upload 3, so it sees the new P2 sample too.'],
+  ['id run · upload 1', 1, null, 'Runs stay live after a later upload. A background merge drops their stale entries.'],
+  ['id run · upload 2', 2, null, 'A second live run. Lookups search every live run.'],
+  ['id run · upload 3', 3, null, 'A third live run. The merge keeps the live count at 64 or fewer.'],
+];
+const snapX = s => 330 + (s - 1) * 220;
+
+class Snaps extends Fig {
+  constructor() {
+    super('fig-snaps', 1000, 336);
+    [1, 2, 3].forEach(s => this.text(snapX(s), 22, `snapshot ${s}`, 'lab', 'middle'));
+    this.rows = SNAP.map(([name, b, e], i) => {
+      const y = 40 + i * 26, end = e === null ? snapX(3) + 120 : snapX(e);
+      const sel = this.shape(8, y - 3, 984, 24, 0, { fill: true, stroke: false });
+      this.bind(() => { sel.color = S.snaps.sel === i ? P.lit : P.lane; sel.visible = S.snaps.sel === i; });
+      this.text(16, y + 14, name, 'r');
+      const bar = this.shape(snapX(b), y + 3, end - snapX(b), 18, 0, { fill: true, stroke: false });
+      this.bind(() => { const vis = b <= S.snaps.s && (e === null || S.snaps.s < e); bar.color = vis ? P.accent : P.band; });
+      this.hit(0, y - 3, 1000, 24, () => { S.snaps.sel = i; this.render(); refresh(); });
+      return name;
+    });
+    this.cursor = new Zdog.Shape({ addTo: this.illo, path: [this.pt(snapX(1), 30), this.pt(snapX(1), 318)], closed: false, stroke: 1.5, color: P.accent, fill: false });
+    this.bind(() => { this.cursor.color = P.accent; this.cursor.translate.x = this.x(snapX(S.snaps.s)) - this.x(snapX(1)); });
+    this.render();
+  }
+  step(dt) {
+    const p = S.snaps.play;
+    if (!p) return false;
+    p.t += dt;
+    S.snaps.s = Math.min(3, 1 + Math.floor(p.t));
+    if (p.t > 2.6) S.snaps.play = null;
+    return true;
+  }
+  act(name, arg) {
+    const N = S.snaps;
+    if (name === 'demo') { N.play = { t: 0 }; N.s = 1; }
+    if (name === 'reset') { N.s = 1; N.play = null; }
+    if (name === 'set') { N.s = +arg; N.play = null; }
+  }
+}
+
+const REQS = [
+  { label: 'items?bbox=', steps: [['catalog overlay,', 'snapshot s'], ['prune: envelope', 'per chunk'], ['file bytes overlay,', 'blocks on a miss'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']], cost: 'chunks whose envelope meets the bbox', note: 'The cursor pins the snapshot and expires with 410 after 72 h.' },
+  { label: 'items?filter=', steps: [['catalog overlay,', 'snapshot s'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']], cost: 'candidate chunks, read whole', note: 'No postings yet: they are cut for v2 (see Decisions), so a dense cell is scanned.' },
+  { label: 'numberMatched', steps: [['catalog overlay,', 'snapshot s'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']], cost: 'column files of candidate chunks', note: 'Returned for filter requests. Omitted with a bbox alone, as in v1, because counting that would decode geometry.' },
+  { label: 'items?overview=N', steps: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['file bytes overlay', ''], ['FGB search', 'of the samples'], ['page by', '(key, id)']], cost: 'samples in view', note: 'N is 2, 4, 6, 8, 10 or 12. No filter. The client picks N; the server does not map zoom.' },
+  { label: 'items/{id}', steps: [['id runs overlay:', 'search each run'], ['candidate keys', 'name cells'], ['catalog: chunks', 'covering the key'], ['verify the id', 'in each chunk']], cost: 'live runs decoded in full, then one chunk per candidate', note: '200 for one feature, 404 for none, 409 when two cells hold the id.' },
+  { label: 'PUT ?base=s', steps: [['lock the', 'collection row'], ['check the cell', 'changed after s'], ['accept, or', 'answer 409']], cost: 'one count over partitions', note: 'Only the uploaded cell is checked. The blobs are written before the lock is taken.' },
+];
+function reqGeom(n) {
+  const BOX = 160, gap = (1000 - 40 - n * BOX) / Math.max(1, n - 1);
+  return { BOX, xs: Array.from({ length: n }, (_, i) => 20 + i * (BOX + gap)) };
+}
+function playReads() {
+  S.reads.lit = new Set([0]);
+  S.reads.demo = { i: 0, t: 0 };
+}
+
+class Reads extends Fig {
+  constructor() {
+    super('fig-reads', 1000, 200);
+    this.packet = new Zdog.Ellipse({ addTo: this.illo, diameter: 10, fill: true, stroke: false, visible: false });
+    this.parts = [];
+    this.build();
+    this.render();
+  }
+  build() {
+    for (const p of this.parts) p.forEach(s => s.remove());
+    this.parts = [];
+    this.binds = [];
+    this.svg.querySelectorAll('text, rect.hit').forEach(n => n.remove());
+    const R = REQS[S.reads.req], n = R.steps.length, { BOX, xs } = reqGeom(n);
+    R.steps.forEach(([l1, l2], i) => {
+      const f = this.shape(xs[i], 40, BOX, 84, 6, { fill: true, stroke: false });
+      const e = this.shape(xs[i], 40, BOX, 84, 6, { fill: false, stroke: 1.2 });
+      this.parts.push([f, e]);
+      this.bind(() => { f.color = S.reads.lit.has(i) ? P.fillLit : P.fill; e.color = S.reads.sel === i ? P.accent : P.line; e.stroke = S.reads.sel === i ? 2.4 : 1.2; });
+      this.text(xs[i] + 10, 62, l1, 'r');
+      if (l2) this.text(xs[i] + 10, 78, l2, 'r');
+      this.hit(xs[i], 40, BOX, 84, () => { S.reads.sel = i; this.render(); refresh(); });
+    });
+    for (let i = 0; i + 1 < n; i++) {
+      const arrow = [[xs[i] + BOX, 82], [xs[i + 1], 82]];
+      const l = this.line(arrow, 1.25);
+      const h = this.head(arrow);
+      this.parts.push([l, h]);
+      this.bind(() => { l.color = P.mut; h.color = P.mut; });
+    }
+    this.costText = this.text(500, 160, 'cost driver: ' + R.cost, 'm', 'middle');
+  }
+  paint() {
+    super.paint();
+    const d = S.reads.demo;
+    this.packet.visible = !!d;
+    this.packet.color = P.accent;
+    if (d) {
+      const { BOX, xs } = reqGeom(REQS[S.reads.req].steps.length);
+      const [x, y] = along([[xs[d.i] + BOX, 82], [xs[d.i + 1], 82]], d.t / EDGE_T);
+      this.packet.translate.x = this.x(x);
+      this.packet.translate.y = this.y(y);
+    }
+  }
+  step(dt) {
+    const d = S.reads.demo;
+    if (!d) return false;
+    d.t += dt;
+    if (d.t >= EDGE_T) {
+      S.reads.lit.add(d.i + 1);
+      d.i++;
+      d.t = 0;
+      if (d.i >= REQS[S.reads.req].steps.length - 1) S.reads.demo = null;
+    }
+    return true;
+  }
+  act(name, arg) {
+    const Q = S.reads;
+    if (name === 'demo') playReads();
+    if (name === 'reset') { Q.lit = new Set(); Q.demo = null; }
+    if (name === 'req' || name === 'step') {
+      const next = name === 'req' ? +arg : (Q.req + arg + REQS.length) % REQS.length;
+      Q.req = next;
+      Q.sel = 0;
+      Q.lit = new Set();
+      Q.demo = null;
+      this.build();
+    }
+  }
+}
+
+class Budget extends Fig {
+  constructor() {
+    super('fig-budget', 1000, 40);
+    const track = this.shape(0, 12, 1000, 16, 8, { fill: true, stroke: false });
+    const used = this.shape(0, 12, 480, 16, 8, { fill: true, stroke: false });
+    this.bind(() => { track.color = P.band; used.color = P.accent; });
+    this.render();
+  }
+}
+
+const FIGS = {
+  model: new Model(),
+  ladder: new Ladder(),
+  load: new Load(),
+  snaps: new Snaps(),
+  reads: new Reads(),
+  decide: new Budget(),
+};
+function set(sel, text) {
+  const el = $(sel);
+  if (el) el.textContent = text;
+}
+function syncLadder() {
+  const z = Math.round(S.ladder.z), c = counts(z), pick = c.findIndex(v => v >= 100 && v <= 2000), r = $('#z-range');
+  if (r && document.activeElement !== r) r.value = z;
+  set('#z-val', z);
+  set('#z-pick', pick < 0 ? 'No level falls in the band at this zoom. Coarser levels 6, 4 and 2 serve it.' : `Ask for ${LEVELS[pick][2]}: ${fmt(c[pick])} features on screen, the finest level in the band.`);
+}
+function syncLoad() {
+  const k = S.load.k, cur = k === 0 ? S.load.sel : k <= 6 ? k - 1 : 6;
+  S.load.sel = cur;
+  set('#l-title', STAGES[cur][0]);
+  set('#l-text', STAGES[cur][2]);
+  set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of 6: ${SUBS[k - 7]}.` : '');
+}
+function syncSnaps() {
+  const N = S.snaps, r = $('#s-range'), row = SNAP[N.sel];
+  if (r && document.activeElement !== r) r.value = N.s;
+  set('#s-val', N.s);
+  set('#s-base', `P1 upload that read snapshot ${N.s}: ${N.s >= 2 ? 'accepted' : '409, P1 changed at 2'}. P2 upload: ${N.s >= 3 ? 'accepted' : '409, P2 changed at 3'}.`);
+  set('#s-row', row ? `${row[0]}: ${row[3]} Visible from snapshot ${row[1]}${row[2] ? `, up to but not including ${row[2]}` : ' onwards'}.` : 'Click a row for its detail.');
+}
+function syncReads() {
+  const Q = S.reads, R = REQS[Q.req];
+  set('#r-title', R.label);
+  set('#r-step', `Step ${Q.sel + 1} of ${R.steps.length}: ${R.steps[Q.sel].join(' ').trim()}.`);
+  set('#r-note', R.note);
+  set('#r-cost', 'Cost driver: ' + R.cost + '.');
+  document.querySelectorAll('#chips button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === Q.req)));
+}
+function sync() {
+  if (S.tab === 'ladder') syncLadder();
+  if (S.tab === 'load') syncLoad();
+  if (S.tab === 'snaps') syncSnaps();
+  if (S.tab === 'reads') syncReads();
+}
+
+const list = items => (items.length ? `<ul>${items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '');
+const SIDE = {
+  model() {
+    const n = MODEL[S.model.sel];
+    return `<h2>${esc(n.t)}</h2><p>${esc(n.text)}</p>` +
+      (n.layout.length ? `<h3>layout</h3>${list(n.layout)}` : '') +
+      (n.index.length ? `<h3>index</h3>${list(n.index)}` : '') +
+      `<div class="ctl"><button class="btn" data-act="demo">Write (D)</button><button class="btn" data-act="read">Read (E)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
+  },
+  ladder() {
+    return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
+      <input type="range" id="z-range" min="2" max="17" step="1" data-act="set" aria-label="Zoom">
+      <p class="note">Estimates for one dense cell: 1,900 features per km², a 1024 × 768 screen at 48° N. The band is an assumption to review.</p>
+      <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
+  },
+  load() {
+    return `<h2 id="l-title"></h2><p id="l-text"></p><p class="note" id="l-sub"></p>
+      <div class="ctl"><button class="btn" data-act="demo">Demo (D)</button><button class="btn" data-act="step">Step (→)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
+  },
+  snaps() {
+    return `<h2>Snapshot <span id="s-val"></span></h2>
+      <p>A reader pinned to snapshot s sees each row whose begin ≤ s and s &lt; end.</p>
+      <input type="range" id="s-range" min="1" max="3" step="1" data-act="set" aria-label="Snapshot">
+      <p class="note" id="s-base"></p><p class="note" id="s-row"></p>
+      <div class="ctl"><button class="btn" data-act="demo">Play (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
+  },
+  reads() {
+    return `<h2 id="r-title"></h2><p id="r-step"></p><p class="note" id="r-note"></p><p class="note" id="r-cost"></p>
+      <div class="ctl"><button class="btn" data-act="demo">Demo (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
+  },
+};
+function refresh() {
+  const el = $('#side-' + S.tab);
+  if (el && SIDE[S.tab]) el.innerHTML = SIDE[S.tab]();
+  sync();
+}
+function act(tab, name, arg) {
+  const f = FIGS[tab];
+  if (!f || !f.act) return;
+  f.act(name, arg);
+  f.render();
+  sync();
+}
+function show(tab) {
+  S.tab = tab;
+  document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + tab));
+  if (FIGS[tab]) FIGS[tab].show();
+  refresh();
+  history.replaceState(null, '', '#' + tab);
+}
+function setTheme(name) {
+  P = PAL[name];
+  for (const k in P) document.documentElement.style.setProperty('--' + k, P[k]);
+  document.documentElement.dataset.theme = name;
+  document.documentElement.style.colorScheme = name;
+  $('#theme').textContent = 'theme: ' + name;
+  for (const f of Object.values(FIGS)) f.render();
+}
+
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.tab)));
+$('#theme').addEventListener('click', () => setTheme(P === PAL.dark ? 'light' : 'dark'));
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (b) act(b.dataset.act === 'req' ? 'reads' : S.tab, b.dataset.act, b.dataset.arg);
+});
+document.addEventListener('input', e => {
+  if (e.target.dataset && e.target.dataset.act === 'set') act(S.tab, 'set', e.target.value);
+});
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const order = ['model', 'ladder', 'load', 'snaps', 'reads', 'decide'];
+  if (/^[1-6]$/.test(k)) show(order[+k - 1]);
+  else if (k === 't') setTheme(P === PAL.dark ? 'light' : 'dark');
+  else if (k === 'd') act(S.tab, 'demo');
+  else if (k === 'e' && S.tab === 'model') act('model', 'read');
+  else if (k === 'r') act(S.tab, 'reset');
+  else if (k === 'ArrowRight') act(S.tab, 'step', 1);
+  else if (k === 'ArrowLeft') act(S.tab, 'step', -1);
+});
+window.addEventListener('resize', () => { if (FIGS[S.tab]) FIGS[S.tab].render(); });
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  const f = FIGS[S.tab];
+  if (f && f.step(dt)) { f.render(); sync(); }
+  requestAnimationFrame(frame);
+}
+$('#chips').innerHTML = REQS.map((q, i) => `<button class="btn" data-act="req" data-arg="${i}">${esc(q.label)}</button>`).join('');
+setTheme('dark');
+const start = location.hash.slice(1);
+show(['model', 'ladder', 'load', 'snaps', 'reads', 'decide'].includes(start) ? start : 'model');
+requestAnimationFrame(frame);
+</script>
 </body>
 </html>
