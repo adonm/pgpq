@@ -86,31 +86,17 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     </nav>
     <button id="theme" class="btn">theme: dark</button>
   </header>
-  <section class="workload" aria-label="Workload used by every figure">
+  <section class="workload" aria-label="Workload">
     <div class="wl">
-      <span class="k">Cell size</span>
-      <input id="f-range" type="range" min="0" max="6.6" step="0.01" aria-label="Features in one cell, log scale">
-      <output id="f-out"></output>
+      <span class="k">Cell</span>
       <button class="btn" data-f="1">1</button>
-      <button class="btn" data-f="12000">12k mean</button>
-      <button class="btn" data-f="2500000">2.5M dense</button>
-    </div>
-    <div class="wl">
+      <button class="btn" data-f="12000">12k</button>
+      <button class="btn" data-f="2500000">2.5M</button>
       <span class="k">Page</span>
       <button class="btn" data-page="1000">1k</button>
       <button class="btn" data-page="10000">10k</button>
       <button class="btn" data-page="100000">100k</button>
-    </div>
-    <p class="sum" id="wl-sum"></p>
-    <div class="legend">
-      <span><i style="background:var(--cpu)"></i>CPU</span>
-      <span><i style="background:var(--net)"></i>network</span>
-      <span><i style="background:var(--db)"></i>Postgres I/O</span>
-      <span><i style="background:var(--mut)"></i>memory or in-process</span>
-      <span>line thickness = bytes moved (log scale)</span>
-      <span>box meter = share of its flow's time</span>
-      <span>dashed line = Postgres access</span>
-      <span>shape: capsule = network · square = Postgres · rounded = worker, cache or client · glyph = table, cache, flow, screen, commit or CPU</span>
+      <output id="f-out"></output>
     </div>
   </section>
 </div>
@@ -119,6 +105,11 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
   <section class="tab on" id="tab-model">
     <div class="stage" id="fig-model" role="img" aria-label="Write and read flows with bytes and CPU cost for the chosen workload"><canvas></canvas><svg></svg></div>
     <p class="status" id="status-model"></p>
+    <h3>Cost of each action</h3>
+    <table aria-label="Cost of each action">
+      <thead><tr><th>action</th><th>bytes moved</th><th>CPU</th></tr></thead>
+      <tbody id="top-cost"></tbody>
+    </table>
     <aside class="side" id="side-model"></aside>
   </section>
 
@@ -148,7 +139,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <h3>Tradeoffs</h3>
       <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once.</p>
       <p><b>Three levels, more scanning.</b> Levels 8, 6 and 2 are stored. At high zoom a read scans the level-8 chunks in view: in a dense cell a page can scan a few hundred thousand features. Coarse views use the samples instead.</p>
-      <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one cell’s chunks, well under 1 MB. Count the row and its primary-key entry and it costs about 100 B per feature, or about 100 GB at 1e9. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
+      <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one cell’s chunks, well under 1 MB. Count the row and its primary-key entry and it costs about 90 B per feature, or about 84 GB at 1e9. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
       <p><b>One chunk per populated cell.</b> A sparse cell still costs a chunk and its header; dense cells are unaffected.</p>
     </div>
     <div class="box">
@@ -192,6 +183,16 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
   </section>
 </main>
 
+    <div class="legend">
+      <span><i style="background:var(--cpu)"></i>CPU</span>
+      <span><i style="background:var(--net)"></i>network</span>
+      <span><i style="background:var(--db)"></i>Postgres I/O</span>
+      <span><i style="background:var(--mut)"></i>memory or in-process</span>
+      <span>line thickness = bytes moved (log scale)</span>
+      <span>box meter = share of its flow's time</span>
+      <span>dashed line = Postgres access</span>
+      <span>shape: capsule = network · square = Postgres · rounded = worker, cache or client · glyph = table, cache, flow, screen, commit or CPU</span>
+    </div>
 <footer>1–5 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are estimates from OSM Layercake data; the CPU split and Postgres speed are too</footer>
 
 <script src="https://unpkg.com/zdog@1.1.3/dist/zdog.dist.min.js"></script>
@@ -202,7 +203,7 @@ const PAL = {
 };
 let P = PAL.dark;
 
-const K = { raw: 940, zst: 200, col: 40, run: 30, idxRow: 100, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 940, zst: 200, col: 40, run: 30, idxRow: 90, meta: 200, chunk: 2097152, maxFeatures: 50000, block: 8120, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
 const fmtMiB = b => `${+(b / 1048576).toFixed(1)} MiB`;
 
@@ -495,12 +496,12 @@ const MODEL = {
   idRuns: { t: 'id index', kind: 'db', size: c => c.Wr.f * K.idxRow,
     l1: c => `${fmt(c.Wr.f)} rows`, l2: c => `${fmtBytes(c.Wr.f * K.idxRow)} on disk`,
     text: 'One row per feature: the hash of its id and the cell that holds it. A lookup reads the rows for a hash, then that cell’s chunks, and checks the id exactly. The rows are replaced with the cell on every upload, so there are no runs to merge.',
-    layout: ['ids: collection, hash, cell', 'one row per feature'], index: ['pk (collection, hash, cell)'] },
+    layout: ['ids: collection_uid, hash, key', 'one row per feature'], index: ['pk (collection_uid, hash, key)'] },
   catalog: { t: 'catalog', kind: 'db', size: c => c.Wr.chunkBytes,
     l1: c => `${fmt(c.Wr.chunks)} chunk rows`, l2: c => `${fmtBytes(c.Wr.chunkBytes)} of FGB`,
     text: 'The chunk rows for the collection as it is now: key range, envelope, zone map and the file they point to. The collections row holds the version and column list, so a worker can tell a cached chunk list from a stale one. A commit replaces a cell’s rows in one transaction and bumps the version.',
-    layout: ['chunks: chunk_id identity pk, collection, cell, seq, first and last key and id', 'chunks: minx, miny, maxx, maxy, features, file_id, col_file, zone (JSON text), level', 'collections: name pk, uid, version, id_column, columns_json', 'ids: collection, hash, cell'],
-    index: ['chunks (collection, cell, level)', 'collections pk (name)', 'ids pk (collection, hash, cell)'] },
+    layout: ['chunks: chunk_id identity pk, collection, cell, seq, first and last key and id', 'chunks: minx, miny, maxx, maxy, features, file_id, col_file, zone (JSON text), level', 'collections: name pk, uid, version, id_column, columns_json', 'ids: collection_uid, hash, key'],
+    index: ['chunks (collection, cell, level)', 'collections pk (name)', 'ids pk (collection_uid, hash, key)'] },
   reader: { t: 'Reader', kind: 'mut', role: 'client', l1: c => `${fmt(c.page)} features`, l2: () => 'one request',
     text: 'A request: items with bbox, filter or overview=N; items/{id}; or numberMatched. Each page reads the current rows.',
     layout: [], index: [] },
@@ -1052,7 +1053,23 @@ const SIDE = {
   },
 };
 
+function costRows() {
+  const c = costNow(), f = W.f;
+  const F = readFilter(f, W.page, W.link), C = readCount(f, W.link), I = readId(f, W.link), O = readOverview(W.page, W.link);
+  return [
+    { name: 'Upload one cell', bytes: c.Wr.upload, cpu: c.Wr.cpu },
+    { name: 'Ingest write', bytes: c.Wr.db, cpu: 0 },
+    { name: `bbox page of ${fmt(Math.min(W.page, f))}`, bytes: c.Rd.db + c.Rd.net, cpu: c.Rd.cpu },
+    { name: 'Filter, worst case', bytes: F.db + F.net, cpu: F.cpu },
+    { name: 'numberMatched', bytes: C.db + C.net, cpu: C.cpu },
+    { name: 'Id lookup', bytes: I.db + I.net, cpu: I.cpu },
+    { name: 'Overview page', bytes: O.db + O.net, cpu: O.cpu },
+  ];
+}
+
 function syncModel() {
+  const rows = costRows().sort((a, b) => b.bytes - a.bytes).slice(0, 5);
+  $('#top-cost').innerHTML = rows.map(r => `<tr><td>${esc(r.name)}</td><td>${fmtBytes(r.bytes)}</td><td>${r.cpu ? fmtTime(r.cpu) : '—'}</td></tr>`).join('');
   const d = S.model.demo, c = costNow();
   if (!d) { set('#status-model', 'Click a box for its layout, cost and indexes. D replays the write path; E replays the read path.'); return; }
   const cs = d.seq[d.i];
@@ -1149,17 +1166,9 @@ function setPressed() {
   document.querySelectorAll('[data-page]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.page === W.page)));
   document.querySelectorAll('[data-f]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.f === W.f)));
 }
-function sizeLabel(f) {
-  if (f === 1) return 'one feature';
-  if (Math.abs(f - 12000) / 12000 < 0.25) return 'mean cell';
-  if (f >= 1e6) return 'dense cell';
-  return '';
-}
 function renderAll() {
   if (FIGS[S.tab]) FIGS[S.tab].render();
-  const c = costNow(), label = sizeLabel(W.f);
-  set('#f-out', `${fmt(W.f)} features${label ? ` · ${label}` : ''}`);
-  set('#wl-sum', `Upload ${fmtBytes(c.Wr.upload)} · ingest about ${fmtTime(c.Wr.total)} · decoded memory ${fmtBytes(c.Wr.memory)} · a page of ${fmt(Math.min(W.page, W.f))} reads ${fmtBytes(c.Rd.db)} from Postgres and returns ${fmtBytes(c.Rd.net)} · a worst-case filter on this cell reads ${fmtBytes(readFilter(W.f, W.page, W.link).db)}.`);
+  set('#f-out', `${fmt(W.f)} features · page ${fmt(W.page)}`);
   setPressed();
 }
 let wlRaf = 0;
@@ -1178,8 +1187,7 @@ function setTheme(name) {
 
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.tab)));
 $('#theme').addEventListener('click', () => setTheme(P === PAL.dark ? 'light' : 'dark'));
-$('#f-range').addEventListener('input', e => { W.f = Math.max(1, Math.round(10 ** +e.target.value)); workloadChanged(); });
-document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { W.f = +b.dataset.f; $('#f-range').value = Math.log10(W.f).toFixed(2); workloadChanged(); }));
+document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { W.f = +b.dataset.f; workloadChanged(); }));
 document.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', () => { W.page = +b.dataset.page; workloadChanged(); }));
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
@@ -1214,7 +1222,6 @@ function figure(tab) {
   return FIGS[tab];
 }
 $('#chips').innerHTML = REQS.map((q, i) => `<button class="btn" data-act="req" data-arg="${i}">${esc(q.label)}</button>`).join('');
-$('#f-range').value = Math.log10(W.f).toFixed(2);
 setTheme('dark');
 let last = performance.now();
 let raf = 0;

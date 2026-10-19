@@ -282,7 +282,7 @@ func TestWholeLoadRemovesDroppedCells(t *testing.T) {
 		t.Fatalf("dropped cell still resolves: %v", err)
 	}
 	var rows int
-	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.ids where collection = $1`, name).Scan(&rows); err != nil || rows != 20 {
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.ids where collection_uid = (select uid from pfgb.collections where name = $1)`, name).Scan(&rows); err != nil || rows != 20 {
 		t.Fatalf("id index rows after a whole reload = %d (%v)", rows, err)
 	}
 }
@@ -317,7 +317,7 @@ func TestLookupFollowsLoadsAndFlagsDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	var live int
-	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.ids where collection = $1`, name).Scan(&live); err != nil || live != 400 {
+	if err := l.pool.QueryRow(ctx, `select count(*) from pfgb.ids where collection_uid = (select uid from pfgb.collections where name = $1)`, name).Scan(&live); err != nil || live != 400 {
 		t.Fatalf("id index rows after a whole load = %d (%v)", live, err)
 	}
 	if hit, err := l.Lookup(ctx, name, "paris-0007"); err != nil || hit.ID != "paris-0007" {

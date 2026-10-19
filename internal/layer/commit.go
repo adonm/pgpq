@@ -36,10 +36,11 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 		name, ds.IDColumn, columns); err != nil {
 		return LoadResult{}, err
 	}
+	var uid int64
 	var idColumn string
 	var stored []byte
-	if err := tx.QueryRow(ctx, `select coalesce(id_column, ''), columns_json from pfgb.collections where name = $1 for update`, name).
-		Scan(&idColumn, &stored); err != nil {
+	if err := tx.QueryRow(ctx, `select uid, coalesce(id_column, ''), columns_json from pfgb.collections where name = $1 for update`, name).
+		Scan(&uid, &idColumn, &stored); err != nil {
 		return LoadResult{}, err
 	}
 	whole := cells == nil
@@ -71,7 +72,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 	slices.Sort(replace)
 	replace = slices.Compact(replace)
 	if whole {
-		if err := deleteAll(ctx, tx, name); err != nil {
+		if err := deleteAll(ctx, tx, name, uid); err != nil {
 			return LoadResult{}, err
 		}
 	} else if err := deleteCells(ctx, tx, name, replace); err != nil {
@@ -98,7 +99,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 	for _, row := range coarse {
 		fileIDs = append(fileIDs, row.fileID, row.colFile)
 	}
-	if err := replaceIDs(ctx, tx, name, touched, entries); err != nil {
+	if err := replaceIDs(ctx, tx, uid, touched, entries); err != nil {
 		return LoadResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `update pfgb.collections set version = version + 1, id_column = $2, columns_json = $3 where name = $1`,
@@ -149,7 +150,7 @@ func deleteCells(ctx context.Context, tx pgx.Tx, name string, cells []uint64) er
 	return err
 }
 
-func deleteAll(ctx context.Context, tx pgx.Tx, name string) error {
+func deleteAll(ctx context.Context, tx pgx.Tx, name string, uid int64) error {
 	rows, err := tx.Query(ctx, `select file_id, col_file from pfgb.chunks where collection = $1`, name)
 	if err != nil {
 		return err
@@ -179,31 +180,33 @@ func deleteAll(ctx context.Context, tx pgx.Tx, name string) error {
 	if _, err := tx.Exec(ctx, `delete from pfgb.chunks where collection = $1`, name); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `delete from pfgb.ids where collection = $1`, name)
+	_, err = tx.Exec(ctx, `delete from pfgb.ids where collection_uid = $1`, uid)
 	return err
 }
 
-func replaceIDs(ctx context.Context, tx pgx.Tx, name string, cells []uint64, entries []entry) error {
-	if len(cells) > 0 {
-		if _, err := tx.Exec(ctx, `delete from pfgb.ids where collection = $1 and cell = any($2)`, name, orderedCells(cells)); err != nil {
+func replaceIDs(ctx context.Context, tx pgx.Tx, uid int64, cells []uint64, entries []entry) error {
+	for _, cell := range cells {
+		lo, hi := spatial.Range(cell)
+		if _, err := tx.Exec(ctx, `delete from pfgb.ids where collection_uid = $1 and key between $2 and $3`,
+			uid, spatial.ToOrdered(lo), spatial.ToOrdered(hi)); err != nil {
 			return err
 		}
 	}
-	seen := make(map[[3]int64]bool, len(entries))
+	seen := make(map[[2]int64]bool, len(entries))
 	rows := make([][]any, 0, len(entries))
 	for _, e := range entries {
-		h, cell, key := int64(idHash(e.id)), spatial.ToOrdered(e.cell), spatial.ToOrdered(e.key)
-		k := [3]int64{h, cell, key}
+		h, key := int64(idHash(e.id)), spatial.ToOrdered(e.key)
+		k := [2]int64{h, key}
 		if seen[k] {
 			continue
 		}
 		seen[k] = true
-		rows = append(rows, []any{name, h, cell, key})
+		rows = append(rows, []any{uid, h, key})
 	}
 	if len(rows) == 0 {
 		return nil
 	}
-	_, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "ids"}, []string{"collection", "hash", "cell", "key"}, pgx.CopyFromRows(rows))
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "ids"}, []string{"collection_uid", "hash", "key"}, pgx.CopyFromRows(rows))
 	return err
 }
 

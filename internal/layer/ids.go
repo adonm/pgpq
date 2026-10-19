@@ -25,19 +25,18 @@ func (l *Layer) Lookup(ctx context.Context, name, id string) (Hit, error) {
 	if err != nil {
 		return Hit{}, err
 	}
-	rows, err := l.pool.Query(ctx, `select cell, key from pfgb.ids where collection = $1 and hash = $2`, name, int64(idHash(id)))
+	rows, err := l.pool.Query(ctx, `select key from pfgb.ids where collection_uid = $1 and hash = $2`, coll.UID, int64(idHash(id)))
 	if err != nil {
 		return Hit{}, err
 	}
-	type probe struct{ cell, key uint64 }
-	var probes []probe
+	var probes []uint64
 	for rows.Next() {
-		var cell, key int64
-		if err := rows.Scan(&cell, &key); err != nil {
+		var key int64
+		if err := rows.Scan(&key); err != nil {
 			rows.Close()
 			return Hit{}, err
 		}
-		probes = append(probes, probe{cell: spatial.FromOrdered(cell), key: spatial.FromOrdered(key)})
+		probes = append(probes, spatial.FromOrdered(key))
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -46,8 +45,8 @@ func (l *Layer) Lookup(ctx context.Context, name, id string) (Hit, error) {
 	rows.Close()
 	seen := map[int64]bool{}
 	var hits []Hit
-	for _, p := range probes {
-		found, err := l.findInChunks(ctx, coll, p.cell, p.key, id)
+	for _, key := range probes {
+		found, err := l.findInChunks(ctx, coll, spatial.Partition(key), key, id)
 		if err != nil {
 			return Hit{}, err
 		}
