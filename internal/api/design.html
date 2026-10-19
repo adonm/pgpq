@@ -82,6 +82,26 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
 #fig-model .edge{fill:none;stroke:var(--mut)}#fig-model .edge.e-net{stroke:var(--net)}#fig-model .edge.e-db{stroke:var(--db)}
 #fig-model .edge.dash{stroke-dasharray:5 4}#fig-model .edge.hot{stroke:var(--fg);marker-end:url(#ar-fg)}
 #fig-model .box{cursor:pointer}
+#fig-overviews{aspect-ratio:1000 / 440}#fig-load{aspect-ratio:1000 / 492}#fig-reads{aspect-ratio:1000 / 286}#fig-budget{aspect-ratio:1000 / 40;border:0;background:none}
+#fig-overviews .ov-cell rect,#fig-load .plate,#fig-reads .plate{fill:var(--fill)}
+#fig-overviews .ov-row .bg{fill:var(--lane)}#fig-overviews .ov-row.pick .bg{fill:var(--lit)}
+#fig-overviews .ov-row .bar{fill:var(--mut)}#fig-overviews .ov-row.pick .bar{fill:var(--fg)}
+#fig-overviews .ov-cell.on rect{fill:var(--lit);stroke:var(--fg);stroke-width:2}
+#fig-load .plate-edge,#fig-reads .plate-edge{fill:none;stroke:var(--line);stroke-width:1.2}
+#fig-load .ld-stage.on .plate-edge,#fig-reads .rd-step.on .plate-edge{stroke:var(--fg);stroke-width:2.2}
+#fig-load .ld-stage.done .plate,#fig-reads .rd-step.done .plate{fill:var(--fillLit)}
+#fig-load .track,#fig-reads .track{fill:var(--track)}
+#fig-load .meter,#fig-reads .meter{fill:var(--mut)}
+.role-net .stripe{fill:var(--net)}.role-step .stripe{fill:var(--cpu)}.role-db .stripe{fill:var(--db)}.role-tx .stripe{fill:var(--mut)}.role-cache .stripe{fill:var(--mut)}
+.role-net .icon{color:var(--net)}.role-step .icon{color:var(--cpu)}.role-db .icon{color:var(--db)}.role-tx .icon{color:var(--mut)}.role-cache .icon{color:var(--mut)}
+.m-net{fill:var(--net)}.m-db{fill:var(--db)}.m-cpu{fill:var(--cpu)}.m-mut{fill:var(--mut)}
+#fig-load .icon,#fig-reads .icon{color:var(--mut)}#fig-load .role-net .icon{color:var(--net)}#fig-load .role-db .icon{color:var(--db)}#fig-load .role-step .icon{color:var(--cpu)}
+#fig-reads .role-net .icon{color:var(--net)}#fig-reads .role-db .icon{color:var(--db)}#fig-reads .role-step .icon{color:var(--cpu)}
+#fig-load .ld-arrow,#fig-reads .rd-arrow{fill:none}#fig-load .ld-arrow.hot,#fig-reads .rd-arrow.hot{stroke:var(--fg);marker-end:url(#ar-fg)}
+#fig-load .ld-sub.on{fill:var(--fg)}#fig-load .ld-sub.done{fill:var(--mut)}#fig-load .ld-sub{fill:var(--mut)}
+.lede{margin:14px 2px 4px;font-size:15px}
+.lede span{display:block;color:var(--mut);font-size:13px;margin-top:3px}
+.lede.small{font-size:13px;color:var(--mut);margin:2px 2px 8px}
 </style>
 </head>
 <body><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
@@ -127,15 +147,16 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
 </div>
 
 <main>
+  <p class="lede">One billion features, one cell at a time. <span>Click a box for its details, press <b>D</b> for a write, <b>E</b> for a read, and <b>1–5</b> to move around.</span></p>
   <section class="tab on" id="tab-model">
     <div class="stage" id="fig-model" role="img" aria-label="Write and read flows with bytes and CPU cost for the chosen workload"><svg viewBox="0 0 1000 470" role="img"><rect x="0" y="0" width="1000" height="222" fill="var(--lane)"/><rect x="0" y="250" width="1000" height="220" fill="var(--fill)"/><line x1="0" y1="240" x2="1000" y2="240" stroke="var(--line)"/><text class="t" x="14" y="22">UPLOAD · the loader writes the canonical file; the worker validates, derives and stores it</text><text class="t" x="14" y="270">READ · Postgres tables, then worker overlays in memory, then the client</text><text class="lab" x="986" y="22" text-anchor="end" id="m-caption"></text><line class="edge e-mut" data-edge="w1" x1="140" y1="69.0" x2="180" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="w2" x1="304" y1="69.0" x2="344" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="w3" x1="468" y1="69.0" x2="508" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="w4" x1="632" y1="69.0" x2="672" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="w5" x1="796" y1="69.0" x2="836" y2="69.0" marker-end="url(#ar-mut)"/><line class="edge e-db dash" data-edge="w6" x1="734.0" y1="102" x2="734.0" y2="146" marker-end="url(#ar-db)"/><line class="edge e-db dash" data-edge="w7" x1="406.0" y1="102" x2="406.0" y2="146" marker-end="url(#ar-db)"/><line class="edge e-db dash" data-edge="w8" x1="898.0" y1="102" x2="898.0" y2="146" marker-end="url(#ar-db)"/><line class="edge e-mut" data-edge="r1" x1="130" y1="413.0" x2="154" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="r2" x1="270" y1="413.0" x2="294" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="r3" x1="410" y1="413.0" x2="434" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="r4" x1="550" y1="413.0" x2="574" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-mut" data-edge="r5" x1="690" y1="413.0" x2="714" y2="413.0" marker-end="url(#ar-mut)"/><line class="edge e-db dash" data-edge="r6" x1="212.0" y1="350" x2="212.0" y2="380" marker-end="url(#ar-db)"/><line class="edge e-db dash" data-edge="r7" x1="492.0" y1="350" x2="492.0" y2="380" marker-end="url(#ar-db)"/><line class="edge e-db dash" data-edge="r8" x1="912.0" y1="350" x2="912.0" y2="380" marker-end="url(#ar-db)"/><g class="box role-net" data-box="loader" data-id="loader" role="button" aria-label="Loader"><rect class="plate" x="16" y="36" width="124" height="66" rx="26"/><rect class="plate-edge" x="16" y="36" width="124" height="66" rx="26"/><rect class="stripe" x="16" y="36" width="3" height="66"/><use class="icon" href="#i-net" x="116" y="44" width="16" height="16"/><text class="t" x="25" y="55">Loader</text><text class="s v1" x="25" y="73"></text><text class="s v2" x="25" y="87"></text><rect class="track" x="25" y="93" width="106" height="4"/><rect class="meter m-net" x="25" y="93" width="0" height="4"/></g><g class="box role-step" data-box="decode" data-id="decode" role="button" aria-label="Validate"><rect class="plate" x="180" y="36" width="124" height="66" rx="6"/><rect class="plate-edge" x="180" y="36" width="124" height="66" rx="6"/><rect class="stripe" x="180" y="36" width="3" height="66"/><use class="icon" href="#i-cpu" x="280" y="44" width="16" height="16"/><text class="t" x="189" y="55">Validate</text><text class="s v1" x="189" y="73"></text><text class="s v2" x="189" y="87"></text><rect class="track" x="189" y="93" width="106" height="4"/><rect class="meter m-cpu" x="189" y="93" width="0" height="4"/></g><g class="box role-step" data-box="validate" data-id="validate" role="button" aria-label="Derive"><rect class="plate" x="344" y="36" width="124" height="66" rx="6"/><rect class="plate-edge" x="344" y="36" width="124" height="66" rx="6"/><rect class="stripe" x="344" y="36" width="3" height="66"/><use class="icon" href="#i-cpu" x="444" y="44" width="16" height="16"/><text class="t" x="353" y="55">Derive</text><text class="s v1" x="353" y="73"></text><text class="s v2" x="353" y="87"></text><rect class="track" x="353" y="93" width="106" height="4"/><rect class="meter m-cpu" x="353" y="93" width="0" height="4"/></g><g class="box role-step" data-box="sort" data-id="sort" role="button" aria-label="Compress"><rect class="plate" x="508" y="36" width="124" height="66" rx="6"/><rect class="plate-edge" x="508" y="36" width="124" height="66" rx="6"/><rect class="stripe" x="508" y="36" width="3" height="66"/><use class="icon" href="#i-page" x="608" y="44" width="16" height="16"/><text class="t" x="517" y="55">Compress</text><text class="s v1" x="517" y="73"></text><text class="s v2" x="517" y="87"></text><rect class="track" x="517" y="93" width="106" height="4"/><rect class="meter m-cpu" x="517" y="93" width="0" height="4"/></g><g class="box role-db" data-box="encode" data-id="encode" role="button" aria-label="Write blocks"><rect class="plate" x="672" y="36" width="124" height="66" rx="2"/><rect class="plate-edge" x="672" y="36" width="124" height="66" rx="2"/><rect class="stripe" x="672" y="36" width="3" height="66"/><use class="icon" href="#i-files" x="772" y="44" width="16" height="16"/><text class="t" x="681" y="55">Write blocks</text><text class="s v1" x="681" y="73"></text><text class="s v2" x="681" y="87"></text><rect class="track" x="681" y="93" width="106" height="4"/><rect class="meter m-db" x="681" y="93" width="0" height="4"/></g><g class="box role-tx" data-box="commit" data-id="commit" role="button" aria-label="Commit"><rect class="plate" x="836" y="36" width="124" height="66" rx="6"/><rect class="plate-edge" x="836" y="36" width="124" height="66" rx="6"/><rect class="stripe" x="836" y="36" width="3" height="66"/><use class="icon" href="#i-check" x="936" y="44" width="16" height="16"/><text class="t" x="845" y="55">Commit</text><text class="s v1" x="845" y="73"></text><text class="s v2" x="845" y="87"></text><rect class="track" x="845" y="93" width="106" height="4"/><rect class="meter m-mut" x="845" y="93" width="0" height="4"/></g><g class="box role-db" data-box="blobsW" data-id="blobs" role="button" aria-label="blobs & files"><rect class="plate" x="634" y="146" width="200" height="66" rx="2"/><rect class="plate-edge" x="634" y="146" width="200" height="66" rx="2"/><rect class="stripe" x="634" y="146" width="3" height="66"/><use class="icon" href="#i-files" x="810" y="154" width="16" height="16"/><text class="t" x="643" y="165">blobs & files</text><text class="s v1" x="643" y="183"></text><text class="s v2" x="643" y="197"></text><rect class="track" x="643" y="203" width="182" height="4"/><rect class="meter m-db" x="643" y="203" width="0" height="4"/></g><g class="box role-db" data-box="idsW" data-id="idRuns" role="button" aria-label="id index"><rect class="plate" x="344" y="146" width="124" height="66" rx="2"/><rect class="plate-edge" x="344" y="146" width="124" height="66" rx="2"/><rect class="stripe" x="344" y="146" width="3" height="66"/><use class="icon" href="#i-key" x="444" y="154" width="16" height="16"/><text class="t" x="353" y="165">id index</text><text class="s v1" x="353" y="183"></text><text class="s v2" x="353" y="197"></text><rect class="track" x="353" y="203" width="106" height="4"/><rect class="meter m-db" x="353" y="203" width="0" height="4"/></g><g class="box role-db" data-box="catalogW" data-id="catalog" role="button" aria-label="catalog"><rect class="plate" x="836" y="146" width="124" height="66" rx="2"/><rect class="plate-edge" x="836" y="146" width="124" height="66" rx="2"/><rect class="stripe" x="836" y="146" width="3" height="66"/><use class="icon" href="#i-table" x="936" y="154" width="16" height="16"/><text class="t" x="845" y="165">catalog</text><text class="s v1" x="845" y="183"></text><text class="s v2" x="845" y="197"></text><rect class="track" x="845" y="203" width="106" height="4"/><rect class="meter m-db" x="845" y="203" width="0" height="4"/></g><g class="box role-db" data-box="catalogR" data-id="catalog" role="button" aria-label="catalog"><rect class="plate" x="154" y="284" width="116" height="66" rx="2"/><rect class="plate-edge" x="154" y="284" width="116" height="66" rx="2"/><rect class="stripe" x="154" y="284" width="3" height="66"/><use class="icon" href="#i-table" x="246" y="292" width="16" height="16"/><text class="t" x="163" y="303">catalog</text><text class="s v1" x="163" y="321"></text><text class="s v2" x="163" y="335"></text><rect class="track" x="163" y="341" width="98" height="4"/><rect class="meter m-db" x="163" y="341" width="0" height="4"/></g><g class="box role-db" data-box="blobsR" data-id="blobs" role="button" aria-label="blobs"><rect class="plate" x="434" y="284" width="116" height="66" rx="2"/><rect class="plate-edge" x="434" y="284" width="116" height="66" rx="2"/><rect class="stripe" x="434" y="284" width="3" height="66"/><use class="icon" href="#i-files" x="526" y="292" width="16" height="16"/><text class="t" x="443" y="303">blobs</text><text class="s v1" x="443" y="321"></text><text class="s v2" x="443" y="335"></text><rect class="track" x="443" y="341" width="98" height="4"/><rect class="meter m-db" x="443" y="341" width="0" height="4"/></g><g class="box role-db" data-box="idsR" data-id="idRuns" role="button" aria-label="id index"><rect class="plate" x="854" y="284" width="116" height="66" rx="2"/><rect class="plate-edge" x="854" y="284" width="116" height="66" rx="2"/><rect class="stripe" x="854" y="284" width="3" height="66"/><use class="icon" href="#i-key" x="946" y="292" width="16" height="16"/><text class="t" x="863" y="303">id index</text><text class="s v1" x="863" y="321"></text><text class="s v2" x="863" y="335"></text><rect class="track" x="863" y="341" width="98" height="4"/><rect class="meter m-db" x="863" y="341" width="0" height="4"/></g><g class="box role-client" data-box="reader" data-id="reader" role="button" aria-label="Reader"><rect class="plate" x="14" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="14" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="14" y="380" width="3" height="66"/><use class="icon" href="#i-client" x="106" y="388" width="16" height="16"/><text class="t" x="23" y="399">Reader</text><text class="s v1" x="23" y="417"></text><text class="s v2" x="23" y="431"></text><rect class="track" x="23" y="437" width="98" height="4"/><rect class="meter m-mut" x="23" y="437" width="0" height="4"/></g><g class="box role-cache" data-box="catalogOv" data-id="catalogOv" role="button" aria-label="Catalog"><rect class="plate" x="154" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="154" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="154" y="380" width="3" height="66"/><use class="icon" href="#i-table" x="246" y="388" width="16" height="16"/><text class="t" x="163" y="399">Catalog</text><text class="s v1" x="163" y="417"></text><text class="s v2" x="163" y="431"></text><rect class="track" x="163" y="437" width="98" height="4"/><rect class="meter m-db" x="163" y="437" width="0" height="4"/></g><g class="box role-step" data-box="prune" data-id="prune" role="button" aria-label="Locate"><rect class="plate" x="294" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="294" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="294" y="380" width="3" height="66"/><use class="icon" href="#i-grid" x="386" y="388" width="16" height="16"/><text class="t" x="303" y="399">Locate</text><text class="s v1" x="303" y="417"></text><text class="s v2" x="303" y="431"></text><rect class="track" x="303" y="437" width="98" height="4"/><rect class="meter m-cpu" x="303" y="437" width="0" height="4"/></g><g class="box role-cache" data-box="fileOv" data-id="fileOv" role="button" aria-label="Blocks"><rect class="plate" x="434" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="434" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="434" y="380" width="3" height="66"/><use class="icon" href="#i-files" x="526" y="388" width="16" height="16"/><text class="t" x="443" y="399">Blocks</text><text class="s v1" x="443" y="417"></text><text class="s v2" x="443" y="431"></text><rect class="track" x="443" y="437" width="98" height="4"/><rect class="meter m-db" x="443" y="437" width="0" height="4"/></g><g class="box role-step" data-box="fgb" data-id="fgb" role="button" aria-label="Decode"><rect class="plate" x="574" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="574" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="574" y="380" width="3" height="66"/><use class="icon" href="#i-page" x="666" y="388" width="16" height="16"/><text class="t" x="583" y="399">Decode</text><text class="s v1" x="583" y="417"></text><text class="s v2" x="583" y="431"></text><rect class="track" x="583" y="437" width="98" height="4"/><rect class="meter m-cpu" x="583" y="437" width="0" height="4"/></g><g class="box role-net" data-box="response" data-id="response" role="button" aria-label="Response"><rect class="plate" x="714" y="380" width="116" height="66" rx="26"/><rect class="plate-edge" x="714" y="380" width="116" height="66" rx="26"/><rect class="stripe" x="714" y="380" width="3" height="66"/><use class="icon" href="#i-net" x="806" y="388" width="16" height="16"/><text class="t" x="723" y="399">Response</text><text class="s v1" x="723" y="417"></text><text class="s v2" x="723" y="431"></text><rect class="track" x="723" y="437" width="98" height="4"/><rect class="meter m-net" x="723" y="437" width="0" height="4"/></g><g class="box role-step" data-box="idOv" data-id="idOv" role="button" aria-label="Id lookup"><rect class="plate" x="854" y="380" width="116" height="66" rx="6"/><rect class="plate-edge" x="854" y="380" width="116" height="66" rx="6"/><rect class="stripe" x="854" y="380" width="3" height="66"/><use class="icon" href="#i-key" x="946" y="388" width="16" height="16"/><text class="t" x="863" y="399">Id lookup</text><text class="s v1" x="863" y="417"></text><text class="s v2" x="863" y="431"></text><rect class="track" x="863" y="437" width="98" height="4"/><rect class="meter m-cpu" x="863" y="437" width="0" height="4"/></g><circle id="m-packet" r="4" fill="var(--net)" visibility="hidden"/></svg></div>
     <p class="status" id="status-model"></p>
-    <h3>Cost of each action</h3>
+    <h3>What costs what</h3>
     <table aria-label="Cost of each action">
       <thead><tr><th>action</th><th>bytes moved</th><th>CPU</th></tr></thead>
       <tbody id="top-cost"></tbody>
     </table>
-    <h3>Collection totals</h3>
+    <h3>The whole picture</h3>
     <table aria-label="Per-cell and total figures for each cell class">
       <thead><tr><th>cell</th><th>cells</th><th>upload / cell</th><th>upload total</th><th>stored</th><th>ingest</th></tr></thead>
       <tbody id="totals"></tbody>
@@ -145,27 +166,31 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
   </section>
 
   <section class="tab" id="tab-overviews">
-    <div class="stage" id="fig-overviews" role="img" aria-label="Features and bytes on screen for each overview level"><canvas></canvas><svg></svg></div>
+    <p class="lede small">How many features one screen would pull at each zoom.</p>
+    <div class="stage" id="fig-overviews" role="img"><svg viewBox="0 0 1000 440" role="img"><rect x="30" y="52" width="300" height="300" fill="var(--fill)"/><line x1="30" y1="52.0" x2="330" y2="52.0" stroke="var(--line)"/><line x1="30.0" y1="52" x2="30.0" y2="352" stroke="var(--line)"/><line x1="30" y1="70.75" x2="330" y2="70.75" stroke="var(--line)"/><line x1="48.75" y1="52" x2="48.75" y2="352" stroke="var(--line)"/><line x1="30" y1="89.5" x2="330" y2="89.5" stroke="var(--line)"/><line x1="67.5" y1="52" x2="67.5" y2="352" stroke="var(--line)"/><line x1="30" y1="108.25" x2="330" y2="108.25" stroke="var(--line)"/><line x1="86.25" y1="52" x2="86.25" y2="352" stroke="var(--line)"/><line x1="30" y1="127.0" x2="330" y2="127.0" stroke="var(--line)"/><line x1="105.0" y1="52" x2="105.0" y2="352" stroke="var(--line)"/><line x1="30" y1="145.75" x2="330" y2="145.75" stroke="var(--line)"/><line x1="123.75" y1="52" x2="123.75" y2="352" stroke="var(--line)"/><line x1="30" y1="164.5" x2="330" y2="164.5" stroke="var(--line)"/><line x1="142.5" y1="52" x2="142.5" y2="352" stroke="var(--line)"/><line x1="30" y1="183.25" x2="330" y2="183.25" stroke="var(--line)"/><line x1="161.25" y1="52" x2="161.25" y2="352" stroke="var(--line)"/><line x1="30" y1="202.0" x2="330" y2="202.0" stroke="var(--line)"/><line x1="180.0" y1="52" x2="180.0" y2="352" stroke="var(--line)"/><line x1="30" y1="220.75" x2="330" y2="220.75" stroke="var(--line)"/><line x1="198.75" y1="52" x2="198.75" y2="352" stroke="var(--line)"/><line x1="30" y1="239.5" x2="330" y2="239.5" stroke="var(--line)"/><line x1="217.5" y1="52" x2="217.5" y2="352" stroke="var(--line)"/><line x1="30" y1="258.25" x2="330" y2="258.25" stroke="var(--line)"/><line x1="236.25" y1="52" x2="236.25" y2="352" stroke="var(--line)"/><line x1="30" y1="277.0" x2="330" y2="277.0" stroke="var(--line)"/><line x1="255.0" y1="52" x2="255.0" y2="352" stroke="var(--line)"/><line x1="30" y1="295.75" x2="330" y2="295.75" stroke="var(--line)"/><line x1="273.75" y1="52" x2="273.75" y2="352" stroke="var(--line)"/><line x1="30" y1="314.5" x2="330" y2="314.5" stroke="var(--line)"/><line x1="292.5" y1="52" x2="292.5" y2="352" stroke="var(--line)"/><line x1="30" y1="333.25" x2="330" y2="333.25" stroke="var(--line)"/><line x1="311.25" y1="52" x2="311.25" y2="352" stroke="var(--line)"/><line x1="30" y1="352.0" x2="330" y2="352.0" stroke="var(--line)"/><line x1="330.0" y1="52" x2="330.0" y2="352" stroke="var(--line)"/><rect x="180.0" y="202.0" width="18.75" height="18.75" fill="var(--lit)"/><rect x="180.0" y="202.0" width="18.75" height="18.75" fill="none" stroke="var(--mut)" stroke-width="2"/><rect id="ov-view" fill="none" stroke="var(--fg)" stroke-width="1.8" visibility="hidden"/><text class="lab" x="30" y="42">one L8 cell, about 36 km across, on average</text><text class="lab" x="30" y="368">L6 cell · 144 km across · 16 L8 cells</text><text class="lab" x="30" y="384">L2 cell · 2,305 km across · 4,096 L8 cells</text><text class="lab" id="ov-viewtext" x="30" y="400"></text><text class="lab" id="ov-striplabel" x="370" y="44"></text><g class="ov-cell" data-z="6"><rect x="370.0" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="394.2" y="85" text-anchor="middle"></text><text class="lab" x="394.2" y="116" text-anchor="middle">6</text></g><g class="ov-cell" data-z="7"><rect x="421.3" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="445.5" y="85" text-anchor="middle"></text><text class="lab" x="445.5" y="116" text-anchor="middle">7</text></g><g class="ov-cell" data-z="8"><rect x="472.7" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="496.8" y="85" text-anchor="middle"></text><text class="lab" x="496.8" y="116" text-anchor="middle">8</text></g><g class="ov-cell" data-z="9"><rect x="524.0" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="548.2" y="85" text-anchor="middle"></text><text class="lab" x="548.2" y="116" text-anchor="middle">9</text></g><g class="ov-cell" data-z="10"><rect x="575.3" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="599.5" y="85" text-anchor="middle"></text><text class="lab" x="599.5" y="116" text-anchor="middle">10</text></g><g class="ov-cell" data-z="11"><rect x="626.7" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="650.8" y="85" text-anchor="middle"></text><text class="lab" x="650.8" y="116" text-anchor="middle">11</text></g><g class="ov-cell" data-z="12"><rect x="678.0" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="702.2" y="85" text-anchor="middle"></text><text class="lab" x="702.2" y="116" text-anchor="middle">12</text></g><g class="ov-cell" data-z="13"><rect x="729.3" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="753.5" y="85" text-anchor="middle"></text><text class="lab" x="753.5" y="116" text-anchor="middle">13</text></g><g class="ov-cell" data-z="14"><rect x="780.7" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="804.8" y="85" text-anchor="middle"></text><text class="lab" x="804.8" y="116" text-anchor="middle">14</text></g><g class="ov-cell" data-z="15"><rect x="832.0" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="856.2" y="85" text-anchor="middle"></text><text class="lab" x="856.2" y="116" text-anchor="middle">15</text></g><g class="ov-cell" data-z="16"><rect x="883.3" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="907.5" y="85" text-anchor="middle"></text><text class="lab" x="907.5" y="116" text-anchor="middle">16</text></g><g class="ov-cell" data-z="17"><rect x="934.7" y="60" width="48.3" height="40" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="958.8" y="85" text-anchor="middle"></text><text class="lab" x="958.8" y="116" text-anchor="middle">17</text></g><text class="lab" id="ov-rowslabel" x="370" y="168"></text><g class="ov-row" data-i="0"><rect class="bg" x="366" y="182" width="620" height="48"/><rect class="bar" x="600" y="200" width="0" height="14"/><text class="v nm" x="370" y="200"></text><text class="lab sb" x="370" y="216"></text><text class="v vl" x="986" y="212" text-anchor="end"></text></g><g class="ov-row" data-i="1"><rect class="bg" x="366" y="236" width="620" height="48"/><rect class="bar" x="600" y="254" width="0" height="14"/><text class="v nm" x="370" y="254"></text><text class="lab sb" x="370" y="270"></text><text class="v vl" x="986" y="266" text-anchor="end"></text></g><g class="ov-row" data-i="2"><rect class="bg" x="366" y="290" width="620" height="48"/><rect class="bar" x="600" y="308" width="0" height="14"/><text class="v nm" x="370" y="308"></text><text class="lab sb" x="370" y="324"></text><text class="v vl" x="986" y="320" text-anchor="end"></text></g><g class="ov-row" data-i="3"><rect class="bg" x="366" y="344" width="620" height="48"/><rect class="bar" x="600" y="362" width="0" height="14"/><text class="v nm" x="370" y="362"></text><text class="lab sb" x="370" y="378"></text><text class="v vl" x="986" y="374" text-anchor="end"></text></g><rect id="ov-budget" x="600" y="174" width="1" height="226" fill="var(--mut)"/><text class="lab" x="600" y="416" text-anchor="middle">1</text><text class="lab" x="677" y="416" text-anchor="middle">1k</text><text class="lab" x="753" y="416" text-anchor="middle">1M</text><text class="lab" x="830" y="416" text-anchor="middle">1B</text></svg></div>
     <p class="status" id="status-overviews"></p>
     <aside class="side" id="side-overviews"></aside>
   </section>
 
   <section class="tab" id="tab-load">
-    <div class="stage" id="fig-load" role="img" aria-label="One upload through seven stages, with sizes and CPU share"><canvas></canvas><svg></svg></div>
+    <p class="lede small">One upload, seven steps — and what each one costs.</p>
+    <div class="stage" id="fig-load" role="img"><svg viewBox="0 0 1000 492" role="img"><g class="ld-stage" data-i="0"><rect class="plate" x="10" y="30" width="120" height="96" rx="6"/><rect class="plate-edge" x="10" y="30" width="120" height="96" rx="6"/><rect class="stripe" x="10" y="30" width="3" height="96"/><use class="icon" href="#i-net" x="98" y="40" width="16" height="16"/><text class="t" x="18" y="48">Upload</text><text class="s l1" x="18" y="66"></text><text class="s l2" x="18" y="80"></text><rect class="track" x="18" y="117" width="104" height="4"/><rect class="meter" x="18" y="117" width="0" height="4"/></g><line class="ld-arrow" data-i="0" x1="130" y1="78" x2="154" y2="78" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="ld-stage" data-i="1"><rect class="plate" x="154" y="30" width="120" height="96" rx="6"/><rect class="plate-edge" x="154" y="30" width="120" height="96" rx="6"/><rect class="stripe" x="154" y="30" width="3" height="96"/><use class="icon" href="#i-page" x="242" y="40" width="16" height="16"/><text class="t" x="162" y="48">Receive</text><text class="s l1" x="162" y="66"></text><text class="s l2" x="162" y="80"></text><rect class="track" x="162" y="117" width="104" height="4"/><rect class="meter" x="162" y="117" width="0" height="4"/></g><line class="ld-arrow" data-i="1" x1="274" y1="78" x2="298" y2="78" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="ld-stage" data-i="2"><rect class="plate" x="298" y="30" width="120" height="96" rx="6"/><rect class="plate-edge" x="298" y="30" width="120" height="96" rx="6"/><rect class="stripe" x="298" y="30" width="3" height="96"/><use class="icon" href="#i-check" x="386" y="40" width="16" height="16"/><text class="t" x="306" y="48">Validate</text><text class="s l1" x="306" y="66"></text><text class="s l2" x="306" y="80"></text><rect class="track" x="306" y="117" width="104" height="4"/><rect class="meter" x="306" y="117" width="0" height="4"/></g><line class="ld-arrow" data-i="2" x1="418" y1="78" x2="442" y2="78" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="ld-stage" data-i="3"><rect class="plate" x="442" y="30" width="120" height="96" rx="6"/><rect class="plate-edge" x="442" y="30" width="120" height="96" rx="6"/><rect class="stripe" x="442" y="30" width="3" height="96"/><use class="icon" href="#i-key" x="530" y="40" width="16" height="16"/><text class="t" x="450" y="48">Derive</text><text class="s l1" x="450" y="66"></text><text class="s l2" x="450" y="80"></text><rect class="track" x="450" y="117" width="104" height="4"/><rect class="meter" x="450" y="117" width="0" height="4"/></g><line class="ld-arrow" data-i="3" x1="562" y1="78" x2="586" y2="78" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="ld-stage" data-i="4"><rect class="plate" x="586" y="30" width="120" height="96" rx="6"/><rect class="plate-edge" x="586" y="30" width="120" height="96" rx="6"/><rect class="stripe" x="586" y="30" width="3" height="96"/><use class="icon" href="#i-files" x="674" y="40" width="16" height="16"/><text class="t" x="594" y="48">Compress</text><text class="s l1" x="594" y="66"></text><text class="s l2" x="594" y="80"></text><rect class="track" x="594" y="117" width="104" height="4"/><rect class="meter" x="594" y="117" width="0" height="4"/></g><line class="ld-arrow" data-i="4" x1="706" y1="78" x2="730" y2="78" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="ld-stage" data-i="5"><rect class="plate" x="730" y="30" width="120" height="96" rx="6"/><rect class="plate-edge" x="730" y="30" width="120" height="96" rx="6"/><rect class="stripe" x="730" y="30" width="3" height="96"/><use class="icon" href="#i-files" x="818" y="40" width="16" height="16"/><text class="t" x="738" y="48">Write blocks</text><text class="s l1" x="738" y="66"></text><text class="s l2" x="738" y="80"></text><rect class="track" x="738" y="117" width="104" height="4"/><rect class="meter" x="738" y="117" width="0" height="4"/></g><line class="ld-arrow" data-i="5" x1="850" y1="78" x2="874" y2="78" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="ld-stage" data-i="6"><rect class="plate" x="874" y="30" width="120" height="96" rx="6"/><rect class="plate-edge" x="874" y="30" width="120" height="96" rx="6"/><rect class="stripe" x="874" y="30" width="3" height="96"/><use class="icon" href="#i-check" x="962" y="40" width="16" height="16"/><text class="t" x="882" y="48">Commit</text><text class="s l1" x="882" y="66"></text><text class="s l2" x="882" y="80"></text><rect class="track" x="882" y="117" width="104" height="4"/><rect class="meter" x="882" y="117" width="0" height="4"/></g><text class="lab" x="10" y="162">Data size through one upload (log scale)</text><g class="ld-w" data-key="upload"><text class="v" x="10" y="186">upload, .fgb.zst</text><rect class="bar" x="300" y="177" width="0" height="12"/><text class="v val" x="308" y="186"></text></g><g class="ld-w" data-key="memory"><text class="v" x="10" y="204">decoded in memory</text><rect class="bar" x="300" y="195" width="0" height="12"/><text class="v val" x="308" y="204"></text></g><g class="ld-w" data-key="chunkBytes"><text class="v" x="10" y="222">FGB blocks, zstd</text><rect class="bar" x="300" y="213" width="0" height="12"/><text class="v val" x="308" y="222"></text></g><g class="ld-w" data-key="idxBytes"><text class="v" x="10" y="240">R-tree index</text><rect class="bar" x="300" y="231" width="0" height="12"/><text class="v val" x="308" y="240"></text></g><g class="ld-w" data-key="fenceBytes"><text class="v" x="10" y="258">key fence</text><rect class="bar" x="300" y="249" width="0" height="12"/><text class="v val" x="308" y="258"></text></g><g class="ld-w" data-key="colBytes"><text class="v" x="10" y="276">column sidecar</text><rect class="bar" x="300" y="267" width="0" height="12"/><text class="v val" x="308" y="276"></text></g><g class="ld-w" data-key="runBytes"><text class="v" x="10" y="294">id index rows</text><rect class="bar" x="300" y="285" width="0" height="12"/><text class="v val" x="308" y="294"></text></g><g class="ld-w" data-key="sampleBytes"><text class="v" x="10" y="312">samples L8 · L6 · L2</text><rect class="bar" x="300" y="303" width="0" height="12"/><text class="v val" x="308" y="312"></text></g><g class="ld-w" data-key="db"><text class="v" x="10" y="330">rows to Postgres (WAL adds 1×)</text><rect class="bar" x="300" y="321" width="0" height="12"/><text class="v val" x="308" y="330"></text></g><rect x="10" y="352" width="980" height="126" rx="6" fill="var(--fill)" stroke="var(--line)"/><text class="v" x="24" y="374">COMMIT · one transaction, no snapshots</text><text class="v ld-sub" data-j="0" x="24" y="389"></text><text class="v ld-sub" data-j="1" x="24" y="403"></text><text class="v ld-sub" data-j="2" x="24" y="417"></text><text class="v ld-sub" data-j="3" x="24" y="431"></text><text class="v ld-sub" data-j="4" x="24" y="445"></text><text class="v ld-sub" data-j="5" x="24" y="459"></text></svg></div>
     <p class="status" id="status-load"></p>
     <aside class="side" id="side-load"></aside>
   </section>
 
 
   <section class="tab" id="tab-reads">
+    <p class="lede small">Pick a request and follow the bytes from Postgres to the client.</p>
     <div class="chips" id="chips"></div>
-    <div class="stage" id="fig-reads" role="img" aria-label="Read path for the chosen request, with bytes moved and CPU per step"><canvas></canvas><svg></svg></div>
+    <div class="stage" id="fig-reads" role="img"><svg viewBox="0 0 1000 286" role="img"><g class="rd-step" data-i="0"><rect class="plate" x="20.0" y="50" width="160" height="84" rx="6"/><rect class="plate-edge" x="20.0" y="50" width="160" height="84" rx="6"/><rect class="stripe" x="20.0" y="50" width="3" height="84"/><use class="icon" href="#i-cpu" x="156.0" y="58" width="16" height="16"/><text class="v l1" x="30.0" y="68"></text><text class="v l2" x="30.0" y="84"></text><text class="s c1" x="30.0" y="150"></text><text class="s c2" x="30.0" y="165"></text><rect class="track" x="30.0" y="122" width="140" height="4"/><rect class="meter" x="30.0" y="122" width="0" height="4"/></g><line class="rd-arrow" data-i="0" x1="180.0" y1="92" x2="220.0" y2="92" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="rd-step" data-i="1"><rect class="plate" x="220.0" y="50" width="160" height="84" rx="6"/><rect class="plate-edge" x="220.0" y="50" width="160" height="84" rx="6"/><rect class="stripe" x="220.0" y="50" width="3" height="84"/><use class="icon" href="#i-cpu" x="356.0" y="58" width="16" height="16"/><text class="v l1" x="230.0" y="68"></text><text class="v l2" x="230.0" y="84"></text><text class="s c1" x="230.0" y="150"></text><text class="s c2" x="230.0" y="165"></text><rect class="track" x="230.0" y="122" width="140" height="4"/><rect class="meter" x="230.0" y="122" width="0" height="4"/></g><line class="rd-arrow" data-i="1" x1="380.0" y1="92" x2="420.0" y2="92" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="rd-step" data-i="2"><rect class="plate" x="420.0" y="50" width="160" height="84" rx="6"/><rect class="plate-edge" x="420.0" y="50" width="160" height="84" rx="6"/><rect class="stripe" x="420.0" y="50" width="3" height="84"/><use class="icon" href="#i-cpu" x="556.0" y="58" width="16" height="16"/><text class="v l1" x="430.0" y="68"></text><text class="v l2" x="430.0" y="84"></text><text class="s c1" x="430.0" y="150"></text><text class="s c2" x="430.0" y="165"></text><rect class="track" x="430.0" y="122" width="140" height="4"/><rect class="meter" x="430.0" y="122" width="0" height="4"/></g><line class="rd-arrow" data-i="2" x1="580.0" y1="92" x2="620.0" y2="92" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="rd-step" data-i="3"><rect class="plate" x="620.0" y="50" width="160" height="84" rx="6"/><rect class="plate-edge" x="620.0" y="50" width="160" height="84" rx="6"/><rect class="stripe" x="620.0" y="50" width="3" height="84"/><use class="icon" href="#i-cpu" x="756.0" y="58" width="16" height="16"/><text class="v l1" x="630.0" y="68"></text><text class="v l2" x="630.0" y="84"></text><text class="s c1" x="630.0" y="150"></text><text class="s c2" x="630.0" y="165"></text><rect class="track" x="630.0" y="122" width="140" height="4"/><rect class="meter" x="630.0" y="122" width="0" height="4"/></g><line class="rd-arrow" data-i="3" x1="780.0" y1="92" x2="820.0" y2="92" stroke="var(--mut)" marker-end="url(#ar-mut)"/><g class="rd-step" data-i="4"><rect class="plate" x="820.0" y="50" width="160" height="84" rx="6"/><rect class="plate-edge" x="820.0" y="50" width="160" height="84" rx="6"/><rect class="stripe" x="820.0" y="50" width="3" height="84"/><use class="icon" href="#i-cpu" x="956.0" y="58" width="16" height="16"/><text class="v l1" x="830.0" y="68"></text><text class="v l2" x="830.0" y="84"></text><text class="s c1" x="830.0" y="150"></text><text class="s c2" x="830.0" y="165"></text><rect class="track" x="830.0" y="122" width="140" height="4"/><rect class="meter" x="830.0" y="122" width="0" height="4"/></g><g class="rd-amp" data-key="db"><text class="v" x="10" y="225">read from Postgres</text><rect class="bar" x="300" y="214" width="0" height="14"/><text class="v val" x="308" y="225"></text></g><g class="rd-amp" data-key="net"><text class="v" x="10" y="257">returned to the client</text><rect class="bar" x="300" y="246" width="0" height="14"/><text class="v val" x="308" y="257"></text></g><text class="v" id="rd-summary" x="500" y="200" text-anchor="middle"></text><circle id="rd-packet" r="4" fill="var(--net)" visibility="hidden"/></svg></div>
     <p class="status" id="status-reads"></p>
     <aside class="side" id="side-reads"></aside>
   </section>
 
 
   <section class="tab" id="tab-decide">
+    <p class="lede small">The choices behind the numbers, and what they cost.</p>
     <div class="box">
       <h3>Tradeoffs</h3>
       <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once.</p>
@@ -177,7 +202,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     </div>
     <div class="box">
       <h3>Code budget · production Go for v2</h3>
-      <div class="stage" id="fig-budget" style="aspect-ratio:1000/40;border:0;background:none"><canvas></canvas><svg></svg></div>
+      <div class="stage" style="aspect-ratio:1000/40;border:0;background:none" id="fig-budget" role="img"><svg viewBox="0 0 1000 40" role="img"><rect x="0" y="12" width="1000" height="16" rx="8" fill="var(--track)"/><rect x="0" y="12" width="480" height="16" rx="8" fill="var(--fg)"/></svg></div>
       <p>Now: about 1,920 of 4,000 lines (48%).</p>
       <p class="note">Outside the budget: about 1,070 lines of tests and 66 lines of SQL.</p>
     </div>
@@ -230,7 +255,6 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     </div>
 <footer>1–5 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are estimates from OSM Layercake data; the CPU split and Postgres speed are too</footer>
 
-<script src="https://unpkg.com/zdog@1.1.3/dist/zdog.dist.min.js"></script>
 <script>
 const PAL = {
   dark: { bg: '#101112', fill: '#17181a', lane: '#141517', track: '#25272b', line: '#34373d', fg: '#d8dadf', mut: '#868b94', accent: '#f2a93b', cpu: '#f2a93b', net: '#4fc3dc', db: '#7ccf8b', band: '#2a2f36', lit: '#2d2a22', fillLit: '#2b2619' },
@@ -366,104 +390,6 @@ function costNow() {
   return { f: W.f, link: W.link, page: W.page, Wr: writeCost(W.f, W.link), Rd: readBBox(W.f, W.page, W.link) };
 }
 
-class Fig {
-  constructor(id, vw, vh) {
-    this.vw = vw; this.vh = vh; this.binds = []; this.cur = costNow();
-    this.el = document.getElementById(id);
-    this.el.style.aspectRatio = vw + ' / ' + vh;
-    this.svg = this.el.querySelector('svg');
-    this.svg.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
-    this.illo = new Zdog.Illustration({
-      element: this.el.querySelector('canvas'),
-      resize: true,
-      onResize(w) { if (w > 0) this.zoom = w / vw; },
-    });
-  }
-  x(v) { return v - this.vw / 2; }
-  y(v) { return v - this.vh / 2; }
-  pt(x, y) { return { x: this.x(x), y: this.y(y) }; }
-  shape(x, y, w, h, r, opts) {
-    return new Zdog[r ? 'RoundedRect' : 'Rect']({ addTo: this.illo, width: w, height: h, cornerRadius: r, translate: this.pt(x + w / 2, y + h / 2), ...opts });
-  }
-  place(s, x, y, w, h) {
-    s.width = Math.max(0.01, w);
-    s.height = Math.max(0.01, h);
-    s.translate.x = this.x(x + s.width / 2);
-    s.translate.y = this.y(y + h / 2);
-    s.updatePath();
-  }
-  bind(fn) { this.binds.push(fn); fn(); }
-  line(pts, lw) { return new Zdog.Shape({ addTo: this.illo, path: pts.map(([x, y]) => this.pt(x, y)), closed: false, stroke: lw, fill: false }); }
-  dashes(pts) {
-    const out = [];
-    for (let i = 0; i + 1 < pts.length; i++) {
-      const [x1, y1] = pts[i], [x2, y2] = pts[i + 1], L = Math.hypot(x2 - x1, y2 - y1);
-      if (!L) continue;
-      const ux = (x2 - x1) / L, uy = (y2 - y1) / L;
-      for (let d = 0; d < L; d += 9) {
-        const e = Math.min(L, d + 5);
-        out.push(this.line([[x1 + ux * d, y1 + uy * d], [x1 + ux * e, y1 + uy * e]], 1));
-      }
-    }
-    return out;
-  }
-  head(pts) {
-    const [x1, y1] = pts[pts.length - 2], [x2, y2] = pts[pts.length - 1];
-    const L = Math.hypot(x2 - x1, y2 - y1) || 1, ux = (x2 - x1) / L, uy = (y2 - y1) / L;
-    const bx = x2 - ux * 7, by = y2 - uy * 7;
-    return new Zdog.Shape({ addTo: this.illo, path: [this.pt(x2, y2), this.pt(bx - uy * 3.5, by + ux * 3.5), this.pt(bx + uy * 3.5, by - ux * 3.5)], closed: true, fill: true, stroke: false });
-  }
-  radius(role) { return role === 'net' ? 26 : role === 'db' ? 2 : 6; }
-  glyph(role, gx, gy) {
-    const out = [];
-    if (role === 'db') {
-      for (let i = 0; i < 3; i++) out.push(this.line([[gx - 7, gy + i * 4], [gx + 7, gy + i * 4]], 1.3));
-    } else if (role === 'cache') {
-      for (let i = 0; i < 2; i++) {
-        out.push(this.line([[gx - 7, gy + i * 5 + 1], [gx - 1, gy + i * 5 + 1]], 1.3));
-        out.push(this.line([[gx + 2, gy + i * 5 + 1], [gx + 7, gy + i * 5 + 1]], 1.3));
-      }
-    } else if (role === 'net') {
-      out.push(this.line([[gx - 7, gy + 2], [gx, gy + 6], [gx - 7, gy + 10]], 1.3));
-      out.push(this.line([[gx, gy + 2], [gx + 7, gy + 6], [gx, gy + 10]], 1.3));
-    } else if (role === 'client') {
-      out.push(this.shape(gx - 7, gy + 1, 14, 9, 1, { fill: false, stroke: 1.2 }));
-      out.push(this.line([[gx - 3, gy + 13], [gx + 3, gy + 13]], 1.2));
-    } else if (role === 'tx') {
-      out.push(this.line([[gx - 7, gy + 4], [gx + 7, gy + 4]], 1.3));
-      out.push(this.line([[gx - 3, gy + 8], [gx + 7, gy + 8]], 1.3));
-    } else {
-      out.push(this.shape(gx - 5, gy + 1, 10, 10, 1, { fill: false, stroke: 1.3 }));
-    }
-    return out;
-  }
-  decorate(x, y, w, h, role) {
-    const stripe = this.shape(x, y, 3, h, 0, { fill: true, stroke: false });
-    const glyph = this.glyph(role, x + w - 16, y + 12);
-    const col = P[ROLE_KIND[role] || 'cpu'];
-    this.bind(() => { stripe.color = col; for (const g of glyph) g.color = col; });
-  }
-  text(x, y, str, cls = 'v', anchor = 'start') {
-    const t = document.createElementNS(NS, 'text');
-    t.setAttribute('x', x); t.setAttribute('y', y); t.setAttribute('class', cls); t.setAttribute('text-anchor', anchor);
-    t.textContent = str;
-    this.svg.appendChild(t);
-    return t;
-  }
-  hit(x, y, w, h, fn) {
-    const r = document.createElementNS(NS, 'rect');
-    r.setAttribute('x', x); r.setAttribute('y', y); r.setAttribute('width', w); r.setAttribute('height', h); r.setAttribute('class', 'hit');
-    r.addEventListener('click', fn);
-    this.svg.appendChild(r);
-    return r;
-  }
-  paint() { for (const fn of this.binds) fn(); }
-  render() { this.paint(); this.illo.updateRenderGraph(); }
-  show() { this.illo.onWindowResize(); this.render(); }
-  step() { return false; }
-}
-
-const ROLE_KIND = { step: 'cpu', net: 'net', db: 'db', cache: 'mut', client: 'mut', tx: 'mut' };
 const MED = { w1: 'net', w2: 'mut', w3: 'mut', w4: 'mut', w5: 'mut', w6: 'db', w7: 'db', w8: 'db', r1: 'mut', r2: 'mut', r3: 'mut', r4: 'mut', r5: 'net', r6: 'db', r7: 'db', r8: 'db' };
 const EDGES = [
   ['w1', 'loader', 'r', 'decode', 'l', false], ['w2', 'decode', 'r', 'validate', 'l', false],
@@ -493,24 +419,6 @@ const anchor = (key, side) => {
   const b = BOX[key];
   return { r: [b.x + b.w, b.y + b.h / 2], l: [b.x, b.y + b.h / 2], t: [b.x + b.w / 2, b.y], b: [b.x + b.w / 2, b.y + b.h] }[side];
 };
-function along(pts, t) {
-  const segs = [];
-  let total = 0;
-  for (let i = 0; i + 1 < pts.length; i++) {
-    const d = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
-    segs.push(d);
-    total += d;
-  }
-  let d = Math.min(1, Math.max(0, t)) * total;
-  for (let i = 0; i < segs.length; i++) {
-    if (d <= segs[i] || i === segs.length - 1) {
-      const k = segs[i] ? Math.min(1, d / segs[i]) : 0;
-      return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * k, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * k];
-    }
-    d -= segs[i];
-  }
-  return pts[0];
-}
 const EDGE_BYTES = c => ({
   w1: c.Wr.upload, w2: c.Wr.memory, w3: c.Wr.memory, w4: c.Wr.memory, w5: c.Wr.meta, w6: c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes + c.Wr.sampleBytes, w7: c.Wr.runBytes, w8: c.Wr.meta,
   r1: 256, r2: 256, r3: 256, r4: c.Rd.steps[2].db, r5: c.Rd.steps[4].net, r6: c.Rd.steps[0].db, r7: c.Rd.steps[2].db, r8: c.Wr.runBytes,
@@ -722,94 +630,58 @@ function bandText(k, bands) {
   return a === b ? `zoom ${a}` : `zoom ${a}–${b}`;
 }
 
-class Overviews extends Fig {
+class Overviews {
   constructor() {
-    super('fig-overviews', 1000, 440);
-    const X = 30, Y = 52, S = 300, N = 16, C = S / N;
-    const grid = this.shape(X, Y, S, S, 0, { fill: true, stroke: false });
-    const gridLines = [];
-    for (let i = 0; i <= N; i++) {
-      gridLines.push(this.line([[X, Y + i * C], [X + S, Y + i * C]], 1));
-      gridLines.push(this.line([[X + i * C, Y], [X + i * C, Y + S]], 1));
-    }
-    this.bind(() => { grid.color = P.fill; for (const l of gridLines) l.color = P.line; });
-    const tint = this.shape(X + 8 * C, Y + 8 * C, C, C, 0, { fill: true, stroke: false });
-    const hl = this.shape(X + 8 * C, Y + 8 * C, C, C, 0, { fill: false, stroke: 2 });
-    this.bind(() => { tint.color = P.lit; hl.color = P.mut; });
-    this.view = this.shape(0, 0, 1, 1, 0, { fill: false, stroke: 1.8 });
-    this.bind(() => { this.view.color = P.fg; });
-    const across = L => `${km2(Math.sqrt(cellKm2(L)))} km`;
-    this.text(X, Y - 10, `one L8 cell, about ${across(8)} across, on average`, 'lab');
-    this.text(X, Y + S + 16, `L6 cell · ${across(6)} across · ${withinOf(6)} L8 cells`, 'lab');
-    this.text(X, Y + S + 32, `L2 cell · ${across(2)} across · ${withinOf(2)} L8 cells`, 'lab');
-    this.viewText = this.text(X, Y + S + 48, '', 'lab');
-    this.stripLabel = this.text(370, 44, '', 'lab');
-    const cw = 616 / ZOOMS.length;
-    this.cells = ZOOMS.map((z, i) => {
-      const x = 370 + i * cw, w = cw - 3, y = 60, h = 40;
-      const f = this.shape(x, y, w, h, 0, { fill: true, stroke: false });
-      const o = this.shape(x, y, w, h, 0, { fill: false, stroke: 1 });
-      const t = this.text(x + w / 2, y + 25, '', 'v', 'middle');
-      this.text(x + w / 2, y + 56, String(z), 'lab', 'middle');
-      return { z, f, o, t };
-    });
-    this.rowsLabel = this.text(370, 168, '', 'lab');
-    this.rows = RUNGS.map((k, i) => {
-      const y = 182 + i * 54;
-      return {
-        k, y,
-        bg: this.shape(366, y, 620, 48, 0, { fill: true, stroke: false }),
-        bar: this.shape(600, y + 18, 1, 14, 0, { fill: true, stroke: false }),
-        name: this.text(370, y + 18, '', 'v'),
-        sub: this.text(370, y + 34, '', 'lab'),
-        val: this.text(986, y + 30, '', 'v', 'end'),
-      };
-    });
-    this.budget = this.shape(600, 174, 1, 226, 0, { fill: true, stroke: false });
-    this.bind(() => { this.budget.color = P.mut; });
-    for (const [t, x] of [['1', 600], ['1k', 677], ['1M', 753], ['1B', 830]]) this.text(x, 416, t, 'lab', 'middle');
+    this.svg = document.querySelector('#fig-overviews svg');
+    this.cells = [...this.svg.querySelectorAll('.ov-cell')];
+    this.rows = [...this.svg.querySelectorAll('.ov-row')];
+    this.view = this.svg.querySelector('#ov-view');
+    this.viewtext = this.svg.querySelector('#ov-viewtext');
+    this.striplabel = this.svg.querySelector('#ov-striplabel');
+    this.rowslabel = this.svg.querySelector('#ov-rowslabel');
+    this.budget = this.svg.querySelector('#ov-budget');
     this.render();
   }
   geometry(z) {
-    const s = 300 / 36, t = kmTile(z), w = 4 * t * s, h = 3 * t * s;
+    const sc = 300 / 36, t = kmTile(z), w = 4 * t * sc, h = 3 * t * sc;
     const cx = 30 + 8.5 * (300 / 16), cy = 52 + 8.5 * (300 / 16);
     const x1 = Math.max(cx - w / 2, 30), y1 = Math.max(cy - h / 2, 52);
     const x2 = Math.min(cx + w / 2, 330), y2 = Math.min(cy + h / 2, 352);
     return x2 > x1 && y2 > y1 ? { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } : null;
   }
-  paint() {
-    super.paint();
+  render() {
     const z = Math.round(S.ov.z), rows = rungCounts(z), pick = pickAt(z), bands = zoomBands();
     const g = this.geometry(z), t = kmTile(z), detail = detailAt(z);
-    this.view.visible = !!g;
-    if (g) this.place(this.view, g.x, g.y, g.w, g.h);
-    txt(this.viewText, `view at zoom ${z}: ${km2(4 * t)} × ${km2(3 * t)} km · detail would be ${fmtCount(detail)} features`);
-    txt(this.stripLabel, `level served at each zoom · cell ${fmt(W.f)} features · page ${fmt(W.page)}`);
-    for (const c of this.cells) {
-      const cur = c.z === z, p = pickAt(c.z);
-      txt(c.t, p ? rungName(p.k) : 'none');
-      c.f.color = cur ? P.lit : P.fill;
-      c.o.color = cur ? P.fg : P.line;
-      c.o.stroke = cur ? 2 : 1;
-    }
-    txt(this.rowsLabel, `features on screen at zoom ${z} · line marks one page of ${fmt(W.page)}`);
-    this.place(this.budget, 600 + 230 * logFrac(W.page, 0, 9), 174, 1, 226);
+    if (g) {
+      this.view.setAttribute('visibility', 'visible');
+      this.view.setAttribute('x', g.x); this.view.setAttribute('y', g.y);
+      this.view.setAttribute('width', g.w); this.view.setAttribute('height', g.h);
+    } else this.view.setAttribute('visibility', 'hidden');
+    this.viewtext.textContent = `view at zoom ${z}: ${km2(4 * t)} × ${km2(3 * t)} km · detail would be ${fmtCount(detail)} features`;
+    this.striplabel.textContent = `level served at each zoom · cell ${fmt(W.f)} features · page ${fmt(W.page)}`;
+    this.cells.forEach(c => {
+      const zz = +c.dataset.z, p = pickAt(zz);
+      c.classList.toggle('on', zz === z);
+      c.querySelector('text.v').textContent = p ? rungName(p.k) : 'none';
+    });
+    this.rowslabel.textContent = `features on screen at zoom ${z} · line marks one page of ${fmt(W.page)}`;
+    this.budget.setAttribute('x', (600 + 230 * logFrac(W.page, 0, 9)).toFixed(1));
     this.rows.forEach((r, i) => {
-      const row = rows[i], chosen = !!pick && pick.k === r.k;
-      r.bg.color = chosen ? P.lit : P.lane;
-      r.name.textContent = `${chosen ? '→ ' : ''}${r.k === 'detail' ? 'detail · L8 range scan' : `${rungName(r.k)} · ${km2(cellKm2(r.k))} km² cell`}`;
-      r.bar.color = chosen ? P.fg : P.mut;
-      this.place(r.bar, 600, r.y + 18, 230 * logFrac(row.n, 0, 9), 14);
-      txt(r.sub, `${r.k === 'detail' ? 'no cap, whole file' : `${CAP} per cell`} · ${bandText(r.k, bands)}`);
-      txt(r.val, `${fmtCount(row.n)} · ${fmtBytes(row.n * K.zst)}`);
+      const row = rows[i], chosen = !!pick && pick.k === row.k;
+      r.classList.toggle('pick', chosen);
+      r.querySelector('.bar').setAttribute('width', (230 * logFrac(row.n, 0, 9)).toFixed(1));
+      r.querySelector('.nm').textContent = `${chosen ? '→ ' : ''}${row.k === 'detail' ? 'detail · L8 range scan' : `${rungName(row.k)} · ${km2(cellKm2(row.k))} km² cell`}`;
+      r.querySelector('.sb').textContent = `${row.k === 'detail' ? 'no cap, whole file' : `${CAP} per cell`} · ${bandText(row.k, bands)}`;
+      r.querySelector('.vl').textContent = `${fmtCount(row.n)} · ${fmtBytes(row.n * K.zst)}`;
     });
   }
+  show() { this.render(); }
   step(dt) {
-    const s = S.ov.sweep;
-    if (!s) return false;
-    s.t += dt;
-    S.ov.z = 6 + 11 * Math.min(1, s.t / 12);
-    if (s.t >= 12) S.ov.sweep = null;
+    const sw = S.ov.sweep;
+    if (!sw) return false;
+    sw.t += dt;
+    S.ov.z = 6 + 11 * Math.min(1, sw.t / 12);
+    if (sw.t >= 12) S.ov.sweep = null;
     return true;
   }
   act(name, arg) {
@@ -846,68 +718,56 @@ const SUBS = [
   'bump the version and commit',
 ];
 
-class Load extends Fig {
+class Load {
   constructor() {
-    super('fig-load', 1000, 492);
-    for (let i = 0; i < 6; i++) {
-      const x = 10 + i * 144, pts = [[x + 120, 78], [x + 144, 78]];
-      const seg = this.line(pts, 1), head = this.head(pts);
-      const bytesAt = () => [this.cur.Wr.upload, this.cur.Wr.memory, this.cur.Wr.memory, this.cur.Wr.memory, this.cur.Wr.db, this.cur.Wr.meta][i];
-      this.bind(() => { seg.stroke = wStroke(bytesAt()); seg.color = P.mut; head.color = P.mut; });
-    }
-    STAGES.forEach((st, i) => {
-      const x = 10 + i * 144;
-      const sr = this.radius(st.role || (st.kind === 'cpu' ? 'step' : st.kind));
-      const f = this.shape(x, 30, 120, 96, sr, { fill: true, stroke: false });
-      const o = this.shape(x, 30, 120, 96, sr, { fill: false, stroke: 1.2 });
-      this.decorate(x, 30, 120, 96, st.role || (st.kind === 'cpu' ? 'step' : st.kind));
-      const track = this.shape(x + 8, 117, 104, 4, 0, { fill: true, stroke: false });
-      const meter = this.shape(x + 8, 117, 1, 4, 0, { fill: true, stroke: false });
-      this.text(x + 8, 48, st.t, 't');
-      const t2 = this.text(x + 8, 66, '', 's');
-      const t3 = this.text(x + 8, 80, '', 's');
-      this.hit(x, 30, 120, 96, () => { S.load.sel = i; S.load.k = i < 6 ? i + 1 : 7; S.load.play = null; this.render(); refresh(); });
-      this.bind(() => {
-        const c = this.cur, on = this.activeStage() === i, done = i < this.activeStage();
-        f.color = done ? P.fillLit : P.fill;
-        o.color = on ? P.fg : P.line;
-        o.stroke = on ? 2.2 : 1.2;
-        track.color = P.track;
-        this.place(meter, x + 8, 117, 104 * st.share(c), 4);
-        meter.color = P[st.kind];
-        t2.textContent = st.l1(c);
-        t3.textContent = st.l2(c);
-      });
+    this.svg = document.querySelector('#fig-load svg');
+    this.stages = [...this.svg.querySelectorAll('.ld-stage')].map(g => ({
+      g, l1: g.querySelector('.l1'), l2: g.querySelector('.l2'), meter: g.querySelector('.meter'),
+    }));
+    this.arrows = [...this.svg.querySelectorAll('.ld-arrow')];
+    this.wrows = [...this.svg.querySelectorAll('.ld-w')];
+    this.subs = [...this.svg.querySelectorAll('.ld-sub')];
+    this.svg.addEventListener('click', e => {
+      const g = e.target.closest('.ld-stage');
+      if (!g) return;
+      const i = +g.dataset.i;
+      S.load.sel = i; S.load.k = i < 6 ? i + 1 : 7; S.load.play = null;
+      this.render(); refresh();
     });
-    this.text(10, 162, 'Data size through one upload (log scale)', 'lab');
-    const rows = [['upload, .fgb.zst', 'upload', 'net'], ['decoded in memory', 'memory', 'mut'], ['FGB blocks, zstd', 'chunkBytes', 'db'], ['R-tree index', 'idxBytes', 'db'], ['key fence', 'fenceBytes', 'db'], ['column sidecar', 'colBytes', 'db'], ['id index rows', 'runBytes', 'db'], ['samples L8 · L6 · L2', 'sampleBytes', 'db'], ['rows to Postgres (WAL adds 1×)', 'db', 'db']];
-    rows.forEach(([label, key, kind], i) => {
-      const y = 175 + i * 18;
-      this.text(10, y + 11, label, 'v');
-      const bar = this.shape(300, y + 2, 1, 12, 0, { fill: true, stroke: false });
-      const val = this.text(308, y + 11, '', 'v');
-      this.bind(() => {
-        const bytes = this.cur.Wr[key] !== undefined ? this.cur.Wr[key] : this.cur.Wr.upload;
-        const v = key === 'memory' ? this.cur.Wr.memory : bytes;
-        this.place(bar, 300, y + 2, 540 * logFrac(v, 3, 10), 12);
-        bar.color = P[kind];
-        val.setAttribute('x', 300 + 540 * logFrac(v, 3, 10) + 8);
-        val.textContent = fmtBytes(v);
-      });
-    });
-    const panel = this.shape(10, 352, 980, 126, 6, { fill: true, stroke: false });
-    const edge = this.shape(10, 352, 980, 126, 6, { fill: false, stroke: 1.2 });
-    this.bind(() => { panel.color = P.fill; edge.color = P.line; });
-    this.text(24, 374, 'COMMIT · one transaction, no snapshots', 'v');
-    this.subs = SUBS.map((s, j) => this.text(24, 389 + j * 14, `${j + 1}. ${s}`, 'v'));
     this.render();
   }
   activeStage() { return S.load.k === 0 ? -1 : S.load.k <= 6 ? S.load.k - 1 : 6; }
-  paint() {
-    super.paint();
+  render() {
+    const c = costNow(), active = this.activeStage();
+    this.stages.forEach((st, i) => {
+      st.g.classList.toggle('on', active === i);
+      st.g.classList.toggle('done', i < active);
+      st.meter.setAttribute('width', (104 * STAGES[i].share(c)).toFixed(1));
+      st.meter.setAttribute('class', 'meter ' + (STAGES[i].kind === 'db' ? 'm-db' : STAGES[i].kind === 'net' ? 'm-net' : STAGES[i].kind === 'mut' ? 'm-mut' : 'm-cpu'));
+      st.l1.textContent = STAGES[i].l1(c);
+      st.l2.textContent = STAGES[i].l2(c);
+    });
+    const bytes = [c.Wr.upload, c.Wr.memory, c.Wr.memory, c.Wr.memory, c.Wr.db, c.Wr.meta];
+    this.arrows.forEach((a, i) => a.setAttribute('stroke-width', wStroke(bytes[i]).toFixed(2)));
+    const vals = { upload: c.Wr.upload, memory: c.Wr.memory, chunkBytes: c.Wr.chunkBytes, idxBytes: c.Wr.idxBytes,
+      fenceBytes: c.Wr.fenceBytes, colBytes: c.Wr.colBytes, runBytes: c.Wr.runBytes, sampleBytes: c.Wr.sampleBytes, db: c.Wr.db };
+    this.wrows.forEach(g => {
+      const v = vals[g.dataset.key] ?? 0, w = 540 * logFrac(v, 2, 10);
+      const kind = g.dataset.key === 'upload' ? 'm-net' : g.dataset.key === 'memory' ? 'm-mut' : 'm-db';
+      g.querySelector('.bar').setAttribute('class', 'bar ' + kind);
+      g.querySelector('.bar').setAttribute('width', w.toFixed(1));
+      const val = g.querySelector('.val');
+      val.setAttribute('x', (308 + w).toFixed(1));
+      val.textContent = fmtBytes(v);
+    });
     const sub = S.load.k >= 7 ? S.load.k - 7 : -1;
-    this.subs.forEach((t, j) => { t.style.fill = j < sub ? P.mut : j === sub ? P.fg : P.mut; });
+    this.subs.forEach((t, j) => {
+      t.textContent = `${j + 1}. ${SUBS[j]}`;
+      t.classList.toggle('done', j < sub);
+      t.classList.toggle('on', j === sub);
+    });
   }
+  show() { this.render(); }
   step(dt) {
     const p = S.load.play;
     if (!p) return false;
@@ -936,101 +796,75 @@ const REQS = [
   { label: 'items/{id}', roles: ['db', 'db', 'cache', 'net'], lines: [['id index:', 'hash to key'], ['fence:', 'byte range'], ['one', 'block'], ['verify,', 'respond']],
     run: c => readId(c.f, c.link), note: 'The id index names the key; the fence turns it into a byte range, so a lookup reads one block, not a partition.' },
 ];
-const reqGeom = n => {
-  const BOX = 160, gap = (1000 - 40 - n * BOX) / Math.max(1, n - 1);
-  return { BOX, xs: Array.from({ length: n }, (_, i) => 20 + i * (BOX + gap)) };
-};
 const stepKind = st => (st.db ? 'db' : st.net ? 'net' : 'cpu');
 
-class Reads extends Fig {
+class Reads {
   constructor() {
-    super('fig-reads', 1000, 286);
-    this.parts = []; this.nodes = []; this.builtFor = -1; this.run = null;
-    this.packet = new Zdog.Ellipse({ addTo: this.illo, diameter: 8, fill: true, stroke: false, visible: false });
-    for (const row of [{ y: 214, label: 'read from Postgres', key: 'db', kind: 'db' }, { y: 246, label: 'returned to the client', key: 'net', kind: 'net' }]) {
-      const bar = this.shape(300, row.y, 1, 14, 0, { fill: true, stroke: false });
-      this.text(10, row.y + 11, row.label, 'v');
-      const val = this.text(308, row.y + 11, '', 'v');
-      this.bind(() => {
-        const bytes = this.run ? this.run[row.key] : 0;
-        this.place(bar, 300, row.y, 540 * logFrac(bytes, 3, 10), 14);
-        bar.color = P[row.kind];
-        val.setAttribute('x', 300 + 540 * logFrac(bytes, 3, 10) + 8);
-        val.textContent = fmtBytes(bytes);
-      });
-    }
-    this.baseBinds = this.binds.slice();
+    this.svg = document.querySelector('#fig-reads svg');
+    this.steps = [...this.svg.querySelectorAll('.rd-step')].map(g => ({
+      g, l1: g.querySelector('.l1'), l2: g.querySelector('.l2'), c1: g.querySelector('.c1'), c2: g.querySelector('.c2'),
+      meter: g.querySelector('.meter'), icon: g.querySelector('.icon'),
+    }));
+    this.arrows = [...this.svg.querySelectorAll('.rd-arrow')];
+    this.amps = [...this.svg.querySelectorAll('.rd-amp')];
+    this.summary = this.svg.querySelector('#rd-summary');
+    this.packet = this.svg.querySelector('#rd-packet');
+    this.svg.addEventListener('click', e => {
+      const g = e.target.closest('.rd-step');
+      if (!g) return;
+      S.reads.sel = +g.dataset.i;
+      this.render(); refresh();
+    });
     this.render();
   }
-  build() {
-    for (const s of this.parts) s.remove();
-    for (const el of this.nodes) el.remove();
-    this.parts = []; this.nodes = []; this.binds = this.baseBinds.slice();
-    const R = REQS[S.reads.req], n = R.lines.length, { BOX, xs } = reqGeom(n);
-    R.lines.forEach(([l1, l2], i) => {
-      const x = xs[i];
-      const kd = stepKind(this.run.steps[i]);
-      const kr = this.radius(R.roles[i] || 'step');
-      const f = this.shape(x, 50, BOX, 84, kr, { fill: true, stroke: false });
-      const o = this.shape(x, 50, BOX, 84, kr, { fill: false, stroke: 1.2 });
-      this.decorate(x, 50, BOX, 84, R.roles[i] || 'step');
-      const track = this.shape(x + 10, 122, BOX - 20, 4, 0, { fill: true, stroke: false });
-      const meter = this.shape(x + 10, 122, 1, 4, 0, { fill: true, stroke: false });
-      const t1 = this.text(x + 10, 68, l1, 'v');
-      const t2 = this.text(x + 10, 84, l2, 'v');
-      const c1 = this.text(x + 10, 150, '', 's');
-      const c2 = this.text(x + 10, 165, '', 's');
-      const hit = this.hit(x, 50, BOX, 84, () => { S.reads.sel = i; this.render(); refresh(); });
-      this.parts.push(f, o, track, meter);
-      this.nodes.push(t1, t2, c1, c2, hit);
-      this.bind(() => {
-        const st = this.run.steps[i], on = S.reads.sel === i, lit = S.reads.lit.has(i);
-        f.color = lit ? P.fillLit : P.fill;
-        o.color = on ? P.fg : P.line;
-        o.stroke = on ? 2.2 : 1.2;
-        track.color = P.track;
-        const share = st.t / this.run.total;
-        const progress = S.reads.demo && S.reads.demo.i === i ? S.reads.demo.t / (S.reads.demo.dur || 1) : 1;
-        this.place(meter, x + 10, 122, (BOX - 20) * share * progress, 4);
-        meter.color = P[stepKind(st)];
-        c1.textContent = [st.db ? `DB ${fmtBytes(st.db)}` : '', st.net ? `NET ${fmtBytes(st.net)}` : ''].filter(Boolean).join('  ') || 'no bytes moved';
-        c2.textContent = st.cpu ? `CPU ${fmtTime(st.cpu)}` : `${fmtTime(st.t)} total`;
-      });
+  render() {
+    const R = REQS[S.reads.req], run = R.run(costNow()), n = R.lines.length;
+    const BOX = 160, xs = [20, 220, 420, 620, 820];
+    this.steps.forEach((st, i) => {
+      if (i >= n) { st.g.setAttribute('visibility', 'hidden'); return; }
+      st.g.setAttribute('visibility', 'visible');
+      const stp = run.steps[i], role = R.roles[i] || 'step', kind = stepKind(stp);
+      st.g.setAttribute('class', `rd-step role-${role}`);
+      st.g.classList.toggle('on', S.reads.sel === i);
+      st.g.classList.toggle('done', S.reads.lit.has(i));
+      st.l1.textContent = R.lines[i][0];
+      st.l2.textContent = R.lines[i][1];
+      const progress = S.reads.demo && S.reads.demo.i === i ? S.reads.demo.t / (S.reads.demo.dur || 1) : 1;
+      st.meter.setAttribute('width', (140 * (stp.t / run.total) * progress).toFixed(1));
+      st.meter.setAttribute('class', `meter m-${kind}`);
+      st.icon.setAttribute('href', '#' + ({ net: 'i-net', db: 'i-table', cache: 'i-files', step: 'i-cpu' }[role] || 'i-cpu'));
+      st.c1.textContent = [stp.db ? `DB ${fmtBytes(stp.db)}` : '', stp.net ? `NET ${fmtBytes(stp.net)}` : ''].filter(Boolean).join('  ') || 'no bytes moved';
+      st.c2.textContent = stp.cpu ? `CPU ${fmtTime(stp.cpu)}` : `${fmtTime(stp.t)} total`;
     });
-    for (let i = 0; i + 1 < n; i++) {
-      const pts = [[xs[i] + BOX, 92], [xs[i + 1], 92]];
-      const seg = this.line(pts, 1), head = this.head(pts);
-      this.parts.push(seg, head);
-      this.bind(() => {
-        const st = this.run.steps[i + 1], bytes = st.db + st.net;
-        seg.stroke = wStroke(bytes);
-        seg.color = P.mut;
-        head.color = P.mut;
-      });
-    }
-    const cost = this.text(500, 200, '', 'v', 'middle');
-    this.nodes.push(cost);
-    this.bind(() => {
-      cost.textContent = `DB read ${fmtBytes(this.run.db)} · returned ${fmtBytes(this.run.net)} · CPU ${fmtTime(this.run.cpu)} · about ${fmtTime(this.run.total)} end to end`;
+    this.arrows.forEach((a, i) => {
+      if (i + 1 >= n) { a.setAttribute('visibility', 'hidden'); return; }
+      a.setAttribute('visibility', 'visible');
+      const bytes = run.steps[i + 1].db + run.steps[i + 1].net;
+      a.setAttribute('stroke-width', wStroke(bytes).toFixed(2));
+      a.classList.toggle('hot', !!S.reads.demo && S.reads.demo.i === i + 1);
     });
-  }
-  paint() {
-    this.cur = costNow();
-    this.run = REQS[S.reads.req].run(this.cur);
-    if (this.builtFor !== S.reads.req) { this.builtFor = S.reads.req; this.build(); }
-    super.paint();
-    const d = S.reads.demo, { BOX, xs } = reqGeom(this.run.steps.length);
-    this.packet.visible = !!(d && d.i > 0);
+    this.amps.forEach(g => {
+      const bytes = run[g.dataset.key];
+      const w = 540 * logFrac(bytes, 3, 10);
+      g.querySelector('.bar').setAttribute('width', w.toFixed(1));
+      g.querySelector('.bar').setAttribute('class', 'bar ' + (g.dataset.key === 'db' ? 'm-db' : 'm-net'));
+      const val = g.querySelector('.val');
+      val.setAttribute('x', (308 + w).toFixed(1));
+      val.textContent = fmtBytes(bytes);
+    });
+    this.summary.textContent = `DB read ${fmtBytes(run.db)} · returned ${fmtBytes(run.net)} · CPU ${fmtTime(run.cpu)} · about ${fmtTime(run.total)} end to end`;
+    const d = S.reads.demo;
+    this.packet.setAttribute('visibility', d && d.i > 0 ? 'visible' : 'hidden');
     if (d && d.i > 0) {
-      const st = this.run.steps[d.i];
-      const [x, y] = along([[xs[d.i - 1] + BOX, 92], [xs[d.i], 92]], d.t / (d.dur || 1));
-      this.packet.diameter = 2 * wPacket(st.db + st.net || 1);
-      this.packet.updatePath();
-      this.packet.color = P[stepKind(st)];
-      this.packet.translate.x = this.x(x);
-      this.packet.translate.y = this.y(y);
+      const k = Math.min(1, Math.max(0, d.t / (d.dur || 1)));
+      const x = xs[d.i - 1] + BOX + (xs[d.i] - xs[d.i - 1] - BOX) * k;
+      this.packet.setAttribute('cx', x.toFixed(1));
+      this.packet.setAttribute('cy', '92');
+      this.packet.setAttribute('r', wPacket(run.steps[d.i].db + run.steps[d.i].net || 1).toFixed(1));
+      this.packet.setAttribute('fill', `var(--${stepKind(run.steps[d.i])})`);
     }
   }
+  show() { this.render(); }
   step(dt) {
     const d = S.reads.demo;
     if (!d) return false;
@@ -1053,14 +887,10 @@ class Reads extends Fig {
   }
 }
 
-class Budget extends Fig {
-  constructor() {
-    super('fig-budget', 1000, 40);
-    const track = this.shape(0, 12, 1000, 16, 8, { fill: true, stroke: false });
-    const used = this.shape(0, 12, 480, 16, 8, { fill: true, stroke: false });
-    this.bind(() => { track.color = P.track; used.color = P.fg; });
-    this.render();
-  }
+class Budget {
+  render() {}
+  show() {}
+  step() { return false; }
 }
 
 const SIDE = {
