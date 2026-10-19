@@ -78,7 +78,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     <div class="brand">postfgb v2 · design</div>
     <nav role="tablist" aria-label="Figures">
       <button role="tab" data-tab="model" aria-selected="true">Model</button>
-      <button role="tab" data-tab="ladder" aria-selected="false">Ladder</button>
+      <button role="tab" data-tab="overviews" aria-selected="false">Overviews</button>
       <button role="tab" data-tab="load" aria-selected="false">Load</button>
       <button role="tab" data-tab="reads" aria-selected="false">Reads</button>
       <button role="tab" data-tab="costs" aria-selected="false">Costs</button>
@@ -126,10 +126,10 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     <aside class="side" id="side-model"></aside>
   </section>
 
-  <section class="tab" id="tab-ladder">
-    <div class="stage" id="fig-ladder" role="img" aria-label="Features and bytes on screen for each overview level"><canvas></canvas><svg></svg></div>
-    <p class="status" id="status-ladder"></p>
-    <aside class="side" id="side-ladder"></aside>
+  <section class="tab" id="tab-overviews">
+    <div class="stage" id="fig-overviews" role="img" aria-label="Features and bytes on screen for each overview level"><canvas></canvas><svg></svg></div>
+    <p class="status" id="status-overviews"></p>
+    <aside class="side" id="side-overviews"></aside>
   </section>
 
   <section class="tab" id="tab-load">
@@ -233,7 +233,7 @@ const W = { f: 12000, link: 125e6, page: 1000 };
 const S = {
   tab: 'model',
   model: { sel: 'catalog', lit: new Set(), demo: null },
-  ladder: { z: 13, sweep: null },
+  ov: { z: 13, sweep: null },
   load: { k: 0, sel: 0, play: null },
   reads: { req: 0, sel: 0, lit: new Set(), demo: null },
   drag: null,
@@ -244,7 +244,8 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const list = items => (items.length ? `<ul>${items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '');
 const pct = v => `${Math.round(v * 100)}%`;
 const fmt = n => Math.round(n).toLocaleString('en-GB');
-const set = (sel, text) => { const el = $(sel); if (el) el.textContent = text; };
+const set = (sel, text) => { const el = $(sel); if (el && el.textContent !== text) el.textContent = text; };
+const txt = (el, text) => { if (el.textContent !== text) el.textContent = text; };
 const alpha = (h, a) => { const n = parseInt(h.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
 
 function fmtBytes(b) {
@@ -679,15 +680,17 @@ function bandText(k, bands) {
   return a === b ? `zoom ${a}` : `zoom ${a}–${b}`;
 }
 
-class Ladder extends Fig {
+class Overviews extends Fig {
   constructor() {
-    super('fig-ladder', 1000, 440);
+    super('fig-overviews', 1000, 440);
     const X = 30, Y = 52, S = 300, N = 16, C = S / N;
-    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
-      const f = this.shape(X + i * C, Y + j * C, C, C, 0, { fill: true, stroke: false });
-      const o = this.shape(X + i * C, Y + j * C, C, C, 0, { fill: false, stroke: 1 });
-      this.bind(() => { f.color = P.fill; o.color = P.line; });
+    const grid = this.shape(X, Y, S, S, 0, { fill: true, stroke: false });
+    const gridLines = [];
+    for (let i = 0; i <= N; i++) {
+      gridLines.push(this.line([[X, Y + i * C], [X + S, Y + i * C]], 1));
+      gridLines.push(this.line([[X + i * C, Y], [X + i * C, Y + S]], 1));
     }
+    this.bind(() => { grid.color = P.fill; for (const l of gridLines) l.color = P.line; });
     const tint = this.shape(X + 8 * C, Y + 8 * C, C, C, 0, { fill: true, stroke: false });
     const hl = this.shape(X + 8 * C, Y + 8 * C, C, C, 0, { fill: false, stroke: 2 });
     this.bind(() => { tint.color = P.lit; hl.color = P.mut; });
@@ -733,20 +736,20 @@ class Ladder extends Fig {
   }
   paint() {
     super.paint();
-    const z = Math.round(S.ladder.z), rows = rungCounts(z), pick = pickAt(z), bands = zoomBands();
+    const z = Math.round(S.ov.z), rows = rungCounts(z), pick = pickAt(z), bands = zoomBands();
     const g = this.geometry(z), t = kmTile(z), detail = detailAt(z);
     this.view.visible = !!g;
     if (g) this.place(this.view, g.x, g.y, g.w, g.h);
-    this.viewText.textContent = `view at zoom ${z}: ${km2(4 * t)} × ${km2(3 * t)} km · detail would be ${fmtCount(detail)} features`;
-    this.stripLabel.textContent = `level served at each zoom · cell ${fmt(W.f)} features · page ${fmt(W.page)}`;
+    txt(this.viewText, `view at zoom ${z}: ${km2(4 * t)} × ${km2(3 * t)} km · detail would be ${fmtCount(detail)} features`);
+    txt(this.stripLabel, `level served at each zoom · cell ${fmt(W.f)} features · page ${fmt(W.page)}`);
     for (const c of this.cells) {
       const cur = c.z === z, p = pickAt(c.z);
-      c.t.textContent = p ? rungName(p.k) : 'none';
+      txt(c.t, p ? rungName(p.k) : 'none');
       c.f.color = cur ? P.lit : P.fill;
       c.o.color = cur ? P.fg : P.line;
       c.o.stroke = cur ? 2 : 1;
     }
-    this.rowsLabel.textContent = `features on screen at zoom ${z} · line marks one page of ${fmt(W.page)}`;
+    txt(this.rowsLabel, `features on screen at zoom ${z} · line marks one page of ${fmt(W.page)}`);
     this.place(this.budget, 600 + 230 * logFrac(W.page, 0, 9), 174, 1, 226);
     this.rows.forEach((r, i) => {
       const row = rows[i], chosen = !!pick && pick.k === r.k;
@@ -754,20 +757,20 @@ class Ladder extends Fig {
       r.name.textContent = `${chosen ? '→ ' : ''}${r.k === 'detail' ? 'detail · L8 range scan' : `${rungName(r.k)} · ${km2short(cellKm2(r.k))} km² cell`}`;
       r.bar.color = chosen ? P.fg : P.mut;
       this.place(r.bar, 600, r.y + 18, 230 * logFrac(row.n, 0, 9), 14);
-      r.sub.textContent = `${r.k === 'detail' ? 'no cap, whole chunks' : `${CAP} per cell`} · ${bandText(r.k, bands)}`;
-      r.val.textContent = `${fmtCount(row.n)} · ${fmtBytes(row.n * K.zst)}`;
+      txt(r.sub, `${r.k === 'detail' ? 'no cap, whole chunks' : `${CAP} per cell`} · ${bandText(r.k, bands)}`);
+      txt(r.val, `${fmtCount(row.n)} · ${fmtBytes(row.n * K.zst)}`);
     });
   }
   step(dt) {
-    const s = S.ladder.sweep;
+    const s = S.ov.sweep;
     if (!s) return false;
     s.t += dt;
-    S.ladder.z = 6 + 11 * Math.min(1, s.t / 12);
-    if (s.t >= 12) S.ladder.sweep = null;
+    S.ov.z = 6 + 11 * Math.min(1, s.t / 12);
+    if (s.t >= 12) S.ov.sweep = null;
     return true;
   }
   act(name, arg) {
-    const L = S.ladder;
+    const L = S.ov;
     if (name === 'demo') L.sweep = { t: 0 };
     if (name === 'reset') { L.z = 13; L.sweep = null; }
     if (name === 'set') { L.z = +arg; L.sweep = null; }
@@ -1048,7 +1051,7 @@ const SIDE = {
       (n.index.length ? `<h3>index</h3>${list(n.index)}` : '') +
       `<div class="ctl"><button class="btn" data-act="write">Write (D)</button><button class="btn" data-act="read">Read (E)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
-  ladder() {
+  overviews() {
     return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
       <input type="range" id="z-range" min="6" max="17" step="1" aria-label="Zoom level">
       <p>Level 8 is the ingest unit, and its samples are the coarse views: 256 kept in each partition, the features with the smallest hash. Level 6 keeps 256 in each of its cells, built from its 16 partitions, and level 2 from its 4,096. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
@@ -1073,20 +1076,20 @@ function syncModel() {
   if (cs.e) set('#status-model', `Moving ${fmtBytes(cs.b)} for ${fmtTime(cs.t)} on the link or Postgres`);
   else set('#status-model', `${MODEL[cs.box].t}: ${fmtTime(cs.t)} of work, ${MODEL[cs.box].l2(c)}`);
 }
-function syncLadder() {
-  const z = Math.round(S.ladder.z), rows = rungCounts(z), pick = pickAt(z), r = $('#z-range');
+function syncOverviews() {
+  const z = Math.round(S.ov.z), rows = rungCounts(z), pick = pickAt(z), r = $('#z-range');
   if (r && document.activeElement !== r) r.value = z;
   set('#z-val', z);
   const detail = detailAt(z);
   if (!pick) {
     set('#z-pick', `No level fits one page of ${fmt(W.page)} at this zoom.`);
-    set('#status-ladder', `Zoom ${z}: no level fits one page of ${fmt(W.page)}.`);
+    set('#status-overviews', `Zoom ${z}: no level fits one page of ${fmt(W.page)}.`);
     return;
   }
   const want = pick.k === 'detail' ? 'detail' : `overview=${pick.k}`;
   const sparse = pick.k !== 'detail' && pick.n < 1 ? ` The sample is too sparse at this zoom; read detail with a page of about ${fmt(Math.ceil(detail))}.` : '';
   set('#z-pick', `Ask for ${want}: ${fmtCount(pick.n)} features, ${fmtBytes(pick.n * K.zst)} over the link (${fmtTime((pick.n * K.zst) / W.link)}). Detail would be ${fmtCount(detail)} features.${sparse}`);
-  set('#status-ladder', `Zoom ${z}: ask for ${want}, ${fmtCount(pick.n)} features. Detail: ${fmtCount(detail)}.`);
+  set('#status-overviews', `Zoom ${z}: ask for ${want}, ${fmtCount(pick.n)} features. Detail: ${fmtCount(detail)}.`);
 }
 
 function syncLoad() {
@@ -1118,7 +1121,7 @@ function syncCosts() {
 }
 function sync() {
   if (S.tab === 'model') syncModel();
-  if (S.tab === 'ladder') syncLadder();
+  if (S.tab === 'overviews') syncOverviews();
   if (S.tab === 'load') syncLoad();
   if (S.tab === 'reads') syncReads();
   if (S.tab === 'costs') syncCosts();
@@ -1134,6 +1137,7 @@ function act(tab, name, arg) {
   f.act(name, arg);
   f.render();
   sync();
+  schedule();
 }
 
 const FIGS = {};
@@ -1141,7 +1145,7 @@ function show(tab) {
   S.tab = tab;
   document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
   document.querySelectorAll('main > section').forEach(t => t.classList.toggle('on', t.id === 'tab-' + tab));
-  if (FIGS[tab]) FIGS[tab].show();
+  figure(tab).show();
   refresh();
   history.replaceState(null, '', '#' + tab);
 }
@@ -1157,13 +1161,17 @@ function sizeLabel(f) {
   return '';
 }
 function renderAll() {
-  for (const f of Object.values(FIGS)) f.render();
+  if (FIGS[S.tab]) FIGS[S.tab].render();
   const c = costNow(), label = sizeLabel(W.f);
   set('#f-out', `${fmt(W.f)} features${label ? ` · ${label}` : ''}`);
   set('#wl-sum', `Upload ${fmtBytes(c.Wr.upload)} · ingest about ${fmtTime(c.Wr.total)} · decoded memory ${fmtBytes(c.Wr.memory)} · a page of ${fmt(Math.min(W.page, W.f))} reads ${fmtBytes(c.Rd.db)} from Postgres and returns ${fmtBytes(c.Rd.net)} · a worst-case filter on this cell reads ${fmtBytes(readFilter(W.f, W.page, W.link).db)}.`);
   setPressed();
 }
-function workloadChanged() { renderAll(); refresh(); }
+let wlRaf = 0;
+function workloadChanged() {
+  if (wlRaf) return;
+  wlRaf = requestAnimationFrame(() => { wlRaf = 0; renderAll(); refresh(); });
+}
 function setTheme(name) {
   P = PAL[name];
   for (const k in P) document.documentElement.style.setProperty('--' + k, P[k]);
@@ -1184,12 +1192,12 @@ document.addEventListener('click', e => {
   if (b) act(b.dataset.act === 'req' ? 'reads' : S.tab, b.dataset.act, b.dataset.arg);
 });
 document.addEventListener('input', e => {
-  if (e.target.id === 'z-range') act('ladder', 'set', e.target.value);
+  if (e.target.id === 'z-range') act('overviews', 'set', e.target.value);
 });
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const order = ['model', 'ladder', 'load', 'reads', 'costs', 'decide'];
+  const order = ['model', 'overviews', 'load', 'reads', 'costs', 'decide'];
   if (/^[1-6]$/.test(k)) show(order[+k - 1]);
   else if (k === 't') setTheme(P === PAL.dark ? 'light' : 'dark');
   else if (k === 'd') act(S.tab, 'demo');
@@ -1200,26 +1208,35 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('resize', () => { if (FIGS[S.tab]) FIGS[S.tab].render(); });
 
-FIGS.model = new Model();
-FIGS.ladder = new Ladder();
-FIGS.load = new Load();
-FIGS.reads = new Reads();
-FIGS.costs = new Costs();
-FIGS.decide = new Budget();
+const FIG_MAKERS = {
+  model: () => new Model(),
+  overviews: () => new Overviews(),
+  load: () => new Load(),
+  reads: () => new Reads(),
+  costs: () => new Costs(),
+  decide: () => new Budget(),
+};
+function figure(tab) {
+  if (!FIGS[tab] && FIG_MAKERS[tab]) FIGS[tab] = FIG_MAKERS[tab]();
+  return FIGS[tab];
+}
 $('#chips').innerHTML = REQS.map((q, i) => `<button class="btn" data-act="req" data-arg="${i}">${esc(q.label)}</button>`).join('');
 $('#f-range').value = Math.log10(W.f).toFixed(2);
 setTheme('dark');
 let last = performance.now();
-function frame(now) {
+let raf = 0;
+const animating = () => !!(S.model.demo || S.ov.sweep || S.load.play || S.reads.demo);
+function schedule() { if (!raf) raf = requestAnimationFrame(loop); }
+function loop(now) {
+  raf = 0;
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const f = FIGS[S.tab];
   if (f && f.step(dt)) { f.render(); sync(); }
-  requestAnimationFrame(frame);
+  if (animating()) schedule();
 }
 const start = location.hash.slice(1);
-show(['model', 'ladder', 'load', 'reads', 'costs', 'decide'].includes(start) ? start : 'model');
-requestAnimationFrame(frame);
+show(['model', 'overviews', 'load', 'reads', 'costs', 'decide'].includes(start) ? start : 'model');
 </script>
 </body>
 </html>
