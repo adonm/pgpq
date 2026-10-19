@@ -686,7 +686,7 @@ class Overviews {
     this.bbox = this.mapEl.querySelector('.ov-bbox');
     this.map = null;
     if (typeof maplibregl !== 'undefined') {
-      this.map = new maplibregl.Map({ container: this.mapEl, style: 'https://tiles.openfreemap.org/styles/positron', center: [2.35, 48.86], zoom: 9.77, interactive: false, attributionControl: true });
+      this.map = new maplibregl.Map({ container: this.mapEl, style: 'https://tiles.openfreemap.org/styles/liberty', center: [2.35, 48.86], zoom: 9.77, interactive: false, attributionControl: true });
       this.map.on('load', () => this.map.resize());
     }
     this.render();
@@ -969,7 +969,7 @@ const SIDE = {
   overviews() {
     return `<h2>Zoom <span id="z-val"></span></h2><p id="z-pick"></p>
       <input type="range" id="z-range" min="6" max="17" step="1" aria-label="Zoom level">
-      <p class="note">The map is a fixed L8 cell on OpenFreeMap Positron; the orange box is the view at the selected zoom.</p>
+      <p class="note">The map is a fixed L8 cell on OpenFreeMap Liberty; the orange box is the view at the selected zoom.</p>
       <p>L8 is the detail file, not a sample. Level 6 keeps 2,048 features in each of its 16 L8 cells; level 4 keeps 2,048 in each of its 16 L6 cells; level 2 keeps 2,048 from its 16 L4 cells. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
       <p class="note">Before ranking, the zoomed-out samples drop areal and linear features smaller than one pixel: about 1.6 km for L2, 400 m for L4 and 100 m for L6 at 48°N. Points stay. L8 detail keeps everything. The survivors are still smallest-hash, not largest-bbox, so visible features stay uniform rather than big-feature-biased.</p>
       <p class="note">L2 is rebuilt in the background: a commit queues its parent, and a worker rebuilds it after 5 s of quiet or 60 s at most. Detail, L6 and L4 are current.</p>
