@@ -59,6 +59,7 @@ th.grp{color:var(--fg)}
 .tab h3{margin:22px 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .box h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
 .box p{margin:6px 0}
+tr.pick td{font-weight:600}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
 .grid2 h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg)}
 .grid2 ul{margin:0 0 20px;padding-left:18px}
@@ -88,8 +89,12 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
   </header>
   <section class="workload" aria-label="Workload">
     <div class="wl">
+      <span class="k">Total</span>
+      <button class="btn" data-n="10000000">10M</button>
+      <button class="btn" data-n="100000000">100M</button>
+      <button class="btn" data-n="1000000000">1B</button>
       <span class="k">Cell</span>
-      <button class="btn" data-f="1">1</button>
+      <button class="btn" data-f="1000">1k</button>
       <button class="btn" data-f="12000">12k</button>
       <button class="btn" data-f="2500000">2.5M</button>
       <span class="k">Page</span>
@@ -110,6 +115,12 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <thead><tr><th>action</th><th>bytes moved</th><th>CPU</th></tr></thead>
       <tbody id="top-cost"></tbody>
     </table>
+    <h3>Collection totals</h3>
+    <table aria-label="Per-cell and total figures for each cell class">
+      <thead><tr><th>cell</th><th>cells</th><th>upload / cell</th><th>upload total</th><th>stored</th><th>ingest</th></tr></thead>
+      <tbody id="totals"></tbody>
+    </table>
+    <p class="note">Upload bytes scale with features, so every class totals the same. Stored bytes and ingest time scale with the cell count: a 1k cell writes three 256-feature samples and pays one commit of its own.</p>
     <aside class="side" id="side-model"></aside>
   </section>
 
@@ -216,7 +227,8 @@ const FEAT_PER_BLOCK = Math.max(1, Math.floor(K.block / K.raw));
 const rtreeBytes = f => Math.ceil(f / 16) * 1.07 * K.node;
 const fenceBytes = f => Math.ceil(f / K.fenceEvery) * K.fence;
 const TYPICAL = 12000, DENSE = 2500000;
-const W = { f: 12000, link: 125e6, page: 1000 };
+const W = { n: 1000000000, f: 12000, link: 125e6, page: 1000 };
+const TYPES = [{ name: 'sparse', f: 1000 }, { name: 'mean', f: 12000 }, { name: 'dense', f: 2500000 }];
 const S = {
   tab: 'model',
   model: { sel: 'catalog', lit: new Set(), demo: null },
@@ -246,7 +258,8 @@ function fmtTime(s) {
   if (s < 0.001) return `${Math.max(1, Math.round(s * 1e6))} µs`;
   if (s < 1) return `${Math.round(s * 1000)} ms`;
   if (s < 120) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
-  return `${(s / 60).toFixed(1)} min`;
+  if (s < 7200) return `${(s / 60).toFixed(1)} min`;
+  return `${(s / 3600).toFixed(1)} h`;
 }
 const logFrac = (b, lo, hi) => Math.min(1, Math.max(0, (Math.log10(Math.max(b, 1)) - lo) / (hi - lo)));
 const wStroke = b => Math.min(10, 1 + 0.9 * Math.log10(Math.max(b, 1)));
@@ -258,7 +271,7 @@ function writeCost(f, link) {
   const cpu = f * K.sec;
   const upload = f * K.up, memory = f * K.raw;
   const fileBytes = f * K.zst, idxBytes = rtreeBytes(f), fenBytes = fenceBytes(f);
-  const colBytes = f * K.col, runBytes = f * K.run;
+  const colBytes = f * K.col, runBytes = f * K.idxRow;
   const sampleBytes = samples * (K.zst + K.col) + rtreeBytes(samples) + fenceBytes(samples);
   const files = 12, meta = files * K.meta;
   const db = fileBytes + idxBytes + fenBytes + colBytes + runBytes + sampleBytes + meta;
@@ -1047,6 +1060,7 @@ const SIDE = {
       <p>Level 8 is the ingest unit, and its samples are the coarse views: ${CAP} kept in each partition, the features with the smallest hash. Level 6 keeps ${CAP} in each of its ${withinOf(6)} partitions, and level 2 from its ${withinOf(2)}. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
       <p class="note">Detail is not stored: the L8 file’s own R-tree names the byte ranges a bbox needs, so only those blocks are read. The row count stays bounded as the zoom rises.</p>
       <p class="note">Each zoom uses the finest option that fits one page. From the workload bar: the cell size is spread evenly over the view, and the page size is the budget. A larger page lets a fine view use detail sooner instead of a sparse sample.</p>
+      <p class="note" id="ov-counts"></p>
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   load() {
@@ -1073,7 +1087,20 @@ function costRows() {
   ];
 }
 
+function typeTotals(f) {
+  const cells = Math.ceil(W.n / f), w = writeCost(f, W.link);
+  return { cells, per: w, upload: cells * w.upload, stored: cells * w.db, time: cells * (w.cpu + w.tDb + K.fixed) };
+}
+
+function syncTotals() {
+  $('#totals').innerHTML = TYPES.map(t => {
+    const x = typeTotals(t.f);
+    return `<tr class="${t.f === W.f ? 'pick' : ''}"><td>${t.name}${t.f === W.f ? ' →' : ''}</td><td>${fmt(x.cells)}</td><td>${fmtBytes(x.per.upload)}</td><td>${fmtBytes(x.upload)}</td><td>${fmtBytes(x.stored)}</td><td>${fmtTime(x.time)}</td></tr>`;
+  }).join('');
+}
+
 function syncModel() {
+  syncTotals();
   const rows = costRows().sort((a, b) => b.bytes - a.bytes).slice(0, 5);
   $('#top-cost').innerHTML = rows.map(r => `<tr><td>${esc(r.name)}</td><td>${fmtBytes(r.bytes)}</td><td>${r.cpu ? fmtTime(r.cpu) : '—'}</td></tr>`).join('');
   const d = S.model.demo, c = costNow();
@@ -1086,6 +1113,8 @@ function syncOverviews() {
   const z = Math.round(S.ov.z), rows = rungCounts(z), pick = pickAt(z), r = $('#z-range');
   if (r && document.activeElement !== r) r.value = z;
   set('#z-val', z);
+  const cells = Math.ceil(W.n / W.f);
+  set('#ov-counts', `At ${fmtBig(W.n)} features over ${fmt(W.f)}-feature cells: ${fmt(cells)} detail files, ${fmt(Math.ceil(cells / 16))} L6 files and ${fmt(Math.ceil(cells / 4096))} L2 files.`);
   const detail = detailAt(z);
   if (!pick) {
     set('#z-pick', `No level fits one page of ${fmt(W.page)} at this zoom.`);
@@ -1127,8 +1156,8 @@ function syncFacts() {
   set('#f-dense', fmtBig(DENSE));
   set('#f-densemem', fmtBytes(DENSE * K.raw));
   set('#f-filter', fmtBytes(readFilter(DENSE, W.page, W.link).db));
-  set('#f-billion', fmtBig(1e9));
-  set('#f-idx1e9', fmtBytes(1e9 * K.idxRow));
+  set('#f-billion', fmtBig(W.n));
+  set('#f-idx1e9', fmtBytes(W.n * K.idxRow));
   set('#f-coarsezoom', coarse === undefined ? '—' : coarse);
   set('#f-page', fmt(W.page));
   set('#f-z7n', fmtBig(d7));
@@ -1169,10 +1198,11 @@ function show(tab) {
 function setPressed() {
   document.querySelectorAll('[data-page]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.page === W.page)));
   document.querySelectorAll('[data-f]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.f === W.f)));
+  document.querySelectorAll('[data-n]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.n === W.n)));
 }
 function renderAll() {
   if (FIGS[S.tab]) FIGS[S.tab].render();
-  set('#f-out', `${fmt(W.f)} features · page ${fmt(W.page)}`);
+  set('#f-out', `${fmtBig(W.n)} features · ${fmt(W.f)} per cell · page ${fmt(W.page)}`);
   setPressed();
 }
 let wlRaf = 0;
@@ -1192,6 +1222,7 @@ function setTheme(name) {
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.tab)));
 $('#theme').addEventListener('click', () => setTheme(P === PAL.dark ? 'light' : 'dark'));
 document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { W.f = +b.dataset.f; workloadChanged(); }));
+document.querySelectorAll('[data-n]').forEach(b => b.addEventListener('click', () => { W.n = +b.dataset.n; workloadChanged(); }));
 document.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', () => { W.page = +b.dataset.page; workloadChanged(); }));
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
