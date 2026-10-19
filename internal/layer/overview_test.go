@@ -12,14 +12,15 @@ import (
 
 func TestSampleOverviewKeepsTheSmallestHashesPerCell(t *testing.T) {
 	key := spatial.Key([4]float64{2.35, 48.85, 2.35, 48.85})
+	cap := capFor(8)
 	var entries []entry
-	for i := range overviewCap + 44 {
+	for i := range cap + 44 {
 		id := strconv.Itoa(i)
 		entries = append(entries, entry{key: key, id: id, hash: idHash(id), cell: spatial.Partition(key)})
 	}
 	sample := sampleOverview(entries, 8)
-	if len(sample) != overviewCap {
-		t.Fatalf("sample holds %d, want %d", len(sample), overviewCap)
+	if len(sample) != cap {
+		t.Fatalf("sample holds %d, want %d", len(sample), cap)
 	}
 	hashes := make([]uint64, len(entries))
 	for i, e := range entries {
@@ -27,8 +28,8 @@ func TestSampleOverviewKeepsTheSmallestHashesPerCell(t *testing.T) {
 	}
 	slices.Sort(hashes)
 	for _, e := range sample {
-		if e.hash > hashes[overviewCap-1] {
-			t.Fatalf("kept hash %x above the cut %x", e.hash, hashes[overviewCap-1])
+		if e.hash > hashes[cap-1] {
+			t.Fatalf("kept hash %x above the cut %x", e.hash, hashes[cap-1])
 		}
 	}
 }
@@ -60,7 +61,7 @@ func TestOverviewSamplesAndStaysOutOfLookups(t *testing.T) {
 		kept[spatial.Level(h.Key, 8)]++
 	}
 	for cell, n := range population {
-		if want := min(n, overviewCap); kept[cell] != want {
+		if want := min(n, capFor(8)); kept[cell] != want {
 			t.Fatalf("cell %x keeps %d features, want %d of %d", cell, kept[cell], want, n)
 		}
 	}

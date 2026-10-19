@@ -99,7 +99,7 @@ func (l *Layer) coarseChunks(ctx context.Context, tx pgx.Tx, put blobPut, coll C
 		}
 		return compareKeyID(a.entry.key, a.entry.id, b.entry.key, b.entry.id)
 	})
-	samples = samples[:min(len(samples), overviewCap)]
+	samples = samples[:min(len(samples), capFor(level))]
 	slices.SortFunc(samples, func(a, b chunkSample) int {
 		return compareKeyID(a.entry.key, a.entry.id, b.entry.key, b.entry.id)
 	})

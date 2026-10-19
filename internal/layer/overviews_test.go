@@ -20,7 +20,7 @@ func checkTopPerCell(t *testing.T, l *Layer, name string, level int, detail []Hi
 	want := map[uint64][]string{}
 	for cell, hits := range byCell {
 		slices.SortFunc(hits, func(a, b Hit) int { return cmp.Compare(idHash(a.ID), idHash(b.ID)) })
-		for _, h := range hits[:min(len(hits), overviewCap)] {
+		for _, h := range hits[:min(len(hits), capFor(level))] {
 			want[cell] = append(want[cell], h.ID)
 		}
 		slices.Sort(want[cell])

@@ -23,8 +23,20 @@ const (
 	maxChunkFeatures = 50000
 	maxChunkBytes    = 8 << 20
 	detailLevel      = 0
-	overviewCap      = 256
+	l8SampleCap      = 512
+	l6SampleCap      = 2048
+	l2SampleCap      = 2048
 )
+
+func capFor(level int) int {
+	switch level {
+	case 8:
+		return l8SampleCap
+	case 6:
+		return l6SampleCap
+	}
+	return l2SampleCap
+}
 
 // coarseStep rebuilds one overview level from the level below it.
 type coarseStep struct {
@@ -109,7 +121,7 @@ func sampleOverview(entries []entry, level int) []entry {
 			}
 			return compareKeyID(a.key, a.id, b.key, b.id)
 		})
-		out = append(out, group[:min(len(group), overviewCap)]...)
+		out = append(out, group[:min(len(group), capFor(level))]...)
 	}
 	return out
 }
