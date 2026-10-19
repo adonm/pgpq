@@ -184,8 +184,9 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag built">built</span><b>Caches</b><br><span>Three LRUs per worker, 256 MiB each: file bytes, chunk lists, decoded id runs.</span></li>
           <li><span class="tag decided">decided</span><b>Upload</b><br><span>One .fgb.zst per L8 cell. No streaming, bucketing or spill. Not built: the /v2 load still takes multi-cell bodies.</span></li>
           <li><span class="tag decided">decided</span><b>Snapshot per upload</b><br><span>Each upload is one commit. A multi-cell reload is not atomic: readers can see old and new cells together until it ends.</span></li>
+          <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the latest snapshot, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
           <li><span class="tag next">next</span><b>Id runs</b><br><span>One run per upload. Lookups search every live run. Above 64 live runs, a background merge combines the 16 smallest and drops stale entries.</span></li>
-          <li><span class="tag next">next</span><b>Reaping</b><br><span>Keep 72 h retention. Delete rows and files that no retained snapshot can see.</span></li>
+          <li><span class="tag next">next</span><b>Reaping</b><br><span>Replaced rows and files stay 15 minutes, then are deleted. Nothing pins a snapshot, so there is no 72 h retention.</span></li>
           <li><span class="tag cut">cut</span><b>Postings</b><br><span>Zone maps and column files answer filters for now. Revisit if a dense-cell filter takes over 1 s cold.</span></li>
           <li><span class="tag cut">cut</span><b>Id-run Bloom filters</b><br><span>A binary search over at most 64 runs is cheap.</span></li>
         </ul>
@@ -196,6 +197,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>Loads are held in memory and nothing spills. The densest cell (about 2.5M features) decodes to about 1.2 GB and sets the worker’s memory.</li>
           <li>A filter on a dense cell reads every chunk until postings exist: about 300 MB per request in the worst case (see Costs).</li>
           <li>A reload of many cells is not one snapshot. Readers can see a mix of old and new cells until the last upload commits.</li>
+          <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one snapshot.</li>
           <li>Id runs are delta-coded, so a lookup decodes each live run in full. At 1e9 features the runs total about 15 GB: a fence index per run is needed before lookups scale.</li>
           <li>The coarse rebuild reads sibling samples on every upload. Measure at 10 million features.</li>
           <li>Dense cities at zoom 13 hold about 240k features on screen, about 24 MB over the link. Use overviews until detail is small, around zoom 16 or 17.</li>
@@ -210,6 +212,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><b>Sample</b>: the 256 smallest-hash features of a cell, stored as chunks with level = N.</li>
           <li><b>Id run</b>: sorted (hash, key) pairs, one per upload.</li>
           <li><b>Snapshot</b>: one upload’s commit. A row is visible at s when begin ≤ s and s &lt; end.</li>
+          <li><b>Cursor</b>: the (key, id) of the last feature a page returned. It carries no snapshot; each page reads the latest one.</li>
           <li><b>Virtual file</b>: a file’s bytes stored as block rows, read back through the file-bytes overlay.</li>
         </ul>
       </div>
@@ -512,7 +515,7 @@ const MODEL = {
     layout: ['file_id identity pk', 'collection, kind, bytes', 'published, created'], index: ['pk (file_id)'] },
   snapshots: { band: 'p', col: 5, t: 'snapshots', kind: 'db', size: () => 300,
     l1: () => '1 row per upload', l2: () => 'begin, end',
-    text: 'One row per snapshot, the commit that created it. Cursors pin one; retention is 72 h.',
+    text: 'One row per upload’s commit. Pages read the latest one. Rows it replaces stay 15 minutes, for requests already running.',
     layout: ['collection, id', 'created'], index: ['pk (collection, id)'] },
   id_runs: { band: 'p', col: 6, t: 'id_runs', kind: 'db', size: c => c.Wr.runBytes,
     l1: c => `${fmtBytes(c.Wr.runBytes)} of runs`, l2: () => '1 row per upload',
@@ -524,7 +527,7 @@ const MODEL = {
     layout: [], index: [] },
   catalog: { band: 'r', col: 1, t: 'Catalog', kind: 'db', share: c => c.Rd.steps[0].t / c.Rd.total,
     l1: c => `${fmtBytes(c.Rd.steps[0].db)} metadata`, l2: () => 'once per snap',
-    text: 'Overlay on the chunks table. One query loads the chunk list for (collection, s), kept in a 256 MiB LRU per worker.',
+    text: 'Overlay on the chunks table. One query loads the chunk list of the latest snapshot, kept in a 256 MiB LRU per worker.',
     layout: ['where collection = $1', 'and begin_snapshot ≤ s', 'and (end_snapshot is null or > s)'], index: ['uses (collection, begin_snapshot)'] },
   prune: { band: 'r', col: 2, t: 'Prune', kind: 'cpu', share: c => c.Rd.steps[1].t / c.Rd.total,
     l1: c => `${fmtTime(c.Rd.steps[1].cpu)} CPU`, l2: () => 'envelope, zones',
@@ -540,7 +543,7 @@ const MODEL = {
     layout: [], index: [] },
   response: { band: 'r', col: 5, t: 'Response', kind: 'net', share: c => c.Rd.steps[4].t / c.Rd.total,
     l1: c => `${fmtBytes(c.Rd.steps[4].net)} out`, l2: c => `${fmtTime(c.Rd.steps[4].net / c.link)} on the link`,
-    text: 'Features stream out in (key, id) order, as zstd when the client accepts it. The cursor pins the snapshot and carries the last (key, id). A cursor older than 72 h answers 410.',
+    text: 'Features stream out in (key, id) order, as zstd when the client accepts it. The cursor carries only the last (key, id), so each page reads the latest snapshot and an upload between pages shows in the rest of the walk. Cursors never expire.',
     layout: [], index: [] },
   idov: { band: 'r', col: 6, t: 'Id runs', kind: 'db', size: c => c.Wr.runBytes,
     l1: c => `${fmtBytes(c.Wr.runBytes)} if uncached`, l2: () => 'decodes the run',
@@ -949,11 +952,11 @@ class Snaps extends Fig {
 }
 
 const REQS = [
-  { label: 'items?bbox=', lines: [['catalog overlay,', 'snapshot s'], ['prune: envelope', 'per chunk'], ['file bytes,', 'whole chunks'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']],
-    run: c => readBBox(c.f, c.page, c.link), note: 'Reads whole chunks, not just the matching rows: a page still moves every chunk it lands in. The cursor pins the snapshot.' },
-  { label: 'items?filter=', lines: [['catalog overlay,', 'snapshot s'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']],
+  { label: 'items?bbox=', lines: [['catalog overlay,', 'latest snapshot'], ['prune: envelope', 'per chunk'], ['file bytes,', 'whole chunks'], ['FGB search,', 'packed R-tree'], ['page by', '(key, id)']],
+    run: c => readBBox(c.f, c.page, c.link), note: 'Reads whole chunks, not just the matching rows: a page still moves every chunk it lands in. The cursor carries only (key, id), so each page reads the latest snapshot.' },
+  { label: 'items?filter=', lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'evaluate predicate'], ['read each candidate', 'chunk whole'], ['keep matches,', 'page']],
     run: c => readFilter(c.f, c.page, c.link), note: 'Worst case: no postings yet, so every chunk of the cell is a candidate and each one is read whole. Postings would remove most of this cost.' },
-  { label: 'numberMatched', lines: [['catalog overlay,', 'snapshot s'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
+  { label: 'numberMatched', lines: [['catalog overlay,', 'latest snapshot'], ['prune: zone', 'maps'], ['column files', 'are counted'], ['no FGB', 'is read']],
     run: c => readCount(c.f, c.link), note: 'Counts from column files only, so it never decodes geometry. Omitted with a bbox alone, as in v1.' },
   { label: 'items?overview=N', lines: [['catalog overlay', 'at level N'], ['prune:', 'envelopes'], ['samples,', 'LRU'], ['FGB search', 'of the samples'], ['page by', '(key, id)']],
     run: c => readOverview(c.page, c.link), note: 'N is 2, 4, 6, 8, 10 or 12, chosen by the client. No filter. Samples are small, so overviews are the cheap way to show a whole area.' },
@@ -1134,7 +1137,7 @@ const SIDE = {
   },
   snaps() {
     return `<h2>Snapshot <span id="s-val"></span></h2>
-      <p>A reader pinned to snapshot s sees each row whose begin ≤ s and s &lt; end. A row’s thickness is its bytes.</p>
+      <p>A page read at snapshot s sees each row whose begin ≤ s and s &lt; end. Pages read the latest snapshot, so this slider is a timeline, not a pin. A row’s thickness is its bytes.</p>
       <input type="range" id="s-range" min="1" max="3" step="1" aria-label="Snapshot">
       <p class="note" id="s-base"></p><p class="note" id="s-row"></p><p class="note" id="s-retained"></p>
       <div class="ctl"><button class="btn" data-act="demo">Play (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
@@ -1183,7 +1186,7 @@ function syncSnaps() {
   set('#s-base', `P1 upload that read snapshot ${N.s}: ${N.s >= 2 ? 'accepted' : '409, because P1 changed at 2'}. P2 upload: ${N.s >= 3 ? 'accepted' : '409, because P2 changed at 3'}.`);
   set('#s-row', row ? `${row[0]}: ${row[3]} Visible from snapshot ${row[1]}${row[2] ? `, up to but not including ${row[2]}` : ' onwards'}. Size ${fmtBytes(snapBytes(row[4], c))}.` : 'Click a row for its detail.');
   const retained = SNAP.filter(x => x[2] !== null).reduce((a, x) => a + snapBytes(x[4], c), 0);
-  set('#s-retained', `Replaced rows kept for 72 h before reaping: ${fmtBytes(retained)} at this cell size.`);
+  set('#s-retained', `Replaced rows kept 15 minutes before reaping: ${fmtBytes(retained)} at this cell size.`);
   set('#status-snaps', `Snapshot ${N.s}: ${SNAP.filter(x => x[1] <= N.s && (x[2] === null || N.s < x[2])).length} of ${SNAP.length} rows visible.`);
 }
 function syncReads() {

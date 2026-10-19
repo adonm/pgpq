@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 	"github.com/jackc/pgx/v5"
@@ -20,14 +19,11 @@ import (
 
 var (
 	ErrInvalid         = ingest.ErrInvalid
-	ErrGone            = errors.New("snapshot expired")
 	ErrBadCursor       = errors.New("cursor does not match the collection")
 	ErrFeatureNotFound = errors.New("feature not found")
 	ErrDuplicate       = errors.New("more than one feature has this id; reload the partitions that hold it")
 	ErrConflict        = errors.New("a listed partition changed after the base snapshot")
 )
-
-const Retention = 72 * time.Hour
 
 const cacheBytes = 256 << 20
 

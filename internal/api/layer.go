@@ -186,8 +186,6 @@ func layerError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, layer.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-	case errors.Is(err, layer.ErrGone):
-		http.Error(w, err.Error(), http.StatusGone)
 	case errors.Is(err, layer.ErrBadCursor):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, layer.ErrFeatureNotFound):

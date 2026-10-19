@@ -3,6 +3,7 @@ package layer
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -196,7 +197,7 @@ func TestLayerLoadPagesAndReplacesPartitions(t *testing.T) {
 	if first.Next == nil || len(first.Hits) != 50 {
 		t.Fatalf("first page = %d hits, next %v", len(first.Hits), first.Next)
 	}
-	pinned := first.Next
+	cursor := first.Next
 
 	newParis := cityFeatures("paris2", paris, 120, 4)
 	cells := slices.Concat(cellsOf(t, parisFeatures), cellsOf(t, newParis))
@@ -224,14 +225,15 @@ func TestLayerLoadPagesAndReplacesPartitions(t *testing.T) {
 		t.Fatalf("dhaka changed by a paris load: %d", len(dhakaNow))
 	}
 
-	rest := readAll(t, l, name, Query{BBox: box(paris), Limit: 100, Cursor: pinned})
-	if len(first.Hits)+len(rest) != 300 {
-		t.Fatalf("pinned pages returned %d features, want 300 from snapshot 1", len(first.Hits)+len(rest))
-	}
-	for _, h := range rest {
-		if h.ID[:5] != "paris" || h.ID[:6] == "paris2" {
-			t.Fatalf("pinned cursor read %s from the wrong snapshot", h.ID)
+	rest := readAll(t, l, name, Query{BBox: box(paris), Limit: 100, Cursor: cursor})
+	var want []string
+	for _, h := range current {
+		if compareKeyID(h.Key, h.ID, cursor.Key, cursor.ID) > 0 {
+			want = append(want, h.ID)
 		}
+	}
+	if !slices.Equal(idsOf(rest), want) {
+		t.Fatalf("walk resumed after a reload returned %v, want %v", idsOf(rest), want)
 	}
 
 	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, dhakaFeatures), cells); !errors.Is(err, ErrInvalid) {
@@ -255,19 +257,19 @@ func TestLayerLoadPagesAndReplacesPartitions(t *testing.T) {
 		t.Fatalf("dhaka still returns %d features after emptying", len(emptied))
 	}
 
-	if _, err := l.Items(ctx, name, Query{BBox: box(paris), Limit: 10, Cursor: &Cursor{UID: pinned.UID + 1, Snapshot: pinned.Snapshot, Key: pinned.Key, ID: pinned.ID}}); !errors.Is(err, ErrBadCursor) {
+	if _, err := l.Items(ctx, name, Query{BBox: box(paris), Limit: 10, Cursor: &Cursor{UID: cursor.UID + 1, Level: cursor.Level, Key: cursor.Key, ID: cursor.ID}}); !errors.Is(err, ErrBadCursor) {
 		t.Fatalf("cursor for another collection: %v", err)
 	}
 	if _, err := l.pool.Exec(ctx, `update pfgb.snapshots set created = now() - interval '73 hours' where collection = $1 and id = 1`, name); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Items(ctx, name, Query{BBox: box(paris), Limit: 10, Cursor: pinned}); !errors.Is(err, ErrGone) {
-		t.Fatalf("cursor older than retention: %v", err)
+	if _, err := l.Items(ctx, name, Query{BBox: box(paris), Limit: 10, Cursor: cursor}); err != nil {
+		t.Fatalf("cursor after 73 hours: %v", err)
 	}
 }
 
 func TestDecodeCursorRoundTrip(t *testing.T) {
-	want := Cursor{UID: 7, Snapshot: 42, Key: 1<<63 + 5, ID: "a.b.c"}
+	want := Cursor{UID: 7, Level: 8, Key: 1<<63 + 5, ID: "a.b.c"}
 	got, err := DecodeCursor(want.String())
 	if err != nil {
 		t.Fatal(err)
@@ -277,6 +279,10 @@ func TestDecodeCursorRoundTrip(t *testing.T) {
 	}
 	if _, err := DecodeCursor("!!!"); !errors.Is(err, ErrBadCursor) {
 		t.Fatalf("garbage cursor: %v", err)
+	}
+	old := base64.RawURLEncoding.EncodeToString([]byte("7.42.0.5.a.b"))
+	if _, err := DecodeCursor(old); !errors.Is(err, ErrBadCursor) {
+		t.Fatalf("cursor in the old format: %v", err)
 	}
 }
 

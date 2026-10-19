@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
@@ -74,20 +72,10 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	snapshot := coll.Snapshot
-	if q.Cursor != nil {
-		if q.Cursor.UID != coll.UID || q.Cursor.Level != q.Level {
-			return Page{}, ErrBadCursor
-		}
-		created, found, err := l.snapshotCreated(ctx, name, q.Cursor.Snapshot)
-		if err != nil {
-			return Page{}, err
-		}
-		if !found || time.Since(created) > Retention {
-			return Page{}, ErrGone
-		}
-		snapshot = q.Cursor.Snapshot
+	if q.Cursor != nil && (q.Cursor.UID != coll.UID || q.Cursor.Level != q.Level) {
+		return Page{}, ErrBadCursor
 	}
+	snapshot := coll.Snapshot
 	metas, err := l.catalog(ctx, coll, snapshot, q.Level)
 	if err != nil {
 		return Page{}, err
@@ -125,7 +113,7 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	}
 	if len(page.Hits) == q.Limit {
 		last := page.Hits[len(page.Hits)-1]
-		page.Next = &Cursor{UID: coll.UID, Snapshot: snapshot, Level: q.Level, Key: last.Key, ID: last.ID}
+		page.Next = &Cursor{UID: coll.UID, Level: q.Level, Key: last.Key, ID: last.ID}
 	}
 	return page, nil
 }
@@ -333,16 +321,4 @@ func storedID(f *flattypes.Feature, cols []chunk.Column, column string) (string,
 		return "", fmt.Errorf("layer: stored id %q is unusable", column)
 	}
 	return text, nil
-}
-
-func (l *Layer) snapshotCreated(ctx context.Context, name string, snapshot int64) (time.Time, bool, error) {
-	var created time.Time
-	err := l.pool.QueryRow(ctx, `select created from pfgb.snapshots where collection = $1 and id = $2`, name, snapshot).Scan(&created)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return time.Time{}, false, nil
-	}
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	return created, true, nil
 }
