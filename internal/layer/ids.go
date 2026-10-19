@@ -179,7 +179,7 @@ func compareCandidates(a, b candidate) int {
 }
 
 func (l *Layer) findInChunks(ctx context.Context, coll Collection, probe candidate, id string) ([]foundHit, error) {
-	rows, err := l.pool.Query(ctx, `select file_id from pfgb.chunks where collection = $1 and cell = $2 and first_key <= $3 and last_key >= $3 and begin_snapshot <= $4 and (end_snapshot is null or end_snapshot > $4)`,
+	rows, err := l.pool.Query(ctx, `select file_id from pfgb.chunks where collection = $1 and cell = $2 and first_key <= $3 and last_key >= $3 and begin_snapshot <= $4 and (end_snapshot is null or end_snapshot > $4) and level = 0`,
 		coll.Name, spatial.ToOrdered(probe.cell), spatial.ToOrdered(probe.key), coll.Snapshot)
 	if err != nil {
 		return nil, err

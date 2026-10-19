@@ -82,13 +82,13 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 			spatial.ToOrdered(c.first.key), c.first.id,
 			spatial.ToOrdered(c.last.key), c.last.id,
 			c.bounds[0], c.bounds[1], c.bounds[2], c.bounds[3],
-			int32(c.rows), c.fileID, snapshot, c.colFile, c.zone,
+			int32(c.rows), c.fileID, snapshot, c.colFile, c.zone, c.level,
 		}
 		fileIDs = append(fileIDs, c.fileID, c.colFile)
 	}
 	if len(rows) > 0 {
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "chunks"},
-			[]string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "begin_snapshot", "col_file", "zone"},
+			[]string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "begin_snapshot", "col_file", "zone", "level"},
 			pgx.CopyFromRows(rows)); err != nil {
 			return LoadResult{}, err
 		}

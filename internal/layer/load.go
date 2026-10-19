@@ -2,6 +2,7 @@ package layer
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,11 +22,15 @@ const (
 	targetChunkBytes = 2 << 20
 	maxChunkFeatures = 50000
 	maxChunkBytes    = 8 << 20
+	detailLevel      = 0
+	overviewLevel    = 10
+	overviewCap      = 256
 )
 
 type entry struct {
 	key    uint64
 	id     string
+	hash   uint64
 	cell   uint64
 	index  int
 	bounds [4]float64
@@ -33,6 +38,7 @@ type entry struct {
 
 type chunkRow struct {
 	cell    uint64
+	level   int
 	seq     int
 	first   entry
 	last    entry
@@ -66,11 +72,34 @@ func (l *Layer) Load(ctx context.Context, name string, ds ingest.Dataset, cells 
 	if err != nil {
 		return LoadResult{}, err
 	}
-	chunks, err := l.writeCells(ctx, name, ds, groupByCell(entries))
+	chunks, err := l.writeCells(ctx, name, ds, groupByCell(entries), detailLevel)
 	if err != nil {
 		return LoadResult{}, err
 	}
-	return l.commit(ctx, name, ds, cells, chunks, runFile, len(entries))
+	overview, err := l.writeCells(ctx, name, ds, groupByCell(sampleOverview(entries)), overviewLevel)
+	if err != nil {
+		return LoadResult{}, err
+	}
+	return l.commit(ctx, name, ds, cells, append(chunks, overview...), runFile, len(entries))
+}
+
+func sampleOverview(entries []entry) []entry {
+	groups := map[uint64][]entry{}
+	for _, e := range entries {
+		cell := spatial.Level(e.key, overviewLevel)
+		groups[cell] = append(groups[cell], e)
+	}
+	var out []entry
+	for _, group := range groups {
+		slices.SortFunc(group, func(a, b entry) int {
+			if c := cmp.Compare(a.hash, b.hash); c != 0 {
+				return c
+			}
+			return compareKeyID(a.key, a.id, b.key, b.id)
+		})
+		out = append(out, group[:min(len(group), overviewCap)]...)
+	}
+	return out
 }
 
 func indexFeatures(ds ingest.Dataset, cells []uint64) ([]entry, error) {
@@ -98,7 +127,7 @@ func indexFeatures(ds ingest.Dataset, cells []uint64) ([]entry, error) {
 			return nil, invalidf("duplicate id %q", id)
 		}
 		seen[id] = struct{}{}
-		out = append(out, entry{key: key, id: id, cell: cell, index: i, bounds: bounds})
+		out = append(out, entry{key: key, id: id, hash: idHash(id), cell: cell, index: i, bounds: bounds})
 	}
 	return out, nil
 }
@@ -143,7 +172,7 @@ func groupByCell(entries []entry) map[uint64][]entry {
 	return groups
 }
 
-func (l *Layer) writeCells(ctx context.Context, name string, ds ingest.Dataset, groups map[uint64][]entry) ([]chunkRow, error) {
+func (l *Layer) writeCells(ctx context.Context, name string, ds ingest.Dataset, groups map[uint64][]entry, level int) ([]chunkRow, error) {
 	cells := make([]uint64, 0, len(groups))
 	for cell := range groups {
 		cells = append(cells, cell)
@@ -164,7 +193,7 @@ func (l *Layer) writeCells(ctx context.Context, name string, ds ingest.Dataset, 
 		go func(cell uint64) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			rows, err := l.writeCell(ctx, name, ds, cell, groups[cell])
+			rows, err := l.writeCell(ctx, name, ds, cell, groups[cell], level)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -184,7 +213,7 @@ func (l *Layer) writeCells(ctx context.Context, name string, ds ingest.Dataset, 
 	return out, nil
 }
 
-func (l *Layer) writeCell(ctx context.Context, name string, ds ingest.Dataset, cell uint64, entries []entry) ([]chunkRow, error) {
+func (l *Layer) writeCell(ctx context.Context, name string, ds ingest.Dataset, cell uint64, entries []entry, level int) ([]chunkRow, error) {
 	var rows []chunkRow
 	start, estimated := 0, 0
 	for i := range entries {
@@ -194,7 +223,7 @@ func (l *Layer) writeCell(ctx context.Context, name string, ds ingest.Dataset, c
 		if !last && estimated < targetChunkBytes && count < maxChunkFeatures {
 			continue
 		}
-		cut, err := l.writeRange(ctx, name, ds, cell, entries[start:i+1])
+		cut, err := l.writeRange(ctx, name, ds, cell, entries[start:i+1], level)
 		if err != nil {
 			return nil, err
 		}
@@ -207,7 +236,7 @@ func (l *Layer) writeCell(ctx context.Context, name string, ds ingest.Dataset, c
 	return rows, nil
 }
 
-func (l *Layer) writeRange(ctx context.Context, name string, ds ingest.Dataset, cell uint64, entries []entry) ([]chunkRow, error) {
+func (l *Layer) writeRange(ctx context.Context, name string, ds ingest.Dataset, cell uint64, entries []entry, level int) ([]chunkRow, error) {
 	batch := make([]chunk.InputFeature, len(entries))
 	for i, e := range entries {
 		batch[i] = ds.Features[e.index]
@@ -218,11 +247,11 @@ func (l *Layer) writeRange(ctx context.Context, name string, ds ingest.Dataset, 
 	}
 	if len(data) > maxChunkBytes && len(entries) > 1 {
 		mid := len(entries) / 2
-		left, err := l.writeRange(ctx, name, ds, cell, entries[:mid])
+		left, err := l.writeRange(ctx, name, ds, cell, entries[:mid], level)
 		if err != nil {
 			return nil, err
 		}
-		right, err := l.writeRange(ctx, name, ds, cell, entries[mid:])
+		right, err := l.writeRange(ctx, name, ds, cell, entries[mid:], level)
 		if err != nil {
 			return nil, err
 		}
@@ -250,6 +279,7 @@ func (l *Layer) writeRange(ctx context.Context, name string, ds ingest.Dataset, 
 	}
 	return []chunkRow{{
 		cell:    cell,
+		level:   level,
 		first:   entries[0],
 		last:    entries[len(entries)-1],
 		bounds:  unionBounds(entries),

@@ -19,6 +19,7 @@ import (
 type Query struct {
 	BBox   *[4]float64
 	Filter cql.Expr
+	Level  int
 	Limit  int
 	Cursor *Cursor
 }
@@ -56,11 +57,18 @@ type catalogKey struct {
 	collection string
 	uid        int64
 	snapshot   int64
+	level      int
 }
 
 func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	if q.Limit <= 0 {
 		return Page{}, invalidf("limit must be positive")
+	}
+	if q.Level != detailLevel && q.Level != overviewLevel {
+		return Page{}, invalidf("overview level %d is not served", q.Level)
+	}
+	if q.Level != detailLevel && q.Filter != nil {
+		return Page{}, invalidf("overview is served without a filter")
 	}
 	coll, err := l.Collection(ctx, name)
 	if err != nil {
@@ -68,7 +76,7 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	}
 	snapshot := coll.Snapshot
 	if q.Cursor != nil {
-		if q.Cursor.UID != coll.UID {
+		if q.Cursor.UID != coll.UID || q.Cursor.Level != q.Level {
 			return Page{}, ErrBadCursor
 		}
 		created, found, err := l.snapshotCreated(ctx, name, q.Cursor.Snapshot)
@@ -80,7 +88,7 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 		}
 		snapshot = q.Cursor.Snapshot
 	}
-	metas, err := l.catalog(ctx, coll, snapshot)
+	metas, err := l.catalog(ctx, coll, snapshot, q.Level)
 	if err != nil {
 		return Page{}, err
 	}
@@ -117,7 +125,7 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	}
 	if len(page.Hits) == q.Limit {
 		last := page.Hits[len(page.Hits)-1]
-		page.Next = &Cursor{UID: coll.UID, Snapshot: snapshot, Key: last.Key, ID: last.ID}
+		page.Next = &Cursor{UID: coll.UID, Snapshot: snapshot, Level: q.Level, Key: last.Key, ID: last.ID}
 	}
 	return page, nil
 }
@@ -127,7 +135,7 @@ func (l *Layer) Count(ctx context.Context, name string, snapshot int64, filter c
 	if err != nil {
 		return 0, err
 	}
-	metas, err := l.catalog(ctx, coll, snapshot)
+	metas, err := l.catalog(ctx, coll, snapshot, detailLevel)
 	if err != nil {
 		return 0, err
 	}
@@ -157,12 +165,12 @@ func (l *Layer) Count(ctx context.Context, name string, snapshot int64, filter c
 	return total, nil
 }
 
-func (l *Layer) catalog(ctx context.Context, coll Collection, snapshot int64) ([]chunkMeta, error) {
-	key := catalogKey{collection: coll.Name, uid: coll.UID, snapshot: snapshot}
+func (l *Layer) catalog(ctx context.Context, coll Collection, snapshot int64, level int) ([]chunkMeta, error) {
+	key := catalogKey{collection: coll.Name, uid: coll.UID, snapshot: snapshot, level: level}
 	if metas, ok := l.catalogs.Get(key); ok {
 		return metas, nil
 	}
-	metas, err := l.loadCatalog(ctx, coll.Name, snapshot)
+	metas, err := l.loadCatalog(ctx, coll.Name, snapshot, level)
 	if err != nil {
 		return nil, err
 	}
@@ -170,8 +178,8 @@ func (l *Layer) catalog(ctx context.Context, coll Collection, snapshot int64) ([
 	return metas, nil
 }
 
-func (l *Layer) loadCatalog(ctx context.Context, name string, snapshot int64) ([]chunkMeta, error) {
-	rows, err := l.pool.Query(ctx, `select file_id, col_file, features, minx, miny, maxx, maxy, last_key, last_id, zone from pfgb.chunks where collection = $1 and begin_snapshot <= $2 and (end_snapshot is null or end_snapshot > $2) order by first_key, first_id collate "C"`, name, snapshot)
+func (l *Layer) loadCatalog(ctx context.Context, name string, snapshot int64, level int) ([]chunkMeta, error) {
+	rows, err := l.pool.Query(ctx, `select file_id, col_file, features, minx, miny, maxx, maxy, last_key, last_id, zone from pfgb.chunks where collection = $1 and begin_snapshot <= $2 and (end_snapshot is null or end_snapshot > $2) and level = $3 order by first_key, first_id collate "C"`, name, snapshot, level)
 	if err != nil {
 		return nil, err
 	}

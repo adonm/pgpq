@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,7 +66,16 @@ func (s *Server) layerItems(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	q := layer.Query{BBox: bbox, Filter: filter, Limit: limit}
+	level := 0
+	if value := r.URL.Query().Get("overview"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			http.Error(w, "overview must be a level number", http.StatusBadRequest)
+			return
+		}
+		level = parsed
+	}
+	q := layer.Query{BBox: bbox, Filter: filter, Level: level, Limit: limit}
 	if value := r.URL.Query().Get("cursor"); value != "" {
 		cursor, err := layer.DecodeCursor(value)
 		if err != nil {
@@ -86,7 +96,7 @@ func (s *Server) layerItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var matched *int64
-	if bbox == nil && r.URL.Query().Get("numberMatched") == "true" {
+	if bbox == nil && level == 0 && r.URL.Query().Get("numberMatched") == "true" {
 		n, err := s.layers.Count(r.Context(), r.PathValue("id"), page.Snapshot, filter)
 		if err != nil {
 			layerError(w, err)

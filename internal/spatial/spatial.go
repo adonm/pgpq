@@ -22,6 +22,10 @@ func Partition(key uint64) uint64 {
 	return uint64(s2.CellID(key).Parent(PartitionLevel))
 }
 
+func Level(key uint64, level int) uint64 {
+	return uint64(s2.CellID(key).Parent(level))
+}
+
 func Token(cell uint64) string {
 	return s2.CellID(cell).ToToken()
 }
