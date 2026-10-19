@@ -28,6 +28,9 @@ test:
 test-integration:
     POSTFGB_TEST_DSN="{{dsn}}" go test -count=1 -timeout 300s ./...
 
+bench-osm region="luxembourg":
+    bench/run.sh "{{region}}"
+
 ci: fmt-check vet test
 
 pg-up:

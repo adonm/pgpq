@@ -7,3 +7,5 @@ postfgb-image.tar
 .env
 tmpgen/
 .oy/
+
+bench/data/

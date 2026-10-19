@@ -162,7 +162,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <button class="btn" data-n="100000000">100M</button>
       <button class="btn" data-n="1000000000">1B</button>
       <span class="k">Cell</span>
-      <button class="btn" data-f="12000">12k</button>
+      <button class="btn" data-f="28534">28.5k</button>
       <button class="btn" data-f="2500000">2.5M</button>
       <span class="k">Page</span>
       <button class="btn" data-page="1000">1k</button>
@@ -246,7 +246,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     <div class="box">
       <h3>Tradeoffs</h3>
       <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once. L6 and L4 are rebuilt in the commit; L2 is queued for the background worker.</p>
-      <p><b>Detail plus three samples.</b> L8 is the detail file; the samples are L6, L4 and L2, each 2,048 per cell. L8 used to have its own sample; dropping it saves up to 210 GB, and L4 at about 0.8 GB fills the z7–8 gap. L6 and L4 are rebuilt in the commit, L2 by a background worker. At high zoom detail reads only the ranges its R-tree names; the figure’s picker uses samples below z11, and the client chooses the level.</p>
+      <p><b>Detail plus three samples.</b> L8 is the detail file; the samples are L6, L4 and L2, each 2,048 per cell. L8 used to have its own sample; dropping it saves up to ~950 GB at 2,048 samples, and L4 at about 3.7 GB globally fills the z7–8 gap. L6 and L4 are rebuilt in the commit, L2 by a background worker. At high zoom detail reads only the ranges its R-tree names; the figure’s picker uses samples below z11, and the client chooses the level.</p>
       <p><b>Parquet, not a hand-rolled sidecar.</b> A Parquet column file with 2,048-row groups writes numeric/time min/max into its footer, so a filter reads stats and only the predicate columns. That adds a dependency, but it removes the whole-sidecar scan.</p>
       <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one file’s blocks, well under 1 MB. Count the row and its primary-key entry and it costs about 80 B per feature, or about 75 GB at 1e9. The target keys every table on a 2-byte collection id, and the name lives once in collections; the code still uses the bigint uid. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
       <p><b>Sort and encode run in the loader (target).</b> The target upload is a canonical FlatGeobuf in (key, id) order with its R-tree. The server checks it and only derives the fence, Parquet columns and id rows. That takes about 70% of the ingest CPU off the server, at the cost of a stricter upload contract and trusting the loader’s index after checking its root.</p>
@@ -258,6 +258,17 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <p>v2 target: 4,000 lines of production Go. After removing v1 and adding Parquet/L4 the tree is 7,029 production lines plus tests; the remaining gap is the storage alignment.</p>
       <p class="note">v1 is gone from the tree. Parquet columns are built per chunk; the next pass replaces chunks with one file per cell.</p>
     </div>
+    <div class="box">
+      <h3>Measured OSM benchmark</h3>
+      <table aria-label="Measured OSM benchmark results">
+        <thead><tr><th>profile</th><th>features</th><th>L8 cells</th><th>upload</th><th>stored fgb</th><th>columns</th><th>load</th><th>per cell</th></tr></thead>
+        <tbody>
+          <tr><td>Luxembourg buildings</td><td>228,273</td><td>8</td><td>86.7 MB</td><td>26.1 MB</td><td>3.9 MB</td><td>13.8 s</td><td>mean 28,534</td></tr>
+          <tr><td>Monaco enriched 5×</td><td>4,628</td><td>2</td><td>12.4 MB</td><td>4.8 MB</td><td>0.66 MB</td><td>1.9 s</td><td>mean 2,314</td></tr>
+        </tbody>
+      </table>
+      <p class="note">Local PostgreSQL 18, one writable worker, OSM France extracts. Enriched: 129 fields (5× the 26-field OSM schema), 1e-7 coordinates, 1 m edge segmentation. Per filled feature: 2,687 B raw, 711 B zstd upload, 1,182 B stored, 142 B columns. Building-only L4/L2 samples are empty because the subpixel filter drops footprint-sized features; mixed OSM layers keep larger features. The current chunk/Parquet path is measured; the target one-file-per-cell path is not.</p>
+    </div>
     <div class="grid2">
       <div>
         <h3>Decisions</h3>
@@ -268,7 +279,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag built">built</span><b>Columns</b><br><span>Parquet with 2,048-row groups is built per chunk; old chunks still read PFA1. Numeric/time row-group min/max is the zone map; a filter reads stats, skips groups and projects only the predicate columns. The target is one column file per partition.</span></li>
           <li><span class="tag built">built</span><b>Overview levels</b><br><span>L8 is detail; the samples are L6, L4 and L2, each capped at 2,048 features per cell. L6 is built from detail, L4 from L6, L2 from L4. L6 and L4 are rebuilt in the commit; L2 by a background worker after 5 s quiet. Detail reads the L8 file through its R-tree.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell; the server reads only that body and writes only that cell’s rows. Not built: the /v2 load still takes multi-cell bodies.</span></li>
-          <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification. L6, L4 and L2 keep up to 2,048 per cell; L8 has no sample. L4 costs about 0.8 GB globally, L6 about 13 GB and L2 tiny; dropping the L8 sample frees up to 210 GB. L2, L4 and L6 drop subpixel areas and lines (~1.6 km, ~400 m and ~100 m at 48°N); points stay; L8 detail keeps everything. No zoom mapping on the server: the client asks for overview=N. L2 is eventually consistent. The rank is the smallest hash, not the largest bbox; changing that is a separate decision.</span></li>
+          <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification. L6, L4 and L2 keep up to 2,048 per cell; L8 has no sample. L4 costs about 3.7 GB globally, L6 about 59 GB and L2 tiny; dropping the L8 sample frees up to ~950 GB. L2, L4 and L6 drop subpixel areas and lines (~1.6 km, ~400 m and ~100 m at 48°N); points stay; L8 detail keeps everything. No zoom mapping on the server: the client asks for overview=N. L2 is eventually consistent. The rank is the smallest hash, not the largest bbox; changing that is a separate decision.</span></li>
           <li><span class="tag built">built</span><b>Caches</b><br><span>Two 256 MiB LRUs per worker: block bytes and the collection catalog. The catalog is still per collection; per-cell file rows keyed by cell and version are the target.</span></li>
           <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the current rows, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
           <li><span class="tag built">built</span><b>Id index</b><br><span>One row per feature: its id hash and key. Replaced with the cell on every upload. No runs, merges or Bloom filters.</span></li>
@@ -279,7 +290,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <div>
         <h3>Risks</h3>
         <ul>
-          <li>Loads are held in memory and nothing spills. The densest cell (about 2.5 million features) decodes to about 2.2 GB and sets the worker’s memory.</li>
+          <li>Loads are held in memory and nothing spills. The densest cell (about 2.5 million features) decodes to about 6.7 GB and sets the worker’s memory.</li>
           <li>A filter on a dense cell reads one predicate column from the Parquet file plus matched FGB blocks. Row-group stats skip groups, but a broad filter can still approach the column bytes, and equality on high-cardinality fields prunes poorly.</li>
           <li>numberMatched has Parquet row-group stats but no postings: it reads one predicate column across surviving groups and cannot stop early.</li>
           <li>L2 samples are deferred: a commit queues the L2 parent and a background worker rebuilds it after 5 s quiet. The worker drains batches, so sustained uploads can make L2 lag detail, L6 and L4.</li>
@@ -288,17 +299,20 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one read.</li>
           <li>The server trusts the loader’s R-tree after checking the index root, order, cell and ids. A wrong index can hide rows without corrupting them.</li>
           <li>A read can list a file just before a commit deletes it. It retries once against the new list, so under a heavy write rate some requests are slower.</li>
-          <li>The figure’s picker uses detail from z11, so high-zoom requests pay the L8 R-tree read, up to about 7 MB for a dense cell, cached per cell. The L8 sample that used to hide that cost was up to 210 GB of samples; L4 is the better use of that storage.</li>
-          <li>Dense cities at zoom 13 hold about 247,800 features on screen, about 52 MB over the link; a page limit keeps the response to 1,000. The figure’s picker uses detail from z11; a full-view request is the client’s choice.</li>
-          <li>L4 samples cost about 0.8 GB globally, L6 about 13 GB and L2 is negligible; the L8 sample is gone. The saving is real but the L8 detail file still has to be read at high zoom.</li>
+          <li>The figure’s picker uses detail from z11, so high-zoom requests pay the L8 R-tree read, up to about 7 MB for a dense cell, cached per cell. The L8 sample that used to hide that cost was up to ~950 GB of samples; L4 is the better use of that storage.</li>
+          <li>Dense cities at zoom 13 hold about 247,800 features on screen, about 176 MB over the link; a page limit keeps the response to 1,000. The figure’s picker uses detail from z11; a full-view request is the client’s choice.</li>
+          <li>L4 samples cost about 3.7 GB globally, L6 about 59 GB and L2 is negligible; the L8 sample is gone. The saving is real but the L8 detail file still has to be read at high zoom.</li>
           <li>Subpixel features are dropped from the L2, L4 and L6 samples: areal and linear features smaller than one pixel (about 1.6 km, 400 m and 100 m at 48°N); points stay. L8 detail keeps everything. A client wanting a small polygon at a coarse zoom will not see it, but detail still has it.</li>
+          <li>Building-only collections can produce empty L4/L2 samples: the subpixel filter removes footprint-sized features at those zooms. Mixed OSM layers keep larger landuse and roads. Decide whether to keep a minimum sample floor, use points/aggregates, or accept empty structure-only overviews.</li>
+          <li>The enriched benchmark uses 1 m edge segmentation; 1 cm vertex spacing would add roughly two orders of magnitude more geometry and is not modelled. The mean cell is measured from building-only Luxembourg; the 2.5M dense cell is a filled-in-structure assumption, not an OSM measurement.</li>
+          <li>The 711 B/feature upload assumes loader-side zstd. The current API accepts uncompressed FGB, measured at 2,687 B/feature; loader compression and the per-cell file layout are target work.</li>
         </ul>
       </div>
     </div>
   </section>
 </main>
 
-<footer>1–5 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes per feature are estimates from OSM Layercake data; the CPU split and Postgres speed are too</footer>
+<footer>1–5 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes are measured from OSM buildings; the enriched profile uses 5× OSM attributes and 1 m edge segmentation</footer>
 
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
 <script>
@@ -308,7 +322,7 @@ const PAL = {
 };
 let P = PAL.dark;
 
-const K = { raw: 940, up: 200, zst: 220, col: 40, colOne: 10, parquet: 2048, statGroup: 128, idxRow: 80, node: 40, fence: 16, fenceEvery: 256, meta: 160, block: 8192, sec: 10e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 2687, up: 711, zst: 1040, col: 142, colOne: 10, parquet: 2048, statGroup: 128, idxRow: 80, node: 40, fence: 16, fenceEvery: 256, meta: 160, block: 8192, sec: 0.00041, fixed: 0.1, db: 5e8, dec: 1e9 };
 const CAPS = { 6: 2048, 4: 2048, 2: 2048 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
 
@@ -328,8 +342,8 @@ function collectionStored(f) {
   const rows = 3 * cells + 3 * l6Cells(cells) + 3 * l4Cells(cells) + 3 * l2Cells(cells);
   return { detail, samples, rows, total: detail + samples + ids + rows * K.meta };
 }
-const W = { n: 1000000000, f: 12000, link: 125e6, page: 1000 };
-const TYPES = [{ name: 'mean', f: 12000 }, { name: 'dense', f: 2500000 }];
+const W = { n: 1000000000, f: 28534, link: 125e6, page: 1000 };
+const TYPES = [{ name: 'mean', f: 28534 }, { name: 'dense', f: 2500000 }];
 const S = {
   tab: 'model',
   model: { sel: 'catalog', lit: new Set(), demo: null },
@@ -469,7 +483,7 @@ const EDGE_BYTES = c => ({
 const MODEL = {
   loader: { t: 'Loader', kind: 'net', share: c => c.Wr.tUp / c.Wr.total,
     l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
-    text: `Receives one canonical zstd FlatGeobuf per level-8 cell, about ${K.up} B per feature (estimated from OSM Layercake). The loader writes it in (key, id) order with its R-tree, so the server never sorts or re-encodes.`,
+    text: `Receives one canonical zstd FlatGeobuf per level-8 cell, about ${K.up} B per feature (enriched OSM benchmark). The loader writes it in (key, id) order with its R-tree, so the server never sorts or re-encodes.`,
     layout: ['body: canonical zstd FlatGeobuf, one cell', `upload bytes = features × ${K.up} B`], index: [] },
   decode: { t: 'Validate', kind: 'cpu', share: c => (c.Wr.stage.receive + c.Wr.stage.validate) / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.receive + c.Wr.stage.validate)} CPU`, l2: () => 'order, cell, ids',
