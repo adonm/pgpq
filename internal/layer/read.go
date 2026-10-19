@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
@@ -42,7 +41,8 @@ type chunkMeta struct {
 	fileID   int64
 	colFile  int64
 	features int
-	zone     map[string]zoneColumn
+	bounds   [4]float64
+	zone     string
 	lastKey  uint64
 	lastID   string
 }
@@ -50,6 +50,12 @@ type chunkMeta struct {
 type located struct {
 	hit    Hit
 	bounds [4]float64
+}
+
+type catalogKey struct {
+	collection string
+	uid        int64
+	snapshot   int64
 }
 
 func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
@@ -74,7 +80,7 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 		}
 		snapshot = q.Cursor.Snapshot
 	}
-	metas, err := l.chunksAt(ctx, name, snapshot, q.BBox, q.Filter != nil)
+	metas, err := l.catalog(ctx, coll, snapshot)
 	if err != nil {
 		return Page{}, err
 	}
@@ -83,11 +89,20 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 		if len(page.Hits) == q.Limit {
 			break
 		}
+		if q.BBox != nil && !intersects(meta.bounds, q.BBox) {
+			continue
+		}
 		if q.Cursor != nil && compareKeyID(meta.lastKey, meta.lastID, q.Cursor.Key, q.Cursor.ID) <= 0 {
 			continue
 		}
-		if q.Filter != nil && !mayMatch(q.Filter, meta.zone) {
-			continue
+		if q.Filter != nil {
+			zone, err := decodeZone(meta.zone)
+			if err != nil {
+				return Page{}, err
+			}
+			if !mayMatch(q.Filter, zone) {
+				continue
+			}
 		}
 		hits, err := l.matches(ctx, coll.IDColumn, meta, q)
 		if err != nil {
@@ -108,7 +123,11 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 }
 
 func (l *Layer) Count(ctx context.Context, name string, snapshot int64, filter cql.Expr) (int64, error) {
-	metas, err := l.chunksAt(ctx, name, snapshot, nil, filter != nil)
+	coll, err := l.Collection(ctx, name)
+	if err != nil {
+		return 0, err
+	}
+	metas, err := l.catalog(ctx, coll, snapshot)
 	if err != nil {
 		return 0, err
 	}
@@ -118,7 +137,11 @@ func (l *Layer) Count(ctx context.Context, name string, snapshot int64, filter c
 			total += int64(meta.features)
 			continue
 		}
-		if !mayMatch(filter, meta.zone) {
+		zone, err := decodeZone(meta.zone)
+		if err != nil {
+			return 0, err
+		}
+		if !mayMatch(filter, zone) {
 			continue
 		}
 		keep, err := l.rowMask(ctx, meta, filter, meta.features)
@@ -132,6 +155,46 @@ func (l *Layer) Count(ctx context.Context, name string, snapshot int64, filter c
 		}
 	}
 	return total, nil
+}
+
+func (l *Layer) catalog(ctx context.Context, coll Collection, snapshot int64) ([]chunkMeta, error) {
+	key := catalogKey{collection: coll.Name, uid: coll.UID, snapshot: snapshot}
+	if metas, ok := l.catalogs.Get(key); ok {
+		return metas, nil
+	}
+	metas, err := l.loadCatalog(ctx, coll.Name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	l.catalogs.Add(key, metas)
+	return metas, nil
+}
+
+func (l *Layer) loadCatalog(ctx context.Context, name string, snapshot int64) ([]chunkMeta, error) {
+	rows, err := l.pool.Query(ctx, `select file_id, col_file, features, minx, miny, maxx, maxy, last_key, last_id, zone from pfgb.chunks where collection = $1 and begin_snapshot <= $2 and (end_snapshot is null or end_snapshot > $2) order by first_key, first_id collate "C"`, name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var metas []chunkMeta
+	for rows.Next() {
+		var m chunkMeta
+		var lastKey int64
+		if err := rows.Scan(&m.fileID, &m.colFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &lastKey, &m.lastID, &m.zone); err != nil {
+			return nil, err
+		}
+		m.lastKey = spatial.FromOrdered(lastKey)
+		metas = append(metas, m)
+	}
+	return metas, rows.Err()
+}
+
+func catalogSize(metas []chunkMeta) int64 {
+	var n int64
+	for _, m := range metas {
+		n += int64(128 + len(m.zone) + len(m.lastID))
+	}
+	return n
 }
 
 func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q Query) ([]Hit, error) {
@@ -262,40 +325,6 @@ func storedID(f *flattypes.Feature, cols []chunk.Column, column string) (string,
 		return "", fmt.Errorf("layer: stored id %q is unusable", column)
 	}
 	return text, nil
-}
-
-func (l *Layer) chunksAt(ctx context.Context, name string, snapshot int64, bbox *[4]float64, withZone bool) ([]chunkMeta, error) {
-	args := []any{name, snapshot}
-	arg := func(value any) string {
-		args = append(args, value)
-		return "$" + strconv.Itoa(len(args))
-	}
-	sql := `select file_id, col_file, features, last_key, last_id, case when ` + arg(withZone) + ` then zone else '' end` +
-		` from pfgb.chunks where collection = $1 and begin_snapshot <= $2 and (end_snapshot is null or end_snapshot > $2)`
-	if bbox != nil {
-		sql += ` and maxx >= ` + arg(bbox[0]) + ` and minx <= ` + arg(bbox[2]) + ` and maxy >= ` + arg(bbox[1]) + ` and miny <= ` + arg(bbox[3])
-	}
-	sql += ` order by first_key, first_id collate "C"`
-	rows, err := l.pool.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var metas []chunkMeta
-	for rows.Next() {
-		var m chunkMeta
-		var lastKey int64
-		var zone string
-		if err := rows.Scan(&m.fileID, &m.colFile, &m.features, &lastKey, &m.lastID, &zone); err != nil {
-			return nil, err
-		}
-		m.lastKey = spatial.FromOrdered(lastKey)
-		if m.zone, err = decodeZone(zone); err != nil {
-			return nil, err
-		}
-		metas = append(metas, m)
-	}
-	return metas, rows.Err()
 }
 
 func (l *Layer) snapshotCreated(ctx context.Context, name string, snapshot int64) (time.Time, bool, error) {

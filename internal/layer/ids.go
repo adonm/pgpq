@@ -90,11 +90,8 @@ func decodeRun(data []byte) (*idRun, error) {
 }
 
 func (l *Layer) run(ctx context.Context, fileID int64) (*idRun, error) {
-	l.runMu.Lock()
-	cached, ok := l.runs[fileID]
-	l.runMu.Unlock()
-	if ok {
-		return cached, nil
+	if run, ok := l.runs.Get(fileID); ok {
+		return run, nil
 	}
 	data, err := l.blocks.ReadAll(ctx, fileID)
 	if err != nil {
@@ -104,10 +101,12 @@ func (l *Layer) run(ctx context.Context, fileID int64) (*idRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	l.runMu.Lock()
-	l.runs[fileID] = run
-	l.runMu.Unlock()
+	l.runs.Add(fileID, run)
 	return run, nil
+}
+
+func runSize(run *idRun) int64 {
+	return int64(len(run.hashes)) * 16
 }
 
 func (l *Layer) liveRuns(ctx context.Context, name string) ([]int64, error) {

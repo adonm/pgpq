@@ -8,20 +8,22 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/adonm/postfgb/internal/lru"
 )
 
 const Size = 8120
 
 type Store struct {
 	pool  *pgxpool.Pool
-	cache *cache
+	cache *lru.Cache[int64, []byte]
 	loads singleflight.Group
 }
 
 func New(pool *pgxpool.Pool, cacheBytes int64) *Store {
 	s := &Store{pool: pool}
 	if cacheBytes > 0 {
-		s.cache = newCache(cacheBytes)
+		s.cache = lru.New[int64, []byte](cacheBytes, func(data []byte) int64 { return int64(len(data)) })
 	}
 	return s
 }
@@ -60,14 +62,14 @@ func (s *Store) Publish(ctx context.Context, tx pgx.Tx, fileIDs []int64) error {
 
 func (s *Store) ReadAll(ctx context.Context, fileID int64) ([]byte, error) {
 	if s.cache != nil {
-		if data, ok := s.cache.get(fileID); ok {
+		if data, ok := s.cache.Get(fileID); ok {
 			return data, nil
 		}
 	}
 	shared, err, _ := s.loads.Do(strconv.FormatInt(fileID, 10), func() (any, error) {
 		data, err := s.read(context.WithoutCancel(ctx), fileID)
 		if err == nil && s.cache != nil {
-			s.cache.add(fileID, data)
+			s.cache.Add(fileID, data)
 		}
 		return data, err
 	})

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
@@ -15,6 +14,7 @@ import (
 	"github.com/adonm/postfgb/internal/blocks"
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/ingest"
+	"github.com/adonm/postfgb/internal/lru"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -28,17 +28,22 @@ var (
 
 const Retention = 72 * time.Hour
 
-const blockCacheBytes = 256 << 20
+const cacheBytes = 256 << 20
 
 type Layer struct {
-	pool   *pgxpool.Pool
-	blocks *blocks.Store
-	runMu  sync.Mutex
-	runs   map[int64]*idRun
+	pool     *pgxpool.Pool
+	blocks   *blocks.Store
+	runs     *lru.Cache[int64, *idRun]
+	catalogs *lru.Cache[catalogKey, []chunkMeta]
 }
 
 func New(pool *pgxpool.Pool) *Layer {
-	return &Layer{pool: pool, blocks: blocks.New(pool, blockCacheBytes), runs: map[int64]*idRun{}}
+	return &Layer{
+		pool:     pool,
+		blocks:   blocks.New(pool, cacheBytes),
+		runs:     lru.New[int64, *idRun](cacheBytes, runSize),
+		catalogs: lru.New[catalogKey, []chunkMeta](cacheBytes, catalogSize),
+	}
 }
 
 type Collection struct {

@@ -9,12 +9,12 @@ Steps 1 to 3 are built under `/v2`, alongside the current contract. DESIGN.md is
 - **Built in step 1:** S2 keys and level-8 partitions (`internal/spatial`); pgvfs-layout blocks in schema `pfgb` (`internal/blocks`, migration 0031); key-ordered chunks with catalog and snapshots; whole-collection and partition-scoped replace loads with 422 validation and per-collection commit serialization (`internal/layer`); snapshot-pinned bbox paging with 72 h cursor expiry; GeoJSON and FlatGeobuf responses on `PUT /v2/collections/{id}` and `GET /v2/collections/{id}/items`.
 - **Built in step 2:** a column file per chunk, in the same row order as its FlatGeobuf; zone maps (`min`, `max` and `nulls` per column) in the chunk row (migration 0033); CQL2 and property-equality filters evaluated exactly on the column values; `numberMatched` for filter-only requests.
 - **Built in step 3:** id runs (migration 0032) and `GET /v2/collections/{id}/items/{featureID}`. Uniqueness across partitions is the loader's job, so the server checks ids only within a body (422), and a lookup that finds the id in more than one partition answers 409.
-- **Built for caching:** a byte-budgeted block cache per worker (`internal/blocks`, 256 MiB), filled once per file. On the 30k corpus a repeated count over 1,751 chunks falls from 0.69 s to 0.13 s, and a repeated bbox plus filter from 0.25 s to 0.11 s.
+- **Built for caching:** byte-budgeted LRUs per worker (`internal/lru`, 256 MiB each): file bytes by `file_id` (filled once per file), each snapshot's chunk list (the catalog cache, which loads the whole list rather than applying deltas; snapshots are immutable, so entries never go stale), and decoded id runs. On the 30k corpus a repeated count over 1,751 chunks falls from 0.69 s to 0.13 s, and a repeated bbox plus filter from 0.25 s to 0.11 s, both with the block cache alone; the catalog cache is not yet measured at scale.
 - **Verified:**
   - `testdata/corpus/mixed.fgb` (30,000 features: every scalar type, nulls, arrays, LIKE, ranges, datetime and bbox) loaded as a v2 collection in 2.8 s. The 93 filters in `filters.txt` without a bbox return the expected count through both the item list and `numberMatched`, and the five bbox filters return their expected counts through the item list. The two `datetime` lines are v1-only and skipped.
   - GDAL `ogrinfo` reads filtered FlatGeobuf over `/vsicurl/`: 30,000 features unfiltered, 12,000 for a LIKE filter and 3,340 for a bbox plus LIKE filter.
   - Lookups: a feature moved within its partition resolves to its new key, a feature moved to another partition resolves to its live copy, and a duplicate created by two partition loads answers 409.
-- **Not yet:** postings and overviews (steps 4 and 5); conditional `base=` loads, reaping and expired-snapshot cleanup (step 6); merging id runs (lookups scan every live run) and their Bloom filters; spill-to-disk for loads larger than memory (requests are held in memory); a catalog cache per snapshot (every request reads the chunk list), and eviction for decoded id runs; an R-tree (bbox pruning is a range query on chunk envelopes).
+- **Not yet:** postings and overviews (steps 4 and 5); conditional `base=` loads, reaping and expired-snapshot cleanup (step 6); merging id runs (lookups scan every live run) and their Bloom filters; spill-to-disk for loads larger than memory (requests are held in memory); an R-tree (bbox pruning is a range query on chunk envelopes).
 - **Measured on `warm_100k`** (100k features spread thinly across ~7,600 level-8 cells):
 
   | | chunks | logical bytes | load | bbox (-5,40,10,50) |
@@ -186,7 +186,7 @@ Collections are independent. A client that wants several together (RustGIS layer
 | own column codec | evolved from `internal/chunk/attributes.go`: fixed-width typed vectors, per-file dictionaries, per-column zstd |
 | `klauspost/compress` | zstd |
 | `jackc/pgx/v5` `CopyFrom` | block writes |
-| `golang.org/x/sync/singleflight` and a stdlib LRU (`container/list`) | block cache; `golang-lru` counts entries, not bytes |
+| `golang.org/x/sync/singleflight` and a stdlib LRU in `internal/lru` (`container/list`) | block cache, chunk lists and id runs; `golang-lru` counts entries, not bytes |
 
 ## Scale targets (1e9 features)
 
