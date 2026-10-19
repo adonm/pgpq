@@ -140,6 +140,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once.</p>
       <p><b>Three levels, more scanning.</b> Levels 8, 6 and 2 are stored. At high zoom a read scans the level-8 files in view: in a dense cell a page can scan a few hundred thousand features. Coarse views use the samples instead.</p>
       <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one file’s blocks, well under 1 MB. Count the row and its primary-key entry and it costs about 80 B per feature, or about 75 GB at 1e9. Every table keys on a 2-byte collection id, and the name lives once in collections. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
+      <p><b>Sort and encode run in the loader.</b> The upload must be a canonical FlatGeobuf in (key, id) order with its R-tree. The server checks it and only derives the fence, columns and id rows. That takes about 70% of the ingest CPU off the server, at the cost of a stricter upload contract and trusting the loader’s index after checking its root.</p>
       <p><b>One file per partition.</b> One virtual FlatGeobuf per L8 cell: about 100k files instead of 450k chunks, one header each, and the FGB R-tree does the spatial pruning.</p>
       <p><b>Two indexes, two questions.</b> The R-tree finds a bbox; a key fence every 256 features resumes a cursor, reaches a filtered row and turns an id into a byte range. A dense partition’s R-tree is about 7 MB to read once and cache.</p>
     </div>
@@ -154,6 +155,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
         <h3>Decisions</h3>
         <ul class="dec">
           <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
+          <li><span class="tag decided">decided</span><b>Upload contract</b><br><span>A canonical FlatGeobuf in (key, id) order with its R-tree, written by the loader. The server validates it and derives the fence, columns and id rows. Sort and encode do not run on the server. Not built.</span></li>
           <li><span class="tag built">built</span><b>Partition file</b><br><span>One FlatGeobuf per L8 cell, sliced into 8 KB uncompressed pieces and block-compressed, with a key fence every 256 features.</span></li>
           <li><span class="tag decided">decided</span><b>Overview levels</b><br><span>8 for every partition, 6 and 2 per cell, each built per upload from the cell below. Detail is not stored: it reads the L8 file, using its R-tree to find the blocks a bbox needs. Level 4 and 12 are cut. Cap <span id="f-cap2"></span> per cell.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell. The server reads only that body and writes only that cell’s rows.</span></li>
@@ -173,6 +175,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>A filter on a dense cell reads the whole partition file: about <span id="f-filter"></span> per request in the worst case (see Risks).</li>
           <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one read.</li>
           <li>The id index holds one row per feature. At <span id="f-billion"></span> features that is about <span id="f-idx1e9"></span> in Postgres, and a lookup reads one hash’s rows plus one file’s blocks.</li>
+          <li>The server trusts the loader’s R-tree after checking the index root, order, cell and ids. A wrong index can hide rows without corrupting them.</li>
           <li>A read can list a file just before a commit deletes it. It retries once against the new list, so under a heavy write rate some requests are slower.</li>
           <li>Coarse zoom, dense data: below about zoom <span id="f-coarsezoom"></span> a dense view is served by levels 6 and 2. A page that lags the zoom overscans: at zoom 7 a <span id="f-page"></span>-feature page falls through to level 2 while the view holds about <span id="f-z7n"></span> features.</li>
           <li>Dense cities at zoom 13 hold about <span id="f-z13n"></span> features on screen, about <span id="f-z13b"></span> over the link. Use overviews until detail is small, around zoom <span id="f-zdense"></span>.</li>
@@ -204,11 +207,11 @@ const PAL = {
 };
 let P = PAL.dark;
 
-const K = { raw: 940, up: 200, zst: 220, col: 40, run: 30, idxRow: 80, node: 40, fence: 16, fenceEvery: 256, meta: 160, block: 8192, pageBytes: 8192, cache: 256 << 20, sec: 30e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 940, up: 200, zst: 220, col: 40, run: 30, idxRow: 80, node: 40, fence: 16, fenceEvery: 256, meta: 160, block: 8192, pageBytes: 8192, cache: 256 << 20, sec: 10e-6, fixed: 0.1, db: 5e8, dec: 1e9 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
 const fmtMiB = b => `${+(b / 1048576).toFixed(1)} MiB`;
 
-const CPU_SHARE = { decode: 0.25, validate: 0.05, sort: 0.1, encode: 0.6 };
+const CPU_SHARE = { receive: 0.25, validate: 0.15, derive: 0.35, compress: 0.25 };
 const FEAT_PER_BLOCK = Math.max(1, Math.floor(K.block / K.raw));
 const rtreeBytes = f => Math.ceil(f / 16) * 1.07 * K.node;
 const fenceBytes = f => Math.ceil(f / K.fenceEvery) * K.fence;
@@ -419,7 +422,7 @@ const EDGES = [
   ['w1', 'loader', 'r', 'decode', 'l', false], ['w2', 'decode', 'r', 'validate', 'l', false],
   ['w3', 'validate', 'r', 'sort', 'l', false], ['w4', 'sort', 'r', 'encode', 'l', false],
   ['w5', 'encode', 'r', 'commit', 'l', false], ['w6', 'encode', 'b', 'blobsW', 't', true],
-  ['w7', 'encode', 'b', 'idsW', 't', true], ['w8', 'commit', 'b', 'catalogW', 't', true],
+  ['w7', 'validate', 'b', 'idsW', 't', true], ['w8', 'commit', 'b', 'catalogW', 't', true],
   ['r1', 'reader', 'r', 'catalogOv', 'l', false], ['r2', 'catalogOv', 'r', 'prune', 'l', false],
   ['r3', 'prune', 'r', 'fileOv', 'l', false], ['r4', 'fileOv', 'r', 'fgb', 'l', false],
   ['r5', 'fgb', 'r', 'response', 'l', false], ['r6', 'catalogR', 'b', 'catalogOv', 't', true],
@@ -470,24 +473,24 @@ const EDGE_BYTES = c => ({
 const MODEL = {
   loader: { t: 'Loader', kind: 'net', share: c => c.Wr.tUp / c.Wr.total,
     l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
-    text: `Uploads one zstd-compressed FlatGeobuf per level-8 cell, about ${K.zst} B per feature (estimated from OSM Layercake). Every feature in the file falls in that cell, so a reload is one upload per cell. The meter is the share of network time.`,
-    layout: ['body: zstd FlatGeobuf, one cell', `upload bytes = features × ${K.zst} B`], index: [] },
-  decode: { t: 'Decode', kind: 'cpu', share: c => c.Wr.stage.decode / c.Wr.total,
-    l1: c => `${fmtTime(c.Wr.stage.decode)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
-    text: `Decompresses the whole file into memory and parses it once. The decoded file costs about ${K.raw} B per feature of memory, the largest memory cost of an upload.`,
-    layout: ['no streaming, bucketing or spill', `peak memory ≈ features × ${K.raw} B`], index: [] },
-  validate: { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total,
-    l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
-    text: 'Checks that every feature is inside the cell, that ids are unique in the file, and that geometry is usable.',
-    layout: [], index: [] },
-  sort: { t: 'Sort', kind: 'cpu', share: c => c.Wr.stage.sort / c.Wr.total,
-    l1: c => `${fmtTime(c.Wr.stage.sort)} CPU`, l2: () => 'one file',
-    text: 'Sorts by (key, id) so the file, the fence and the column sidecar share one order. Nothing is cut.',
-    layout: ['one file per partition', 'features in (key, id) order'], index: [] },
-  encode: { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total,
-    l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} written`,
-    text: 'Builds the partition’s FlatGeobuf with its packed R-tree, slices it into 8 KB pieces and zstd-compresses each piece, writes the key fence and the column sidecar, then builds the samples (level 8 for the partition, levels 6 and 2 for its ancestors). This is the largest CPU share.',
-    layout: ['files: fgb, fence, cols', 'one file per partition and per sample'], index: [] },
+    text: `Receives one canonical zstd FlatGeobuf per level-8 cell, about ${K.up} B per feature (estimated from OSM Layercake). The loader writes it in (key, id) order with its R-tree, so the server never sorts or re-encodes.`,
+    layout: ['body: canonical zstd FlatGeobuf, one cell', `upload bytes = features × ${K.up} B`], index: [] },
+  decode: { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total,
+    l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => 'order, cell, ids',
+    text: 'Parses the canonical file once and checks that features are in (key, id) order, inside the cell, with unique ids, and that the index root matches the file. A failure answers 422.',
+    layout: ['the order is checked, not produced'], index: [] },
+  validate: { t: 'Derive', kind: 'cpu', share: c => c.Wr.stage.derive / c.Wr.total,
+    l1: c => `${fmtTime(c.Wr.stage.derive)} CPU`, l2: () => 'fence, columns, ids',
+    text: 'One pass over the validated features builds the key fence, the column sidecar and the id index rows.',
+    layout: ['streamed from the parsed file'], index: [] },
+  sort: { t: 'Compress', kind: 'cpu', share: c => c.Wr.stage.compress / c.Wr.total,
+    l1: c => `${fmtTime(c.Wr.stage.compress)} CPU`, l2: c => `${fmtBytes(c.Wr.fileBytes)}`,
+    text: 'Slices the canonical FGB into 8 KB pieces and zstd-compresses each piece, one block row each.',
+    layout: ['slice at 8 KB of uncompressed FGB'], index: [] },
+  encode: { t: 'Write blocks', kind: 'db', share: c => c.Wr.tDb / c.Wr.total,
+    l1: c => `${fmtBytes(c.Wr.db)} COPY`, l2: c => `${fmtTime(c.Wr.tDb)} to Postgres`,
+    text: 'Copies every file’s block rows, unpublished, so the commit only swaps the file rows.',
+    layout: ['COPY per file'], index: [] },
   commit: { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total,
     l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one transaction',
     text: 'One transaction: lock the collection row, delete the cell’s old files, insert the new file rows, rebuild levels 6 and 2 for its ancestors, replace the cell’s id index rows, bump the version. A reader that listed a file just before it was deleted retries once. Cost grows with the cell.',
@@ -538,10 +541,10 @@ function seqFor(kind, c) {
   const { Wr, Rd, link } = c;
   if (kind === 'write') return [
     { box: 'loader', t: Wr.tUp }, { e: 'w1', t: 0.001, b: Wr.upload },
-    { box: 'decode', t: Wr.stage.decode }, { e: 'w2', t: 0.001, b: Wr.memory },
-    { box: 'validate', t: Wr.stage.validate }, { e: 'w3', t: 0.001, b: Wr.memory },
-    { box: 'sort', t: Wr.stage.sort }, { e: 'w4', t: 0.001, b: Wr.memory },
-    { box: 'encode', t: Wr.stage.encode }, { e: 'w6', t: Wr.tDb, b: Wr.fileBytes + Wr.idxBytes + Wr.fenceBytes + Wr.colBytes + Wr.sampleBytes },
+    { box: 'decode', t: Wr.stage.validate }, { e: 'w2', t: 0.001, b: Wr.memory },
+    { box: 'validate', t: Wr.stage.derive }, { e: 'w3', t: 0.001, b: Wr.memory },
+    { box: 'sort', t: Wr.stage.compress }, { e: 'w4', t: 0.001, b: Wr.memory },
+    { box: 'encode', t: Wr.tDb }, { e: 'w6', t: Wr.tDb, b: Wr.fileBytes + Wr.idxBytes + Wr.fenceBytes + Wr.colBytes + Wr.sampleBytes },
     { e: 'w7', t: 0.001, b: Wr.runBytes }, { e: 'w5', t: 0.001, b: Wr.meta },
     { box: 'commit', t: K.fixed }, { e: 'w8', t: 0.001, b: Wr.meta },
   ];
@@ -563,7 +566,7 @@ class Model extends Fig {
   constructor() {
     super('fig-model', 1000, 470);
     this.bytes = EDGE_BYTES(this.cur);
-    for (const [y, h, label, ty, fill] of [[0, 222, 'UPLOAD · one worker stage, then the Postgres tables it writes', 22, 'lane'], [250, 220, 'READ · Postgres tables, then worker overlays in memory, then the client', 270, 'fill']]) {
+    for (const [y, h, label, ty, fill] of [[0, 222, 'UPLOAD · the loader writes the canonical file; the worker validates, derives and stores it', 22, 'lane'], [250, 220, 'READ · Postgres tables, then worker overlays in memory, then the client', 270, 'fill']]) {
       const lane = this.shape(0, y, 1000, h, 0, { fill: true, stroke: false });
       this.bind(() => { lane.color = P[fill]; });
       this.text(14, ty, label, 't');
@@ -789,27 +792,27 @@ class Overviews extends Fig {
 
 const STAGES = [
   { t: 'Upload', kind: 'net', share: c => c.Wr.tUp / c.Wr.total, l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
-    text: `The loader sends one zstd-compressed FlatGeobuf per level-8 cell. Its size is about ${K.zst} B per feature after zstd; the network time is that size divided by the link speed.` },
-  { t: 'Decode', kind: 'cpu', share: c => c.Wr.stage.decode / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.decode)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
-    text: `Decompresses the whole file into memory and parses it once. Memory is the biggest cost here: the decoded file takes about ${K.raw} B per feature. No streaming, bucketing or spill.` },
+    text: `The loader sends one canonical zstd FlatGeobuf per level-8 cell, already in (key, id) order with its R-tree. Its size is about ${K.up} B per feature; sorting and encoding are the loader’s work.` },
+  { t: 'Receive', kind: 'cpu', share: c => c.Wr.stage.receive / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.receive)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
+    text: `Decompresses the whole file into memory and parses it once. Memory is the biggest cost here: the file takes about ${K.raw} B per feature. No streaming, bucketing or spill.` },
   { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
-    text: 'Checks that each feature is inside the cell, that ids are unique in the file, and that geometry is usable.' },
-  { t: 'Sort', kind: 'cpu', share: c => c.Wr.stage.sort / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.sort)} CPU`, l2: () => 'one file',
-    text: 'Sorts by (key, id) so the FGB, the fence and the column sidecar share one order. Nothing is cut.' },
-  { t: 'Encode', kind: 'cpu', share: c => c.Wr.stage.encode / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.encode)} CPU`, l2: c => `${fmtBytes(c.Wr.encodedOut)} out`,
-    text: 'Builds the FGB and its R-tree, slices and block-compresses it, writes the key fence and the column sidecar, then builds the samples. This stage has the largest CPU share.' },
-  { t: 'Write blobs', kind: 'db', share: c => c.Wr.tDb / c.Wr.total, l1: c => `${fmtBytes(c.Wr.db)} COPY`, l2: c => `${fmtTime(c.Wr.tDb)} to Postgres`,
-    text: `Writes every file as ${fmt(K.block)}-byte block rows, one per ${K.pageBytes / 1024} KB page, each file in its own transaction, unpublished until the commit. WAL writes about the same bytes again.` },
+    text: 'Checks (key, id) order, cell membership, unique ids, usable geometry and that the index root matches the file.' },
+  { t: 'Derive', kind: 'cpu', share: c => c.Wr.stage.derive / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.derive)} CPU`, l2: () => 'fence, columns, ids',
+    text: 'Builds the key fence, the column sidecar and the id index rows in one pass over the validated features.' },
+  { t: 'Compress', kind: 'cpu', share: c => c.Wr.stage.compress / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.compress)} CPU`, l2: c => `${fmtBytes(c.Wr.fileBytes)} out`,
+    text: 'Slices the canonical FGB into 8 KB pieces and zstd-compresses each piece into a block row.' },
+  { t: 'Write blocks', kind: 'db', share: c => c.Wr.tDb / c.Wr.total, l1: c => `${fmtBytes(c.Wr.db)} COPY`, l2: c => `${fmtTime(c.Wr.tDb)} to Postgres`,
+    text: `Writes every file as ${fmt(K.block)}-byte block rows, unpublished until the commit. WAL writes about the same bytes again.` },
   { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total, l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one transaction',
     text: 'One transaction. The commit replaces the cell’s files, or nothing. Its cost grows with the cell.' },
 ];
 const SUBS = [
   'lock the collection row, so commits serialize',
-  'write the new blocks, unpublished',
   'delete the cell’s old files and rows',
   'insert the new file rows and fence',
   'rebuild levels 6 and 2 for the ancestors',
-  'replace the id index rows, bump the version, commit',
+  'replace the id index rows',
+  'bump the version and commit',
 ];
 
 class Load extends Fig {
