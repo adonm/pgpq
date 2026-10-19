@@ -285,11 +285,11 @@ func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ing
 	for i := range batch {
 		props[i] = batch[i].Properties
 	}
-	columns, err := chunk.EncodeAttrs(ds.Columns, props)
+	blob, summaries, err := encodeParquetColumns(ds.Columns, props)
 	if err != nil {
 		return nil, err
 	}
-	zone, err := encodeZone(columns)
+	zone, err := encodeZoneSummaries(summaries)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ing
 	if err != nil {
 		return nil, err
 	}
-	colFile, err := put(ctx, name, "cols", columns)
+	colFile, err := put(ctx, name, "cols", blob)
 	if err != nil {
 		return nil, err
 	}

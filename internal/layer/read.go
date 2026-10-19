@@ -1,6 +1,7 @@
 package layer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -275,6 +276,9 @@ func (l *Layer) rowMask(ctx context.Context, meta chunkMeta, filter cql.Expr, ro
 	data, err := l.blocks.ReadAll(ctx, meta.colFile)
 	if err != nil {
 		return nil, stale(err)
+	}
+	if bytes.HasPrefix(data, []byte(parquetMagic)) {
+		return parquetMask(data, filter, rows)
 	}
 	reader, ok := chunk.OpenAttrs(data)
 	if !ok {

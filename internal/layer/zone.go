@@ -2,9 +2,7 @@ package layer
 
 import (
 	"encoding/json"
-	"errors"
 
-	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 )
 
@@ -15,14 +13,10 @@ type zoneColumn struct {
 	Max   *float64 `json:"max,omitempty"`
 }
 
-func encodeZone(columns []byte) (string, error) {
-	file, ok := chunk.ReadAttrHeader(columns)
-	if !ok {
-		return "", errors.New("layer: column file unreadable")
-	}
-	zone := make([]zoneColumn, len(file.Columns))
-	for i, column := range file.Columns {
-		zone[i] = zoneColumn{Name: column.Name, Nulls: column.Nulls, Min: column.Min, Max: column.Max}
+func encodeZoneSummaries(summaries []columnSummary) (string, error) {
+	zone := make([]zoneColumn, len(summaries))
+	for i, summary := range summaries {
+		zone[i] = zoneColumn{Name: summary.Name, Nulls: summary.Nulls, Min: summary.Min, Max: summary.Max}
 	}
 	out, err := json.Marshal(zone)
 	return string(out), err

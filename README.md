@@ -23,7 +23,7 @@ Design decisions are recorded in the design page served at `/design` (`internal/
 ## How it works
 
 - Uploads stream one FlatGeobuf file. Each feature is assigned to a level-8 S2 cell, sorted within the cell by Hilbert key and id, and encoded into FlatGeobuf chunks of about 2 MiB. Chunks are zstd-compressed and stored as 8120-byte rows in `pfgb.blocks`, catalogued by `pfgb.chunks`; ids live in `pfgb.ids`, and overview levels are sampled from full detail.
-- Reads load the collection's cell catalog from PostgreSQL, prune cells by bounding box and per-chunk zones, then evaluate filters exactly in Go over the stored column files. Cursors resume by `(cell, key, id)`.
+- Reads load the collection's cell catalog from PostgreSQL, prune cells by bounding box and per-chunk zones, then evaluate filters exactly in Go over the stored Parquet column files; PFA1 sidecars from earlier collections remain readable. Cursors resume by `(cell, key, id)`.
 - PostgreSQL only stores blocks and scalar catalog columns; there is no PostGIS dependency, and the core path needs no PostgreSQL extensions.
 - JSON columns are detected and flattened one level into typed columns at ingest. Scalar keys become ordinary columns; array-valued keys stay JSON. Key selection is deterministic for the same input.
 
