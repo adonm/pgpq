@@ -26,4 +26,6 @@ The script downloads the PBF, converts with GDAL in Docker, starts a writable se
 
 The enriched Monaco FGB is 3.3 MB after zstd -19. Per feature: 2,687 B raw, 711 B zstd upload, 1,182 B stored, 142 B columns. The building-only L4/L2 samples are empty because the subpixel filter removes building footprints; mixed OSM layers keep larger features. That is an open decision for structure-only collections.
 
+Dense density was counted offline from the 1.1 GB Île-de-France buildings FGB with `mise exec -- go run ./bench/cells.go -file <file>`: 3,417,734 features, 24 L8 cells, mean 142,406, max 1,008,367 (token 47e67), in 17.6 s at 32 MB RSS. It was not loaded into Postgres, to avoid flattening the host. Use this command for dense-city profiles; `prepare.sh` handles country-level extracts only.
+
 Luxembourg is rural: its 95,863 max is ~74 buildings/km². The 2.5M dense-cell assumption is ~1,930/km² (L8 cells average ~1,297 km²), which is plausible for a dense metro but was not measured here; a dense city extract is the next benchmark.

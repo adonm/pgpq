@@ -163,7 +163,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <button class="btn" data-n="1000000000">1B</button>
       <span class="k">Cell</span>
       <button class="btn" data-f="28534">28.5k</button>
-      <button class="btn" data-f="2500000">2.5M</button>
+      <button class="btn" data-f="1008367">1.0M</button>
       <span class="k">Page</span>
       <button class="btn" data-page="1000">1k</button>
       <button class="btn" data-page="10000">10k</button>
@@ -255,7 +255,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     </div>
     <div class="box">
       <h3>Code size</h3>
-      <p>v2 target: 4,000 lines of production Go. After removing v1 and adding Parquet/L4 the tree is 7,029 production lines plus tests; the remaining gap is the storage alignment.</p>
+      <p>v2 target: 4,000 lines of production Go. After removing v1 and adding Parquet/L4 the tree is 7,110 production lines plus tests; the remaining gap is the storage alignment.</p>
       <p class="note">v1 is gone from the tree. Parquet columns are built per chunk; the next pass replaces chunks with one file per cell.</p>
     </div>
     <div class="box">
@@ -267,7 +267,8 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <tr><td>Monaco enriched 5×</td><td>4,628</td><td>2</td><td>12.4 MB</td><td>4.8 MB</td><td>0.66 MB</td><td>1.9 s</td><td>mean 2,314</td></tr>
         </tbody>
       </table>
-      <p class="note">Local PostgreSQL 18, one writable worker, OSM France extracts. Enriched: 129 fields (5× the 26-field OSM schema), 1e-7 coordinates, 1 m edge segmentation. Per filled feature: 2,687 B raw, 711 B zstd upload, 1,182 B stored, 142 B columns. L8 cells average ~1,297 km²; 2.5M/cell is ~1,930/km², within dense-metro building densities. Luxembourg's 95,863 max is ~74/km² and rural, not a dense-city test, so 2.5M is an assumption rather than a measured maximum. Building-only L4/L2 samples are empty because the subpixel filter drops footprint-sized features; mixed OSM layers keep larger features. The current chunk/Parquet path is measured; the target one-file-per-cell path is not.</p>
+      <p class="note">Local PostgreSQL 18, one writable worker, OSM France extracts. Enriched: 129 fields (5× the 26-field OSM schema), 1e-7 coordinates, 1 m edge segmentation. Per filled feature: 2,687 B raw, 711 B zstd upload, 1,182 B stored, 142 B columns. L8 cells average ~1,297 km². Île-de-France measured a dense maximum of 1,008,367 buildings in one L8 cell (~777/km²), with 3,417,734 buildings over 24 cells. The 2.5M filled-in upper bound is ~1,930/km² and remains an assumption. Building-only L4/L2 samples are empty because the subpixel filter drops footprint-sized features; mixed OSM layers keep larger features. The current chunk/Parquet path is measured; the target one-file-per-cell path is not.</p>
+      <p class="note">Dense density was counted offline from Île-de-France buildings: 3,417,734 features, 24 L8 cells, mean 142,406, max 1,008,367 (token 47e67); 17.6 s, 32 MB RSS, no database load.</p>
     </div>
     <div class="grid2">
       <div>
@@ -290,7 +291,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <div>
         <h3>Risks</h3>
         <ul>
-          <li>Loads are held in memory and nothing spills. The densest cell (about 2.5 million features) decodes to about 6.7 GB and sets the worker’s memory.</li>
+          <li>Loads are held in memory and nothing spills. The measured dense cell (1,008,367 features) decodes to about 2.7 GB; the 2.5M filled-in upper bound would be about 6.7 GB and sets the worker’s memory.</li>
           <li>A filter on a dense cell reads one predicate column from the Parquet file plus matched FGB blocks. Row-group stats skip groups, but a broad filter can still approach the column bytes, and equality on high-cardinality fields prunes poorly.</li>
           <li>numberMatched has Parquet row-group stats but no postings: it reads one predicate column across surviving groups and cannot stop early.</li>
           <li>L2 samples are deferred: a commit queues the L2 parent and a background worker rebuilds it after 5 s quiet. The worker drains batches, so sustained uploads can make L2 lag detail, L6 and L4.</li>
@@ -304,7 +305,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>L4 samples cost about 3.7 GB globally, L6 about 59 GB and L2 is negligible; the L8 sample is gone. The saving is real but the L8 detail file still has to be read at high zoom.</li>
           <li>Subpixel features are dropped from the L2, L4 and L6 samples: areal and linear features smaller than one pixel (about 1.6 km, 400 m and 100 m at 48°N); points stay. L8 detail keeps everything. A client wanting a small polygon at a coarse zoom will not see it, but detail still has it.</li>
           <li>Building-only collections can produce empty L4/L2 samples: the subpixel filter removes footprint-sized features at those zooms. Mixed OSM layers keep larger landuse and roads. Decide whether to keep a minimum sample floor, use points/aggregates, or accept empty structure-only overviews.</li>
-          <li>The enriched benchmark uses 1 m edge segmentation; 1 cm vertex spacing would add roughly two orders of magnitude more geometry and is not modelled. The mean cell is measured from building-only Luxembourg; the 2.5M dense cell is a filled-in-structure assumption, but its density (~1,930/km²) is plausible for a dense metro.</li>
+          <li>The enriched benchmark uses 1 m edge segmentation; 1 cm vertex spacing would add roughly two orders of magnitude more geometry and is not modelled. The mean cell is measured from building-only Luxembourg; the dense cell is the measured Île-de-France max (1,008,367). The 2.5M filled-in upper bound remains a separate assumption (~1,930/km²).</li>
           <li>The 711 B/feature upload assumes loader-side zstd. The current API accepts uncompressed FGB, measured at 2,687 B/feature; loader compression and the per-cell file layout are target work.</li>
         </ul>
       </div>
@@ -343,7 +344,7 @@ function collectionStored(f) {
   return { detail, samples, rows, total: detail + samples + ids + rows * K.meta };
 }
 const W = { n: 1000000000, f: 28534, link: 125e6, page: 1000 };
-const TYPES = [{ name: 'mean', f: 28534 }, { name: 'dense', f: 2500000 }];
+const TYPES = [{ name: 'mean', f: 28534 }, { name: 'dense', f: 1008367 }];
 const S = {
   tab: 'model',
   model: { sel: 'catalog', lit: new Set(), demo: null },
