@@ -199,7 +199,14 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <thead><tr><th>cell</th><th>cells</th><th>upload / cell</th><th>upload total</th><th>stored</th><th>ingest</th></tr></thead>
       <tbody id="totals"></tbody>
     </table>
-    <p class="note" id="tot-note"></p>  </div><aside class="side" id="side-model"></aside></div>
+    <p class="note" id="tot-note"></p>
+    <h3>Loader input</h3>
+    <table aria-label="DuckDB input and FGB output by cell class">
+      <thead><tr><th>cell</th><th>DuckDB / cell</th><th>FGB / cell</th><th>FGB stage / cell</th><th>DuckDB total</th><th>FGB total</th><th>stage total</th></tr></thead>
+      <tbody id="input-totals"></tbody>
+    </table>
+    <p class="note">DuckDB is the loader source; FGB is the extra per-view/cell output. The FGB is uncompressed; zstd upload would be smaller. Neither is server storage; the server still ingests the FGB, or a prepared bundle skips that derive.</p>
+  </div><aside class="side" id="side-model"></aside></div>
     </section>
 
   <section class="tab" id="tab-overviews">
@@ -275,6 +282,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <p>A DuckDB file is the loader-side virtual source: normalized tables live in the source schema; a <b>publish</b> schema exposes <b>one view per collection</b>, and <code>publish.collections</code> lists the view, id column, geometry column, CRS, cell and key. DuckDB's spatial extension writes each view directly to FlatGeobuf:</p>
       <p class="note">COPY (SELECT * FROM publish.buildings WHERE cell = :cell ORDER BY key, id) TO 'cell/buildings.fgb' WITH (FORMAT gdal, DRIVER 'FlatGeobuf', SRS 'EPSG:4326', GEOMETRY_TYPE 'MULTIPOLYGON');</p>
       <p>Measured: Monaco buildings + points, two views, <b>0.41 s</b> total to FGB (4,628 + 4,928 features; 12 MB + 1.2 MB); Luxembourg 228k buildings, one view, <b>1.73 s</b> (88 MB). GDAL read both outputs with WGS84 and the correct counts.</p>
+      <p class="note">Sizes: the DuckDB file is 13 MB for Monaco (≈2.8 KB/enriched building) and 47 MB for 228k baseline buildings. At the enriched profile that is about <b>2.5 TiB of DuckDB input</b> at 1e9, and about <b>2.4 TiB of FGB output</b> uncompressed (≈2.6 KB/feature), before server block compression; compressing the FGB for upload gives the 711 B/feature path. The extra DuckDB→FGB stage costs about <b>87 µs/feature</b> enriched — ~24 h single-thread at 1e9, parallelizable per cell — with a peak disk footprint of roughly 4.9 TiB if source and output coexist.</p>
       <p class="note">The simple path is DuckDB → one FGB per view/cell → PUT /v2?cells=token. That is valid today, and one view maps to one collection. The server still parses/derives the FGB; the prepared bundle is only needed to remove that server cost. A DuckDB input is loader-side, not a server format; pin DuckDB storage v1.5 so geometry CRS is persisted, or pass SRS explicitly.</p>
     </div>
     <div class="grid2">
@@ -323,7 +331,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
   </section>
 </main>
 
-<footer>1–5 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · every figure uses the workload above · sizes are measured from OSM buildings; the enriched profile uses 5× OSM attributes and 1 m edge segmentation</footer>
+<footer>1–5 figures · D demo · E read demo · R reset · ← → step or zoom · T theme · input path: DuckDB → FGB (loader); reads start at stored blocks · every figure uses the workload above · sizes are measured from OSM buildings; the enriched profile uses 5× OSM attributes and 1 m edge segmentation</footer>
 
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
 <script>
@@ -333,7 +341,7 @@ const PAL = {
 };
 let P = PAL.dark;
 
-const K = { raw: 2687, up: 711, zst: 1040, col: 142, colOne: 10, parquet: 2048, statGroup: 128, idxRow: 80, node: 40, fence: 16, fenceEvery: 256, meta: 160, block: 8192, sec: 0.00041, fixed: 0.1, db: 5e8, dec: 1e9 };
+const K = { raw: 2687, duck: 2800, fgbOut: 2600, fgbSec: 87e-6, up: 711, zst: 1040, col: 142, colOne: 10, parquet: 2048, statGroup: 128, idxRow: 80, node: 40, fence: 16, fenceEvery: 256, meta: 160, block: 8192, sec: 0.00041, fixed: 0.1, db: 5e8, dec: 1e9 };
 const CAPS = { 6: 2048, 4: 2048, 2: 2048 };
 const fmtBig = n => (n >= 1e9 ? `${+(n / 1e9).toFixed(1)} billion` : n >= 1e6 ? `${+(n / 1e6).toFixed(1)} million` : fmt(n));
 
@@ -494,8 +502,8 @@ const EDGE_BYTES = c => ({
 const MODEL = {
   loader: { t: 'Loader', kind: 'net', share: c => c.Wr.tUp / c.Wr.total,
     l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
-    text: `Receives one canonical zstd FlatGeobuf per level-8 cell, about ${K.up} B per feature (enriched OSM benchmark). The loader writes it in (key, id) order with its R-tree, so the server never sorts or re-encodes.`,
-    layout: ['body: canonical zstd FlatGeobuf, one cell', `upload bytes = features × ${K.up} B`], index: [] },
+    text: `Receives one FGB per view/cell written by the loader from a DuckDB publish view. The loader sorts by (key, id) and builds the R-tree; the FGB is about ${fmtBytes(K.fgbOut)}/feature uncompressed, or about ${fmtBytes(K.up)}/feature if compressed before upload.`,
+    layout: ['DuckDB source ≈2.8 KB/feature', 'FGB output ≈2.6 KB/feature', `upload ≈${K.up} B/feature zstd`], index: [] },
   decode: { t: 'Validate', kind: 'cpu', share: c => (c.Wr.stage.receive + c.Wr.stage.validate) / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.receive + c.Wr.stage.validate)} CPU`, l2: () => 'order, cell, ids',
     text: 'Decompresses and parses the canonical file once, then checks that features are in (key, id) order, inside the cell, with unique ids, and that the index root matches the file. A failure answers 422.',
@@ -773,7 +781,7 @@ class Overviews {
 
 const STAGES = [
   { t: 'Upload', kind: 'net', share: c => c.Wr.tUp / c.Wr.total, l1: c => `${fmtBytes(c.Wr.upload)} up`, l2: c => `${fmtTime(c.Wr.tUp)} to send`,
-    text: `The loader sends one canonical zstd FlatGeobuf per level-8 cell, already in (key, id) order with its R-tree. Its size is about ${K.up} B per feature; sorting and encoding are the loader’s work.` },
+    text: `The loader has already read the DuckDB publish view and written this FGB per view/cell, in (key, id) order with its R-tree. About ${fmtBytes(K.fgbOut)}/feature uncompressed or ${fmtBytes(K.up)} compressed; the server stage starts at upload.` },
   { t: 'Receive', kind: 'cpu', share: c => c.Wr.stage.receive / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.receive)} CPU`, l2: c => `${fmtBytes(c.Wr.memory)} in memory`,
     text: `Decompresses the whole file into memory and parses it once. Memory is the biggest cost here: the file takes about ${K.raw} B per feature. No streaming, bucketing or spill.` },
   { t: 'Validate', kind: 'cpu', share: c => c.Wr.stage.validate / c.Wr.total, l1: c => `${fmtTime(c.Wr.stage.validate)} CPU`, l2: () => '422 on failure',
@@ -1002,7 +1010,7 @@ const SIDE = {
       <div class="ctl"><button class="btn" data-act="demo">Sweep (D)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   load() {
-    return `<h2 id="l-title"></h2><p id="l-text"></p><p class="note" id="l-sub"></p><p class="note" id="l-totals"></p>
+    return `<h2 id="l-title"></h2><p id="l-text"></p><p class="note" id="l-sub"></p><p class="note" id="l-input"></p><p class="note" id="l-totals"></p>
       <div class="ctl"><button class="btn" data-act="demo">Demo (D)</button><button class="btn" data-act="step">Step (→)</button><button class="btn" data-act="reset">Reset (R)</button></div>`;
   },
   reads() {
@@ -1039,8 +1047,19 @@ function syncTotals() {
   set('#tot-note', `At ${fmtBig(W.n)}: ${fmtBytes(t.upload)} up and ${fmtBytes(W.n * K.idxRow)} of id rows. Detail storage and cell-commit time grow with the cell count; L2 rebuilds run in the background.`);
 }
 
+function inputRows() {
+  return TYPES.map(t => {
+    const cells = Math.ceil(W.n / t.f);
+    return { t, cells, duck: W.n * K.duck, fgb: W.n * K.fgbOut, stage: W.n * K.fgbSec, duckCell: t.f * K.duck, fgbCell: t.f * K.fgbOut, stageCell: t.f * K.fgbSec };
+  });
+}
+function syncInput() {
+  const rows = inputRows();
+  $('#input-totals').innerHTML = rows.map(r => `<tr class="${r.t.f === W.f ? 'pick' : ''}"><td>${r.t.name}${r.t.f === W.f ? ' →' : ''}</td><td>${fmtBytes(r.duckCell)}</td><td>${fmtBytes(r.fgbCell)}</td><td>${fmtTime(r.stageCell)}</td><td>${fmtBytes(r.duck)}</td><td>${fmtBytes(r.fgb)}</td><td>${fmtTime(r.stage)}</td></tr>`).join('');
+}
 function syncModel() {
   syncTotals();
+  syncInput();
   const rows = costRows().sort((a, b) => b.bytes - a.bytes).slice(0, 5);
   const max = Math.max(1, ...rows.map(r => r.bytes));
   $('#top-cost').innerHTML = rows.map(r => `<tr><td>${esc(r.name)}</td><td>${fmtBytes(r.bytes)}<span class="tbar" style="width:${(100 * r.bytes / max).toFixed(1)}%"></span></td><td>${r.cpu ? fmtTime(r.cpu) : '—'}</td></tr>`).join('');
@@ -1076,6 +1095,7 @@ function syncLoad() {
   set('#l-title', st.t);
   set('#l-text', st.text);
   set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of ${SUBS.length}: ${SUBS[k - 7]}.` : '');
+  set('#l-input', `Loader pre-stage: DuckDB ${fmtBytes(W.f * K.duck)} per cell → FGB ${fmtBytes(W.f * K.fgbOut)} in ${fmtTime(W.f * K.fgbSec)}. The FGB is uncompressed; zstd upload is ${fmtBytes(W.f * K.up)}/cell. This is loader work, before the server stages.`);
   const T = typeTotals(W.f);
   set('#l-totals', `At ${fmtBig(W.n)}: ${fmt(T.cells)} uploads, ${fmtBytes(T.upload)} up, ${fmtBytes(T.stored)} stored, ${fmtTime(T.time)} in the cell commits. L2 rebuilds run in the background.`);
   set('#status-load', k === 0 ? 'Demo runs one upload through its seven stages.' : `Stage ${cur + 1} of 7 · ${st.t}: ${st.l1(c)}, ${st.l2(c)}.`);
