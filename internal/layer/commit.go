@@ -10,7 +10,7 @@ import (
 	"github.com/adonm/postfgb/internal/spatial"
 )
 
-var chunkColumns = []string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "col_file", "zone", "level"}
+var chunkColumns = []string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "col_file", "fence_file", "zone", "level"}
 
 func chunkValues(name string, c chunkRow) []any {
 	return []any{
@@ -18,7 +18,7 @@ func chunkValues(name string, c chunkRow) []any {
 		spatial.ToOrdered(c.first.key), c.first.id,
 		spatial.ToOrdered(c.last.key), c.last.id,
 		c.bounds[0], c.bounds[1], c.bounds[2], c.bounds[3],
-		int32(c.rows), c.fileID, c.colFile, c.zone, c.level,
+		int32(c.rows), c.fileID, c.colFile, c.fenceFile, c.zone, c.level,
 	}
 }
 
@@ -79,25 +79,25 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 		return LoadResult{}, err
 	}
 	rows := make([][]any, len(chunks))
-	fileIDs := make([]int64, 0, len(chunks)*2)
+	fileIDs := make([]int64, 0, len(chunks)*3)
 	for i, c := range chunks {
 		rows[i] = chunkValues(name, c)
-		fileIDs = append(fileIDs, c.fileID, c.colFile)
+		fileIDs = append(fileIDs, c.fileID, c.colFile, c.fenceFile)
 	}
 	if len(rows) > 0 {
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "chunks"}, chunkColumns, pgx.CopyFromRows(rows)); err != nil {
 			return LoadResult{}, err
 		}
 	}
-	put := func(ctx context.Context, collection, kind string, data []byte) (int64, error) {
-		return l.blocks.PutTx(ctx, tx, collection, kind, data)
+	put := func(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error) {
+		return l.blocks.PutTxEncoded(ctx, tx, collection, kind, encoding, data)
 	}
 	coarse, err := l.rebuildCoarse(ctx, tx, put, Collection{Name: name, Columns: ds.Columns, IDColumn: ds.IDColumn}, touched)
 	if err != nil {
 		return LoadResult{}, err
 	}
 	for _, row := range coarse {
-		fileIDs = append(fileIDs, row.fileID, row.colFile)
+		fileIDs = append(fileIDs, row.fileID, row.colFile, row.fenceFile)
 	}
 	if err := queueOverviews(ctx, tx, name, ancestors(touched, deferredLevel), deferredLevel); err != nil {
 		return LoadResult{}, err
@@ -123,18 +123,18 @@ func deleteCells(ctx context.Context, tx pgx.Tx, name string, cells []uint64) er
 		return nil
 	}
 	ordered := orderedCells(cells)
-	rows, err := tx.Query(ctx, `select file_id, col_file from pfgb.chunks where collection = $1 and cell = any($2)`, name, ordered)
+	rows, err := tx.Query(ctx, `select file_id, col_file, fence_file from pfgb.chunks where collection = $1 and cell = any($2)`, name, ordered)
 	if err != nil {
 		return err
 	}
 	var files []int64
 	for rows.Next() {
-		var fgb, cols int64
-		if err := rows.Scan(&fgb, &cols); err != nil {
+		var fgb, cols, fence int64
+		if err := rows.Scan(&fgb, &cols, &fence); err != nil {
 			rows.Close()
 			return err
 		}
-		files = append(files, fgb, cols)
+		files = append(files, fgb, cols, fence)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -154,18 +154,18 @@ func deleteCells(ctx context.Context, tx pgx.Tx, name string, cells []uint64) er
 }
 
 func deleteAll(ctx context.Context, tx pgx.Tx, name string, uid int64) error {
-	rows, err := tx.Query(ctx, `select file_id, col_file from pfgb.chunks where collection = $1`, name)
+	rows, err := tx.Query(ctx, `select file_id, col_file, fence_file from pfgb.chunks where collection = $1`, name)
 	if err != nil {
 		return err
 	}
 	var files []int64
 	for rows.Next() {
-		var fgb, cols int64
-		if err := rows.Scan(&fgb, &cols); err != nil {
+		var fgb, cols, fence int64
+		if err := rows.Scan(&fgb, &cols, &fence); err != nil {
 			rows.Close()
 			return err
 		}
-		files = append(files, fgb, cols)
+		files = append(files, fgb, cols, fence)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

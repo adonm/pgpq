@@ -13,6 +13,7 @@ import (
 	"github.com/adonm/postfgb/internal/blocks"
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
+	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/spatial"
 	"github.com/adonm/postfgb/internal/stats"
 )
@@ -39,15 +40,16 @@ type Page struct {
 }
 
 type chunkMeta struct {
-	fileID   int64
-	colFile  int64
-	features int
-	bounds   [4]float64
-	zone     string
-	firstKey uint64
-	firstID  string
-	lastKey  uint64
-	lastID   string
+	fileID    int64
+	colFile   int64
+	fenceFile int64
+	features  int
+	bounds    [4]float64
+	zone      string
+	firstKey  uint64
+	firstID   string
+	lastKey   uint64
+	lastID    string
 }
 
 type located struct {
@@ -118,7 +120,7 @@ func (l *Layer) items(ctx context.Context, name string, q Query, fresh bool) (Pa
 				continue
 			}
 		}
-		hits, err := l.matches(ctx, coll.IDColumn, meta, q)
+		hits, err := l.matches(ctx, coll.IDColumn, meta, q, q.Limit-len(page.Hits))
 		if err != nil {
 			return Page{}, err
 		}
@@ -198,7 +200,7 @@ func (l *Layer) catalog(ctx context.Context, coll Collection, level int) ([]chun
 }
 
 func (l *Layer) loadCatalog(ctx context.Context, name string, level int) ([]chunkMeta, error) {
-	rows, err := l.pool.Query(ctx, `select cell, file_id, col_file, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 order by first_key, first_id collate "C"`, name, level)
+	rows, err := l.pool.Query(ctx, `select cell, file_id, col_file, fence_file, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 order by first_key, first_id collate "C"`, name, level)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +219,7 @@ func (l *Layer) loadCatalog(ctx context.Context, name string, level int) ([]chun
 func scanChunkMeta(rows pgx.Rows) (chunkMeta, error) {
 	var m chunkMeta
 	var cell, firstKey, lastKey int64
-	if err := rows.Scan(&cell, &m.fileID, &m.colFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &firstKey, &m.firstID, &lastKey, &m.lastID, &m.zone); err != nil {
+	if err := rows.Scan(&cell, &m.fileID, &m.colFile, &m.fenceFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &firstKey, &m.firstID, &lastKey, &m.lastID, &m.zone); err != nil {
 		return m, err
 	}
 	m.firstKey = spatial.FromOrdered(firstKey)
@@ -226,7 +228,7 @@ func scanChunkMeta(rows pgx.Rows) (chunkMeta, error) {
 }
 
 func (l *Layer) loadCatalogCells(ctx context.Context, name string, level int, cells []uint64) (map[uint64][]chunkMeta, error) {
-	rows, err := l.pool.Query(ctx, `select cell, file_id, col_file, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 and cell = any($3) order by first_key, first_id collate "C"`, name, level, orderedCells(cells))
+	rows, err := l.pool.Query(ctx, `select cell, file_id, col_file, fence_file, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 and cell = any($3) order by first_key, first_id collate "C"`, name, level, orderedCells(cells))
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +238,7 @@ func (l *Layer) loadCatalogCells(ctx context.Context, name string, level int, ce
 		var cell int64
 		var m chunkMeta
 		var firstKey, lastKey int64
-		if err := rows.Scan(&cell, &m.fileID, &m.colFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &firstKey, &m.firstID, &lastKey, &m.lastID, &m.zone); err != nil {
+		if err := rows.Scan(&cell, &m.fileID, &m.colFile, &m.fenceFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &firstKey, &m.firstID, &lastKey, &m.lastID, &m.zone); err != nil {
 			return nil, err
 		}
 		m.firstKey = spatial.FromOrdered(firstKey)
@@ -296,7 +298,84 @@ func catalogSize(metas []chunkMeta) int64 {
 	return n
 }
 
-func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q Query) ([]Hit, error) {
+func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q Query, limit int) ([]Hit, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if meta.fenceFile == 0 {
+		return l.matchesLegacy(ctx, idColumn, meta, q)
+	}
+	cell, err := l.cellFile(ctx, meta.fileID, meta.fenceFile)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := l.blocks.Open(ctx, meta.fileID)
+	if err != nil {
+		return nil, stale(err)
+	}
+	start := 0
+	if q.Cursor != nil {
+		start = cell.fence.StartRow(q.Cursor.Key, q.Cursor.ID)
+	}
+	var candidates []fgb.Row
+	if q.BBox != nil {
+		candidates = cell.layout.Search(q.BBox[0], q.BBox[1], q.BBox[2], q.BBox[3])
+		if start > 0 {
+			candidates = slices.DeleteFunc(candidates, func(row fgb.Row) bool { return row.Index < start })
+		}
+	} else {
+		rows := cell.layout.Rows()
+		if start >= len(rows) {
+			return nil, nil
+		}
+		candidates = rows[start:]
+	}
+	if q.Filter != nil {
+		keep, err := l.rowMask(ctx, meta, q.Filter, meta.features)
+		if err != nil {
+			return nil, err
+		}
+		matched := make([]fgb.Row, 0, min(len(candidates), limit+fgb.FenceEvery))
+		for _, row := range candidates {
+			if row.Index < len(keep) && keep[row.Index] {
+				matched = append(matched, row)
+			}
+		}
+		candidates = matched
+	}
+	if len(candidates) > limit+2*fgb.FenceEvery {
+		candidates = candidates[:limit+2*fgb.FenceEvery]
+	}
+	features, err := cell.layout.Features(reader, candidates)
+	if err != nil {
+		return nil, err
+	}
+	hits := make([]Hit, 0, min(len(features), limit))
+	for _, f := range features {
+		bounds, err := featureBounds(cell.chunk, f)
+		if err != nil {
+			return nil, err
+		}
+		id, err := storedID(f, cell.cols, idColumn)
+		if err != nil {
+			return nil, err
+		}
+		key := spatial.Key(bounds)
+		if q.Cursor != nil && compareKeyID(key, id, q.Cursor.Key, q.Cursor.ID) <= 0 {
+			continue
+		}
+		if q.BBox != nil && !intersects(bounds, q.BBox) {
+			continue
+		}
+		hits = append(hits, Hit{Key: key, ID: id, Chunk: cell.chunk, Feature: f})
+		if len(hits) == limit {
+			break
+		}
+	}
+	return hits, nil
+}
+
+func (l *Layer) matchesLegacy(ctx context.Context, idColumn string, meta chunkMeta, q Query) ([]Hit, error) {
 	data, err := l.blocks.ReadAll(ctx, meta.fileID)
 	if err != nil {
 		return nil, stale(err)

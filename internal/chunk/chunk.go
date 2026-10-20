@@ -92,6 +92,10 @@ func (c *Chunk) Columns() []Column {
 	return HeaderColumns(c.header)
 }
 
+func HeaderOnly(header *flattypes.Header) *Chunk {
+	return &Chunk{header: header}
+}
+
 func (c *Chunk) Search(minX, minY, maxX, maxY float64) ([]*flattypes.Feature, error) {
 	return c.fgb.Search(minX, minY, maxX, maxY)
 }

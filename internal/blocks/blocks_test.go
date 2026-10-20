@@ -89,6 +89,56 @@ func TestReadAllServesRepeatReadsFromCache(t *testing.T) {
 	}
 }
 
+func TestBlocksEncodedRoundTrip(t *testing.T) {
+	st, ctx := openTest(t)
+	const collection = "blocks_encoded_test"
+	t.Cleanup(func() {
+		if _, err := st.Pool.Exec(context.Background(), `delete from pfgb.blocks where file_id in (select file_id from pfgb.files where collection = $1)`, collection); err != nil {
+			t.Error(err)
+		}
+		if _, err := st.Pool.Exec(context.Background(), `delete from pfgb.files where collection = $1`, collection); err != nil {
+			t.Error(err)
+		}
+	})
+	data := bytes.Repeat([]byte("cell-file-block-"), (3*Size+17)/16+1)[:3*Size+17]
+	s := New(st.Pool, 0)
+	id, err := s.PutEncoded(ctx, collection, "fgb", EncodingZstdBlock, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ReadAll(ctx, id); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("encoded read all: %v", err)
+	}
+	r, err := s.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Size() != int64(len(data)) {
+		t.Fatalf("size = %d, want %d", r.Size(), len(data))
+	}
+	for _, tc := range []struct{ off, n int }{{0, 7}, {Size - 3, 11}, {2 * Size, 21}, {len(data) - 5, 10}} {
+		got := make([]byte, tc.n)
+		n, err := r.ReadAt(got, int64(tc.off))
+		wantN := min(tc.n, len(data)-tc.off)
+		if err != nil && !(err == io.EOF && wantN < tc.n) {
+			t.Fatalf("read %d+%d: %v", tc.off, tc.n, err)
+		}
+		if n != wantN || !bytes.Equal(got[:n], data[tc.off:tc.off+wantN]) {
+			t.Fatalf("read %d+%d: n=%d want %d", tc.off, tc.n, n, wantN)
+		}
+	}
+	var stored int64
+	if err := st.Pool.QueryRow(ctx, `select sum(length(data)) from pfgb.blocks where file_id = $1`, id).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored >= int64(len(data))/2 {
+		t.Fatalf("encoded blocks store %d bytes for %d logical bytes", stored, len(data))
+	}
+	if got, err := s.ReadFrom(ctx, st.Pool, id); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("encoded read from: %v", err)
+	}
+}
+
 func TestReaderAtRanges(t *testing.T) {
 	st, ctx := openTest(t)
 	const collection = "blocks_reader_at_test"

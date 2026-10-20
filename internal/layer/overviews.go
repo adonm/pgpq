@@ -118,14 +118,12 @@ func (l *Layer) coarseChunks(ctx context.Context, tx pgx.Tx, put blobPut, coll C
 		entries[i].index = i
 	}
 	ds := ingest.Dataset{Columns: coll.Columns, IDColumn: coll.IDColumn, Features: inputs}
-	rows, err := l.writeRange(ctx, put, coll.Name, ds, parent, entries, level)
+	row, err := l.writeRange(ctx, put, coll.Name, ds, parent, entries, level)
 	if err != nil {
 		return nil, err
 	}
-	for i := range rows {
-		rows[i].seq = i
-	}
-	return rows, nil
+	row.seq = 0
+	return []chunkRow{row}, nil
 }
 
 func inputOf(c *chunk.Chunk, f *flattypes.Feature) (chunk.InputFeature, error) {

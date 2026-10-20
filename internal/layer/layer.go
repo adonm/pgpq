@@ -31,6 +31,7 @@ type Layer struct {
 	pool     *pgxpool.Pool
 	blocks   *blocks.Store
 	catalogs *lru.Cache[catalogKey, []chunkMeta]
+	files    *lru.Cache[int64, *cellFile]
 }
 
 func New(pool *pgxpool.Pool) *Layer {
@@ -38,6 +39,7 @@ func New(pool *pgxpool.Pool) *Layer {
 		pool:     pool,
 		blocks:   blocks.New(pool, cacheBytes),
 		catalogs: lru.New[catalogKey, []chunkMeta](cacheBytes, catalogSize),
+		files:    lru.New[int64, *cellFile](cacheBytes, cellFileSize),
 	}
 }
 

@@ -12,16 +12,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/adonm/postfgb/internal/blocks"
 	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/ingest"
 	"github.com/adonm/postfgb/internal/spatial"
 	"github.com/adonm/postfgb/internal/stats"
 )
 
 const (
-	targetChunkBytes  = 2 << 20
-	maxChunkFeatures  = 50000
-	maxChunkBytes     = 8 << 20
 	detailLevel       = 0
 	overviewSampleCap = 2048
 	sampleLatitude    = 48.0
@@ -68,7 +67,11 @@ var (
 	servedLevels   = []int{2, 4, 6}
 )
 
-type blobPut func(ctx context.Context, collection, kind string, data []byte) (int64, error)
+type blobPut func(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error)
+
+func (l *Layer) putBlob(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error) {
+	return l.blocks.PutEncoded(ctx, collection, kind, encoding, data)
+}
 
 type entry struct {
 	key    uint64
@@ -80,16 +83,17 @@ type entry struct {
 }
 
 type chunkRow struct {
-	cell    uint64
-	level   int
-	seq     int
-	first   entry
-	last    entry
-	bounds  [4]float64
-	rows    int
-	fileID  int64
-	colFile int64
-	zone    string
+	cell      uint64
+	level     int
+	seq       int
+	first     entry
+	last      entry
+	bounds    [4]float64
+	rows      int
+	fileID    int64
+	colFile   int64
+	fenceFile int64
+	zone      string
 }
 
 type LoadResult struct {
@@ -111,12 +115,12 @@ func (l *Layer) Load(ctx context.Context, name string, ds ingest.Dataset, cells 
 		return LoadResult{}, err
 	}
 	groups := groupByCell(entries)
-	chunks, err := l.writeCells(ctx, l.blocks.Put, name, ds, groups, detailLevel)
+	chunks, err := l.writeCells(ctx, l.putBlob, name, ds, groups, detailLevel)
 	if err != nil {
 		return LoadResult{}, err
 	}
 	for _, level := range overviewLevels {
-		rows, err := l.writeCells(ctx, l.blocks.Put, name, ds, groupByCell(sampleOverview(entries, level)), level)
+		rows, err := l.writeCells(ctx, l.putBlob, name, ds, groupByCell(sampleOverview(entries, level)), level)
 		if err != nil {
 			return LoadResult{}, err
 		}
@@ -259,48 +263,28 @@ func (l *Layer) writeCells(ctx context.Context, put blobPut, name string, ds ing
 }
 
 func (l *Layer) writeCell(ctx context.Context, put blobPut, name string, ds ingest.Dataset, cell uint64, entries []entry, level int) ([]chunkRow, error) {
-	var rows []chunkRow
-	start, estimated := 0, 0
-	for i := range entries {
-		estimated += estimate(ds.Features[entries[i].index])
-		count := i - start + 1
-		last := i == len(entries)-1
-		if !last && estimated < targetChunkBytes && count < maxChunkFeatures {
-			continue
-		}
-		cut, err := l.writeRange(ctx, put, name, ds, cell, entries[start:i+1], level)
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range cut {
-			row.seq = len(rows)
-			rows = append(rows, row)
-		}
-		start, estimated = i+1, 0
-	}
-	return rows, nil
-}
-
-func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ingest.Dataset, cell uint64, entries []entry, level int) ([]chunkRow, error) {
-	batch := make([]chunk.InputFeature, len(entries))
-	for i, e := range entries {
-		batch[i] = ds.Features[e.index]
-	}
-	data, err := chunk.EncodeCols(name, ds.Columns, batch)
+	row, err := l.writeRange(ctx, put, name, ds, cell, entries, level)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxChunkBytes && len(entries) > 1 {
-		mid := len(entries) / 2
-		left, err := l.writeRange(ctx, put, name, ds, cell, entries[:mid], level)
-		if err != nil {
-			return nil, err
-		}
-		right, err := l.writeRange(ctx, put, name, ds, cell, entries[mid:], level)
-		if err != nil {
-			return nil, err
-		}
-		return append(left, right...), nil
+	row.seq = 0
+	return []chunkRow{row}, nil
+}
+
+func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ingest.Dataset, cell uint64, entries []entry, level int) (chunkRow, error) {
+	batch := make([]chunk.InputFeature, len(entries))
+	bounds := make([][4]float64, len(entries))
+	keys := make([]uint64, len(entries))
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		batch[i] = ds.Features[e.index]
+		bounds[i] = e.bounds
+		keys[i] = e.key
+		ids[i] = e.id
+	}
+	data, fence, err := chunk.EncodeOrdered(name, ds.Columns, batch, bounds, keys, ids)
+	if err != nil {
+		return chunkRow{}, err
 	}
 	props := make([]map[string]json.RawMessage, len(batch))
 	for i := range batch {
@@ -308,42 +292,36 @@ func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ing
 	}
 	blob, summaries, err := encodeParquetColumns(ds.Columns, props)
 	if err != nil {
-		return nil, err
+		return chunkRow{}, err
 	}
 	zone, err := encodeZoneSummaries(summaries)
 	if err != nil {
-		return nil, err
+		return chunkRow{}, err
 	}
-	fileID, err := put(ctx, name, "fgb", chunk.Compress(data))
+	fileID, err := put(ctx, name, "fgb", blocks.EncodingZstdBlock, data)
 	if err != nil {
-		return nil, err
+		return chunkRow{}, err
 	}
-	colFile, err := put(ctx, name, "cols", blob)
+	colFile, err := put(ctx, name, "cols", "", blob)
 	if err != nil {
-		return nil, err
+		return chunkRow{}, err
 	}
-	return []chunkRow{{
-		cell:    cell,
-		level:   level,
-		first:   entries[0],
-		last:    entries[len(entries)-1],
-		bounds:  unionBounds(entries),
-		rows:    len(entries),
-		fileID:  fileID,
-		colFile: colFile,
-		zone:    zone,
-	}}, nil
-}
-
-func estimate(f chunk.InputFeature) int {
-	n := 52
-	if f.Parsed != nil {
-		n += f.Parsed.Estimate()
+	fenceFile, err := put(ctx, name, "fence", "", fgb.EncodeFence(fence))
+	if err != nil {
+		return chunkRow{}, err
 	}
-	for _, value := range f.Properties {
-		n += len(value) + 3
-	}
-	return n
+	return chunkRow{
+		cell:      cell,
+		level:     level,
+		first:     entries[0],
+		last:      entries[len(entries)-1],
+		bounds:    unionBounds(entries),
+		rows:      len(entries),
+		fileID:    fileID,
+		colFile:   colFile,
+		fenceFile: fenceFile,
+		zone:      zone,
+	}, nil
 }
 
 func unionBounds(entries []entry) [4]float64 {

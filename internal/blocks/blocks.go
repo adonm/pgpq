@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/adonm/postfgb/internal/lru"
@@ -16,7 +17,38 @@ import (
 
 const Size = 8120
 
+const EncodingZstdBlock = "zstd-block"
+
 var ErrNotFound = errors.New("blocks: file not found")
+
+var (
+	blockEncoder = newBlockEncoder()
+	blockDecoder = newBlockDecoder()
+)
+
+func newBlockEncoder() *zstd.Encoder {
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+func newBlockDecoder() *zstd.Decoder {
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		panic(err)
+	}
+	return dec
+}
+
+func compressBlock(data []byte) []byte {
+	return blockEncoder.EncodeAll(data, nil)
+}
+
+func decompressBlock(data []byte) ([]byte, error) {
+	return blockDecoder.DecodeAll(data, nil)
+}
 
 type querier interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -45,12 +77,16 @@ func New(pool *pgxpool.Pool, cacheBytes int64) *Store {
 }
 
 func (s *Store) Put(ctx context.Context, collection, kind string, data []byte) (int64, error) {
+	return s.PutEncoded(ctx, collection, kind, "", data)
+}
+
+func (s *Store) PutEncoded(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	id, err := s.PutTx(ctx, tx, collection, kind, data)
+	id, err := s.PutTxEncoded(ctx, tx, collection, kind, encoding, data)
 	if err != nil {
 		return 0, err
 	}
@@ -58,15 +94,23 @@ func (s *Store) Put(ctx context.Context, collection, kind string, data []byte) (
 }
 
 func (s *Store) PutTx(ctx context.Context, tx pgx.Tx, collection, kind string, data []byte) (int64, error) {
+	return s.PutTxEncoded(ctx, tx, collection, kind, "", data)
+}
+
+func (s *Store) PutTxEncoded(ctx context.Context, tx pgx.Tx, collection, kind, encoding string, data []byte) (int64, error) {
 	var id int64
-	if err := tx.QueryRow(ctx, `insert into pfgb.files (collection, kind, bytes) values ($1, $2, $3) returning file_id`,
-		collection, kind, int64(len(data))).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `insert into pfgb.files (collection, kind, bytes, encoding) values ($1, $2, $3, $4) returning file_id`,
+		collection, kind, int64(len(data)), encoding).Scan(&id); err != nil {
 		return 0, err
 	}
 	rows := make([][]any, 0, (len(data)+Size-1)/Size)
 	for n := 0; n*Size < len(data); n++ {
 		end := min((n+1)*Size, len(data))
-		rows = append(rows, []any{id, int32(n), data[n*Size : end]})
+		block := data[n*Size : end]
+		if encoding == EncodingZstdBlock {
+			block = compressBlock(block)
+		}
+		rows = append(rows, []any{id, int32(n), block})
 	}
 	if len(rows) > 0 {
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "blocks"}, []string{"file_id", "n", "data"}, pgx.CopyFromRows(rows)); err != nil {
@@ -106,7 +150,8 @@ func (s *Store) ReadFrom(ctx context.Context, q querier, fileID int64) ([]byte, 
 
 func readFile(ctx context.Context, q querier, fileID int64) ([]byte, error) {
 	var size int64
-	if err := q.QueryRow(ctx, `select bytes from pfgb.files where file_id = $1`, fileID).Scan(&size); err != nil {
+	var encoding string
+	if err := q.QueryRow(ctx, `select bytes, encoding from pfgb.files where file_id = $1`, fileID).Scan(&size, &encoding); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -128,6 +173,12 @@ func readFile(ctx context.Context, q querier, fileID int64) ([]byte, error) {
 		if n != next {
 			return nil, fmt.Errorf("blocks: file %d is missing block %d", fileID, next)
 		}
+		if encoding == EncodingZstdBlock {
+			data, err = decompressBlock(data)
+			if err != nil {
+				return nil, err
+			}
+		}
 		out = append(out, data...)
 		next++
 	}
@@ -141,21 +192,23 @@ func readFile(ctx context.Context, q querier, fileID int64) ([]byte, error) {
 }
 
 type Reader struct {
-	store  *Store
-	ctx    context.Context
-	fileID int64
-	size   int64
+	store    *Store
+	ctx      context.Context
+	fileID   int64
+	size     int64
+	encoding string
 }
 
 func (s *Store) Open(ctx context.Context, fileID int64) (*Reader, error) {
 	var size int64
-	if err := s.pool.QueryRow(ctx, `select bytes from pfgb.files where file_id = $1`, fileID).Scan(&size); err != nil {
+	var encoding string
+	if err := s.pool.QueryRow(ctx, `select bytes, encoding from pfgb.files where file_id = $1`, fileID).Scan(&size, &encoding); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	return &Reader{store: s, ctx: ctx, fileID: fileID, size: size}, nil
+	return &Reader{store: s, ctx: ctx, fileID: fileID, size: size, encoding: encoding}, nil
 }
 
 func (r *Reader) Size() int64 { return r.size }
@@ -206,6 +259,12 @@ func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
 			var data []byte
 			if err := rows.Scan(&n, &data); err != nil {
 				return 0, err
+			}
+			if r.encoding == EncodingZstdBlock {
+				data, err = decompressBlock(data)
+				if err != nil {
+					return 0, err
+				}
 			}
 			fetched[n] = data
 			if r.store.block != nil {

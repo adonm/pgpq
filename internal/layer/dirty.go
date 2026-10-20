@@ -99,8 +99,8 @@ func (l *Layer) flushDirtyRow(ctx context.Context, force bool) (bool, error) {
 	if err := deleteCells(ctx, tx, name, []uint64{parent}); err != nil {
 		return false, err
 	}
-	put := func(ctx context.Context, collection, kind string, data []byte) (int64, error) {
-		return l.blocks.PutTx(ctx, tx, collection, kind, data)
+	put := func(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error) {
+		return l.blocks.PutTxEncoded(ctx, tx, collection, kind, encoding, data)
 	}
 	rows, err := l.coarseChunks(ctx, tx, put, coll, parent, level, from)
 	if err != nil {
@@ -109,9 +109,9 @@ func (l *Layer) flushDirtyRow(ctx context.Context, force bool) (bool, error) {
 	if err := insertChunks(ctx, tx, name, rows); err != nil {
 		return false, err
 	}
-	fileIDs := make([]int64, 0, len(rows)*2)
+	fileIDs := make([]int64, 0, len(rows)*3)
 	for _, row := range rows {
-		fileIDs = append(fileIDs, row.fileID, row.colFile)
+		fileIDs = append(fileIDs, row.fileID, row.colFile, row.fenceFile)
 	}
 	if err := l.blocks.Publish(ctx, tx, fileIDs); err != nil {
 		return false, err
