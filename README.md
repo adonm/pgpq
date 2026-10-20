@@ -4,7 +4,7 @@ OGC API Features over PostgreSQL, backed by FlatGeobuf cell files stored as data
 
 Goal: the smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by partitioning records into FlatGeobuf cell files and pruning reads with R-trees, key fences and per-cell statistics.
 
-The target deployment is [RustGIS](https://rustgis.app/): reads are served over HTTP at maximum speed, while writes are batch-oriented and free to sort and rewrite chunks.
+The target deployment is [RustGIS](https://rustgis.app/): reads are served over HTTP at maximum speed, while writes are batch-oriented and free to sort and rewrite cell files.
 
 Design decisions are recorded in the design page served at `/design` (`internal/api/design.html`), which is the source of truth. The repository is mid-migration to that v2 design: only the v2 read and write routes below are served today.
 

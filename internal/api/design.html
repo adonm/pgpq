@@ -277,13 +277,13 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <p><b>Parquet, not a hand-rolled sidecar.</b> A Parquet column file with 2,048-row groups writes numeric/time min/max into its footer, so a filter reads stats and only the predicate columns. That adds a dependency, but it removes the whole-sidecar scan.</p>
       <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one file’s blocks, well under 1 MB. Count the row and its primary-key entry and it costs about 80 B per feature, or about 75 GB at 1e9. The target keys every table on a 2-byte collection id, and the name lives once in collections; the code still uses the bigint uid. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
       <p><b>Sort and encode run in the loader (target).</b> The target upload is a canonical FlatGeobuf in (key, id) order with its R-tree. The server checks it and only derives the fence, Parquet columns and id rows. That takes about 70% of the ingest CPU off the server, at the cost of a stricter upload contract and trusting the loader’s index after checking its root.</p>
-      <p><b>One file per partition (target).</b> One virtual FlatGeobuf per L8 cell: about 100k files instead of 450k chunks, one header each, and the FGB R-tree does the spatial pruning. Its Parquet sidecar groups columns into 2,048-row groups. The code still chunks at 2 MiB, with a Parquet column file per chunk. The L8 overview sample is gone; high-zoom reads go to this detail file.</p>
+      <p><b>One file per partition.</b> One virtual FlatGeobuf per L8 cell: about 100k files instead of 450k chunks, one header each, and the FGB R-tree does the spatial pruning. Its Parquet sidecar groups columns into 2,048-row groups. Per-cell detail files are now the serving layout; legacy chunks remain readable through the fallback. The L8 overview sample is gone; high-zoom reads go to this detail file.</p>
       <p><b>Two indexes, two questions.</b> The R-tree finds a bbox; a key fence every 256 features resumes a cursor, reaches a filtered row and turns an id into a byte range. A dense target partition’s R-tree is about 7 MB to read once and cache.</p>
     </div>
     <div class="box">
       <h3>Code size</h3>
-      <p>v2 target: 4,000 lines of production Go. After removing v1 and adding Parquet/L4 and the read path the tree is 7,363 production lines plus tests; the remaining gap is the storage alignment.</p>
-      <p class="note">v1 is gone from the tree. Parquet columns are built per chunk; the next pass replaces chunks with one file per cell.</p>
+      <p>v2 target: 4,000 lines of production Go. The tree is 8,766 production lines plus tests after the per-cell files, FGB range reader and prepared bundle; the remaining gap is mostly schema/catalog simplification.</p>
+      <p class="note">v1 is gone from the tree. New writes are one FGB + Parquet columns + fence per cell; old chunk collections still read through the legacy path.</p>
     </div>
     <div class="box">
       <h3>Measured OSM benchmark</h3>
@@ -294,7 +294,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <tr><td>Monaco enriched 5×</td><td>4,628</td><td>2</td><td>12.4 MB</td><td>4.8 MB</td><td>0.66 MB</td><td>1.9 s</td><td>mean 2,314</td></tr>
         </tbody>
       </table>
-      <p class="note">Local PostgreSQL 18, one writable worker, OSM France extracts. Enriched: 129 fields (5× the 26-field OSM schema), 1e-7 coordinates, 1 m edge segmentation. Per filled feature: 2,687 B raw, 711 B zstd upload, 1,182 B stored, 142 B columns. L8 cells average ~1,297 km². Île-de-France measured a dense maximum of 1,008,367 buildings in one L8 cell (~777/km²), with 3,417,734 buildings over 24 cells. The 2.5M filled-in upper bound is ~1,930/km² and remains an assumption. Building-only L4/L2 samples are empty because the subpixel filter drops footprint-sized features; mixed OSM layers keep larger features. The current chunk/Parquet path is measured; the target one-file-per-cell path is not.</p>
+      <p class="note">Local PostgreSQL 18, one writable worker, OSM France extracts. Enriched: 129 fields (5× the 26-field OSM schema), 1e-7 coordinates, 1 m edge segmentation. Per filled feature: 2,687 B raw, 711 B zstd upload, 1,182 B stored, 142 B columns. L8 cells average ~1,297 km². Île-de-France measured a dense maximum of 1,008,367 buildings in one L8 cell (~777/km²), with 3,417,734 buildings over 24 cells. The 2.5M filled-in upper bound is ~1,930/km² and remains an assumption. Building-only L4/L2 samples are empty because the subpixel filter drops footprint-sized features; mixed OSM layers keep larger features. The benchmark predates the per-cell file layout; the per-cell read measurements are in the read-path box.</p>
       <p class="note">Dense density was counted offline from Île-de-France buildings: 3,417,734 features, 24 L8 cells, mean 142,406, max 1,008,367 (token 47e67); 17.6 s, 32 MB RSS, no database load.</p>
     </div>
     <div class="box">
@@ -303,23 +303,21 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <p class="note">COPY (SELECT * FROM publish.buildings WHERE cell = :cell ORDER BY key, id) TO 'cell/buildings.fgb' WITH (FORMAT gdal, DRIVER 'FlatGeobuf', SRS 'EPSG:4326', GEOMETRY_TYPE 'MULTIPOLYGON');</p>
       <p>Measured: Monaco buildings + points, two views, <b>0.41 s</b> total to FGB (4,628 + 4,928 features; 12 MB + 1.2 MB); Luxembourg 228k buildings, one view, <b>1.73 s</b> (88 MB). GDAL read both outputs with WGS84 and the correct counts.</p>
       <p class="note">Sizes: the DuckDB file is 13 MB for Monaco (≈2.8 KB/enriched building) and 47 MB for 228k baseline buildings. At the enriched profile that is about <b>2.5 TiB of DuckDB input</b> at 1e9, and about <b>2.4 TiB of FGB output</b> uncompressed (≈2.6 KB/feature), before server block compression; compressing the FGB for upload gives the 711 B/feature path. The extra DuckDB→FGB stage costs about <b>87 µs/feature</b> enriched — ~24 h single-thread at 1e9, parallelizable per cell — before zstd. DuckDB is internally compressed; FGB is uncompressed by format. Whole-file zstd is suitable for sequential staging/upload (12.5 MB FGB → 4.4 MB at -3, 3.3 MB at -19) but loses random access; serving uses the server's block-compressed storage. The 2.4 TiB FGB total is aggregate if every FGB is retained; cell-at-a-time peak is source + one cell (dense 2.4 GB, or ~0.8 GB zstd), not 4.9 TiB. Holding every FGB compressed at -19 is ~0.66 TiB; all-at-once compressed peak is ~3.2 TiB.</p>
-      <p class="note">The simple path is DuckDB → one FGB per view/cell → PUT /v2?cells=token. That is valid today, and one view maps to one collection. The server still parses/derives the FGB; the prepared bundle is only needed to remove that server cost. A DuckDB input is loader-side, not a server format; pin DuckDB storage v1.5 so geometry CRS is persisted, or pass SRS explicitly.</p>
+      <p class="note">The simple path is DuckDB → one FGB per view/cell → PUT /v2?cells=token. That is valid today, and one view maps to one collection. The server still parses/derives a plain FGB; the prepared bundle endpoint removes that cost. A DuckDB input is loader-side, not a server format; pin DuckDB storage v1.5 so geometry CRS is persisted, or pass SRS explicitly.</p>
       <p class="note">FGB lifecycle: after a successful PUT, delete the per-cell FGB; keep it only on failure for retry. Do not archive the uncompressed FGB. If an FGB must be retained or served compressed with random access, use <b>seekable zstd</b> — independent frames plus a trailing seek table, as the FlatGeobuf <code>seekableZstd</code> examples do — not plain <code>.fgb.zst</code>, which requires decompressing the whole file. The server’s block store is already the random-access serving format; do not double-compress it.</p>
     </div>
     <div class="box">
-      <h3>Read path after the change (measured)</h3>
-      <p>Per-cell catalog lookup and range-read Parquet filters are now implemented. On the current 2 MiB chunks they are a wash:</p>
-      <table aria-label="Read benchmark before and after the range reader">
-        <thead><tr><th>request</th><th>old warm</th><th>new warm</th><th>new cold</th></tr></thead>
+      <h3>Read path after per-cell files (measured)</h3>
+      <p>One dense 50k-feature cell, limit 100, three runs on the same machine:</p>
+      <table aria-label="Per-cell read benchmark">
+        <thead><tr><th>request</th><th>before</th><th>after</th><th>allocation before → after</th></tr></thead>
         <tbody>
-          <tr><td>Monaco enriched bbox</td><td>26 ms</td><td>29 ms</td><td>43 ms</td></tr>
-          <tr><td>Monaco filter</td><td>148 ms</td><td>140 ms</td><td>192 ms</td></tr>
-          <tr><td>Monaco numberMatched</td><td>15 ms</td><td>20 ms</td><td>19 ms</td></tr>
-          <tr><td>Luxembourg bbox</td><td>8 ms</td><td>8 ms</td><td>15 ms</td></tr>
-          <tr><td>Luxembourg exact filter</td><td>0.96 s</td><td>1.01 s</td><td>1.15 s</td></tr>
+          <tr><td>bbox</td><td>16.2 ms</td><td>0.78 ms</td><td>14.8 MB → 0.49 MB</td></tr>
+          <tr><td>filter</td><td>52.3 ms</td><td>59.7 ms</td><td>32.7 MB → 30.8 MB</td></tr>
+          <tr><td>id lookup</td><td>22.0 ms</td><td>0.99 ms</td><td>16.8 MB → 0.16 MB</td></tr>
         </tbody>
       </table>
-      <p class="note">The 0.66–3.9 MB column files are too small for range reads to beat the whole-file cache, and the 46-chunk catalog is too small for per-cell lookup to matter. The target ~100 MB per-cell column files are where this path is expected to pay. This is why the design’s 1e9 read model remains an extrapolation until per-cell storage and the prepared bundle are built.</p>
+      <p class="note">Bbox and id lookup now use the FGB R-tree/fence and read only the matched feature ranges. Filters are at parity: the cell’s Parquet mask still scans its predicate columns; early-stop/row-range mask evaluation is the next filter optimization. Prepared bundle load on the same cell measured 1.49 s / 310 MB versus 1.63 s / 436 MB for the direct FGB load, including overview rebuild and database writes.</p>
     </div>
     <div class="grid2">
       <div>
@@ -327,9 +325,9 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
         <ul class="dec">
           <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
           <li><span class="tag decided">decided</span><b>Upload contract</b><br><span>A canonical FlatGeobuf in (key, id) order with its R-tree, written by the loader. The server validates it and derives the fence, columns and id rows. Sort and encode do not run on the server. Not built.</span></li>
-          <li><span class="tag next">next</span><b>Prepared bundle</b><br><span>Trusted loader supplies one cell’s canonical FGB, fence, Parquet columns, id rows and block hashes in a manifest. The server verifies counts, R-tree root, hashes and samples, then COPYs; untrusted writes keep full validation. Not built; the direct FGB path remains the POC.</span></li>
-          <li><span class="tag next">next</span><b>Partition file</b><br><span>One FlatGeobuf per L8 cell, sliced into 8 KB uncompressed pieces and block-compressed, with a key fence every 256 features. The code still chunks at 2 MiB; new chunks carry Parquet columns. Per-cell catalog and column range reads are built, but the one-file-per-cell layout and FGB R-tree range reader are the next build.</span></li>
-          <li><span class="tag built">built</span><b>Columns</b><br><span>Parquet with 2,048-row groups is built per chunk; old chunks still read PFA1. Numeric/time row-group min/max is the zone map; a filter reads stats, skips groups and projects only the predicate columns. The target is one column file per partition.</span></li>
+          <li><span class="tag built">built</span><b>Prepared bundle</b><br><span>Trusted <code>PUT /v2/collections/{id}/cells/{cell}</code> accepts a tar containing one cell’s canonical FGB, fence, Parquet columns, id rows, block hashes and manifest. The server verifies counts, R-tree root, hashes, rows, ids and samples, then COPYs. The normal PUT remains the untrusted derive path.</span></li>
+          <li><span class="tag built">built</span><b>Partition file</b><br><span>One FlatGeobuf, one Parquet column file and one fence per L8 cell. The FGB is sliced into 8 KB pieces and zstd-block-compressed, with a key fence every 256 features. Legacy chunks remain readable; new writes use the per-cell layout.</span></li>
+          <li><span class="tag built">built</span><b>Columns</b><br><span>One Parquet file per cell, 2,048-row groups, rows in (key, id) order. Numeric/time row-group min/max is the zone map; a filter reads stats, skips groups and projects only predicate columns. Old chunks still read PFA1.</span></li>
           <li><span class="tag built">built</span><b>Overview levels</b><br><span>L8 is detail; the samples are L6, L4 and L2, each capped at 2,048 features per cell. L6 is built from detail, L4 from L6, L2 from L4. L6 and L4 are rebuilt in the commit; L2 by a background worker after 5 s quiet. Detail reads the L8 file through its R-tree.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell; the server reads only that body and writes only that cell’s rows. Not built: the /v2 load still takes multi-cell bodies.</span></li>
           <li><span class="tag decided">decided</span><b>DuckDB input</b><br><span>Loader-side virtual source: source tables plus a publish schema; one view per collection; catalog carries id, geometry, CRS, cell and key. DuckDB spatial COPY writes one FGB per view/cell; the current server can ingest it. One view is one collection. Not built; DuckDB storage v1.5 is pinned for geometry CRS.</span></li>
@@ -346,7 +344,8 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
         <h3>Risks</h3>
         <ul>
           <li>Loads are held in memory and nothing spills. The measured dense cell (1,008,367 features) decodes to about 2.7 GB; the 2.5M filled-in upper bound would be about 6.7 GB and sets the worker’s memory.</li>
-          <li>A per-cell FGB is ~550 MB for a dense cell; without partial FGB R-tree reads, a bbox request would read the whole file. The FGB index/fence range reader is required before the per-cell layout can ship.</li>
+          <li>A filter page is still dominated by the cell’s Parquet mask scan: the per-cell change is roughly parity for filters, not faster. Early-stop or row-range mask evaluation is the next optimization.</li>
+          <li>Prepared bundles are read into memory (up to 4 GiB) and still rebuild L6/L4 overviews server-side; overviews are not included in the bundle. Legacy chunks remain readable but are not rewritten.</li>
           <li>A filter on a dense cell reads one predicate column from the Parquet file plus matched FGB blocks. Row-group stats skip groups, but a broad filter can still approach the column bytes, and equality on high-cardinality fields prunes poorly.</li>
           <li>numberMatched has Parquet row-group stats but no postings: it reads one predicate column across surviving groups and cannot stop early.</li>
           <li>L2 samples are deferred: a commit queues the L2 parent and a background worker rebuilds it after 5 s quiet. The worker drains batches, so sustained uploads can make L2 lag detail, L6 and L4.</li>
