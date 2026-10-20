@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -198,4 +199,36 @@ func (s *Server) layerItem(w http.ResponseWriter, r *http.Request) {
 	feature.ID = hit.ID
 	w.Header().Set("Content-Type", "application/geo+json")
 	json.NewEncoder(w).Encode(feature)
+}
+
+const maxBundleBytes int64 = 4 << 30
+
+func (s *Server) putBundle(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("id")
+	if !store.ValidName(name) {
+		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
+		return
+	}
+	cells, err := spatial.Cells([]string{r.PathValue("cell")})
+	if err != nil || len(cells) != 1 {
+		http.Error(w, "cell must be one level-8 token", http.StatusUnprocessableEntity)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBundleBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "bundle is too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := s.layers.LoadBundle(r.Context(), name, cells[0], body)
+	if err != nil {
+		layerError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

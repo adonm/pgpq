@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/ingest"
 	"github.com/adonm/postfgb/internal/spatial"
 )
@@ -23,7 +24,11 @@ func chunkValues(name string, c chunkRow) []any {
 }
 
 func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cells []uint64, chunks []chunkRow, entries []entry) (LoadResult, error) {
-	columns, err := encodeColumns(ds.Columns)
+	return l.commitRows(ctx, name, ds.Columns, ds.IDColumn, cells, chunks, entries)
+}
+
+func (l *Layer) commitRows(ctx context.Context, name string, columns []chunk.Column, idColumn string, cells []uint64, chunks []chunkRow, entries []entry) (LoadResult, error) {
+	encoded, err := encodeColumns(columns)
 	if err != nil {
 		return LoadResult{}, err
 	}
@@ -33,14 +38,14 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `insert into pfgb.collections (name, id_column, columns_json) values ($1, $2, $3) on conflict (name) do nothing`,
-		name, ds.IDColumn, columns); err != nil {
+		name, idColumn, encoded); err != nil {
 		return LoadResult{}, err
 	}
 	var uid int64
-	var idColumn string
+	var storedIDColumn string
 	var stored []byte
 	if err := tx.QueryRow(ctx, `select uid, coalesce(id_column, ''), columns_json from pfgb.collections where name = $1 for update`, name).
-		Scan(&uid, &idColumn, &stored); err != nil {
+		Scan(&uid, &storedIDColumn, &stored); err != nil {
 		return LoadResult{}, err
 	}
 	whole := cells == nil
@@ -49,7 +54,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 		if err != nil {
 			return LoadResult{}, err
 		}
-		if idColumn != ds.IDColumn || !slices.Equal(schema, ds.Columns) {
+		if storedIDColumn != idColumn || !slices.Equal(schema, columns) {
 			return LoadResult{}, invalidf("the load's schema differs from the collection's; reload the whole collection")
 		}
 	}
@@ -92,7 +97,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 	put := func(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error) {
 		return l.blocks.PutTxEncoded(ctx, tx, collection, kind, encoding, data)
 	}
-	coarse, err := l.rebuildCoarse(ctx, tx, put, Collection{Name: name, Columns: ds.Columns, IDColumn: ds.IDColumn}, touched)
+	coarse, err := l.rebuildCoarse(ctx, tx, put, Collection{Name: name, Columns: columns, IDColumn: idColumn}, touched)
 	if err != nil {
 		return LoadResult{}, err
 	}
@@ -106,7 +111,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds ingest.Dataset, cell
 		return LoadResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `update pfgb.collections set version = version + 1, id_column = $2, columns_json = $3 where name = $1`,
-		name, ds.IDColumn, columns); err != nil {
+		name, idColumn, encoded); err != nil {
 		return LoadResult{}, err
 	}
 	if err := l.blocks.Publish(ctx, tx, fileIDs); err != nil {

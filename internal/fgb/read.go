@@ -20,6 +20,7 @@ type Layout struct {
 	featuresAt int64
 	size       int64
 	tree       *index.PackedRTree
+	index      []byte
 	rows       []Row
 	offsets    []uint64
 }
@@ -63,7 +64,7 @@ func ReadLayout(r io.ReaderAt, size int64) (*Layout, error) {
 			return nil, err
 		}
 		tree := index.NewPackedRTreeFromData(indexData, count, nodeSize, true)
-		layout := &Layout{header: header, featuresAt: at + length, size: size, tree: tree}
+		layout := &Layout{header: header, featuresAt: at + length, size: size, tree: tree, index: indexData}
 		layout.loadRows()
 		if len(layout.rows) != int(count) {
 			return nil, errors.New("fgb: index does not cover every feature")
@@ -158,4 +159,15 @@ func (l *Layout) FeatureOffset(row int) (int64, bool) {
 		return 0, false
 	}
 	return l.featuresAt + int64(l.offsets[row]), true
+}
+
+func (l *Layout) RootBBox() ([4]float64, bool) {
+	if len(l.index) < NodeBytes {
+		return [4]float64{}, false
+	}
+	return NodeBBox(l.index[:NodeBytes]), true
+}
+
+func (l *Layout) IndexBytes() []byte {
+	return l.index
 }

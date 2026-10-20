@@ -282,31 +282,19 @@ func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ing
 		keys[i] = e.key
 		ids[i] = e.id
 	}
-	data, fence, err := chunk.EncodeOrdered(name, ds.Columns, batch, bounds, keys, ids)
+	encoded, err := encodeCell(name, ds.Columns, batch, bounds, keys, ids)
 	if err != nil {
 		return chunkRow{}, err
 	}
-	props := make([]map[string]json.RawMessage, len(batch))
-	for i := range batch {
-		props[i] = batch[i].Properties
-	}
-	blob, summaries, err := encodeParquetColumns(ds.Columns, props)
+	fileID, err := put(ctx, name, "fgb", blocks.EncodingZstdBlock, encoded.fgb)
 	if err != nil {
 		return chunkRow{}, err
 	}
-	zone, err := encodeZoneSummaries(summaries)
+	colFile, err := put(ctx, name, "cols", "", encoded.columns)
 	if err != nil {
 		return chunkRow{}, err
 	}
-	fileID, err := put(ctx, name, "fgb", blocks.EncodingZstdBlock, data)
-	if err != nil {
-		return chunkRow{}, err
-	}
-	colFile, err := put(ctx, name, "cols", "", blob)
-	if err != nil {
-		return chunkRow{}, err
-	}
-	fenceFile, err := put(ctx, name, "fence", "", fgb.EncodeFence(fence))
+	fenceFile, err := put(ctx, name, "fence", "", fgb.EncodeFence(encoded.fence))
 	if err != nil {
 		return chunkRow{}, err
 	}
@@ -320,8 +308,35 @@ func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ing
 		fileID:    fileID,
 		colFile:   colFile,
 		fenceFile: fenceFile,
-		zone:      zone,
+		zone:      encoded.zone,
 	}, nil
+}
+
+type cellEncoding struct {
+	fgb     []byte
+	fence   []fgb.FenceEntry
+	columns []byte
+	zone    string
+}
+
+func encodeCell(name string, cols []chunk.Column, batch []chunk.InputFeature, bounds [][4]float64, keys []uint64, ids []string) (cellEncoding, error) {
+	data, fence, err := chunk.EncodeOrdered(name, cols, batch, bounds, keys, ids)
+	if err != nil {
+		return cellEncoding{}, err
+	}
+	props := make([]map[string]json.RawMessage, len(batch))
+	for i := range batch {
+		props[i] = batch[i].Properties
+	}
+	blob, summaries, err := encodeParquetColumns(cols, props)
+	if err != nil {
+		return cellEncoding{}, err
+	}
+	zone, err := encodeZoneSummaries(summaries)
+	if err != nil {
+		return cellEncoding{}, err
+	}
+	return cellEncoding{fgb: data, fence: fence, columns: blob, zone: zone}, nil
 }
 
 func unionBounds(entries []entry) [4]float64 {

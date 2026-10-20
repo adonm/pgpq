@@ -47,6 +47,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	mux.HandleFunc("GET /metrics", s.metricsHandler)
 	if !s.ReadOnly {
 		mux.HandleFunc("PUT /v2/collections/{id}", s.putLayer)
+		mux.HandleFunc("PUT /v2/collections/{id}/cells/{cell}", s.putBundle)
 	}
 	mux.HandleFunc("GET /v2/collections/{id}/items", s.layerItems)
 	mux.HandleFunc("GET /v2/collections/{id}/items/{featureID}", s.layerItem)

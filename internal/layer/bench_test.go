@@ -15,6 +15,7 @@ import (
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/cql"
 	"github.com/adonm/postfgb/internal/ingest"
+	"github.com/adonm/postfgb/internal/spatial"
 	"github.com/adonm/postfgb/internal/store"
 )
 
@@ -122,6 +123,69 @@ func BenchmarkCellFileLookup(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := l.Lookup(ctx, benchCollection, "bench-25000"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchDataset(b *testing.B, features []chunk.InputFeature) ingest.Dataset {
+	b.Helper()
+	cols := []chunk.Column{
+		{Name: "id", Type: flattypes.ColumnTypeString},
+		{Name: "name", Type: flattypes.ColumnTypeString},
+		{Name: "n", Type: flattypes.ColumnTypeLong},
+	}
+	body, err := chunk.EncodeCols(benchCollection, cols, features)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ds, err := ingest.ReadDataset(bytes.NewReader(body), ingest.Options{Flatten: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return ds
+}
+
+func benchCell(b *testing.B, features []chunk.InputFeature) uint64 {
+	b.Helper()
+	bounds, ok := chunk.FeatureBounds(&features[0])
+	if !ok {
+		b.Fatal("benchmark feature has no bounds")
+	}
+	cell := spatial.Partition(spatial.Key(bounds))
+	for i := range features {
+		bounds, ok := chunk.FeatureBounds(&features[i])
+		if !ok || spatial.Partition(spatial.Key(bounds)) != cell {
+			b.Fatal("benchmark features span more than one cell")
+		}
+	}
+	return cell
+}
+
+func BenchmarkCellFileDirectLoad(b *testing.B) {
+	l, ctx, features := benchLayer(b)
+	ds := benchDataset(b, features)
+	cell := benchCell(b, features)
+	cells := []uint64{cell}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := l.Load(ctx, benchCollection, ds, cells); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCellFileBundleLoad(b *testing.B) {
+	l, ctx, features := benchLayer(b)
+	ds := benchDataset(b, features)
+	cell := benchCell(b, features)
+	bundle, err := BuildBundle(benchCollection, ds, cell)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := l.LoadBundle(ctx, benchCollection, cell, bundle); err != nil {
 			b.Fatal(err)
 		}
 	}
