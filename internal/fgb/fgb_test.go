@@ -8,23 +8,20 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/fgb"
 )
 
 func TestReaderSkipsTheIndex(t *testing.T) {
+	cols := []chunk.Column{{Name: "id", Type: flattypes.ColumnTypeString}}
 	features := make([]chunk.InputFeature, 5)
 	for i := range features {
-		coords, err := json.Marshal([]float64{float64(i), 0})
-		if err != nil {
-			t.Fatal(err)
-		}
-		features[i] = chunk.InputFeature{
-			Geometry:   chunk.RawGeometry{Type: "Point", Coordinates: coords},
-			Properties: map[string]json.RawMessage{"id": json.RawMessage(strconv.Itoa(i))},
-		}
+		props := map[string]json.RawMessage{"id": json.RawMessage(strconv.Quote(strconv.Itoa(i)))}
+		features[i] = testPoint(cols, props, float64(i), 0)
 	}
-	body, err := chunk.Encode("reader", features)
+	body, err := chunk.EncodePage("reader", testHeader(cols), features)
 	if err != nil {
 		t.Fatal(err)
 	}

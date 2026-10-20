@@ -1,7 +1,6 @@
 package layer
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -75,29 +74,18 @@ func cityFeatures(prefix string, c city, n int, seed int64) []chunk.InputFeature
 	for i := range out {
 		lng := c.lng + (rng.Float64()-0.5)*0.1
 		lat := c.lat + (rng.Float64()-0.5)*0.1
-		coords, _ := json.Marshal([]float64{lng, lat})
-		out[i] = chunk.InputFeature{
-			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords},
-			Properties: map[string]json.RawMessage{
-				"id":   json.RawMessage(strconv.Quote(fmt.Sprintf("%s-%04d", prefix, i))),
-				"name": json.RawMessage(strconv.Quote(c.name)),
-			},
+		props := map[string]json.RawMessage{
+			"id":   json.RawMessage(strconv.Quote(fmt.Sprintf("%s-%04d", prefix, i))),
+			"name": json.RawMessage(strconv.Quote(c.name)),
 		}
+		out[i] = testPoint(testColumns, props, lng, lat)
 	}
 	return out
 }
 
 func datasetOf(t *testing.T, name string, cols []chunk.Column, features []chunk.InputFeature) ingest.Dataset {
 	t.Helper()
-	body, err := chunk.EncodeCols(name, cols, features)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ds, err := ingest.ReadDataset(bytes.NewReader(body), ingest.Options{Flatten: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ds
+	return ingest.Dataset{Header: testHeader(cols, flattypes.GeometryTypePoint), Columns: cols, IDColumn: "id", Features: features}
 }
 
 func cellsOf(t *testing.T, features []chunk.InputFeature) []uint64 {
@@ -105,10 +93,7 @@ func cellsOf(t *testing.T, features []chunk.InputFeature) []uint64 {
 	seen := map[uint64]bool{}
 	var out []uint64
 	for i := range features {
-		bounds, ok := chunk.FeatureBounds(&features[i])
-		if !ok {
-			t.Fatal("feature without bounds")
-		}
+		bounds := features[i].Bounds
 		cell := spatial.Partition(spatial.Key(bounds))
 		if !seen[cell] {
 			seen[cell] = true

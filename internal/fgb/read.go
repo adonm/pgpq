@@ -112,8 +112,25 @@ func (l *Layout) featureEnd(row int) int64 {
 	return l.size
 }
 
+type RawFeature struct {
+	Feature *flattypes.Feature
+	Raw     []byte
+}
+
 func (l *Layout) Features(r io.ReaderAt, rows []Row) ([]*flattypes.Feature, error) {
-	out := make([]*flattypes.Feature, len(rows))
+	raw, err := l.ReadFeatures(r, rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*flattypes.Feature, len(raw))
+	for i := range raw {
+		out[i] = raw[i].Feature
+	}
+	return out, nil
+}
+
+func (l *Layout) ReadFeatures(r io.ReaderAt, rows []Row) ([]RawFeature, error) {
+	out := make([]RawFeature, len(rows))
 	for start := 0; start < len(rows); {
 		end := start + 1
 		for end < len(rows) && rows[end].Index == rows[end-1].Index+1 {
@@ -138,7 +155,8 @@ func (l *Layout) Features(r io.ReaderAt, rows []Row) ([]*flattypes.Feature, erro
 			if length <= 0 || off+4+length > len(buf) {
 				return nil, errors.New("fgb: invalid feature length")
 			}
-			out[i] = flattypes.GetSizePrefixedRootAsFeature(buf[off:off+4+length], 0)
+			raw := buf[off : off+4+length]
+			out[i] = RawFeature{Feature: flattypes.GetSizePrefixedRootAsFeature(raw, 0), Raw: raw}
 			off += 4 + length
 		}
 		start = end
@@ -150,6 +168,14 @@ func (l *Layout) Feature(r io.ReaderAt, row Row) (*flattypes.Feature, error) {
 	features, err := l.Features(r, []Row{row})
 	if err != nil {
 		return nil, err
+	}
+	return features[0], nil
+}
+
+func (l *Layout) ReadFeature(r io.ReaderAt, row Row) (RawFeature, error) {
+	features, err := l.ReadFeatures(r, []Row{row})
+	if err != nil {
+		return RawFeature{}, err
 	}
 	return features[0], nil
 }

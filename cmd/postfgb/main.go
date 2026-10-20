@@ -65,11 +65,6 @@ func serve(args []string) {
 		slog.Info("read-only worker")
 	}
 	layers := layer.New(st.Pool)
-	workerCtx, stopWorker := context.WithCancel(ctx)
-	defer stopWorker()
-	if !*readonly {
-		go layers.RunDirty(workerCtx)
-	}
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly, Layers: layers}),

@@ -1,9 +1,9 @@
 package layer
 
 import (
+	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"slices"
 
@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/adonm/postfgb/internal/chunk"
+	"github.com/adonm/postfgb/internal/fgb"
 	"github.com/adonm/postfgb/internal/ingest"
 	"github.com/adonm/postfgb/internal/spatial"
 )
@@ -63,34 +64,38 @@ func (l *Layer) coarseChunks(ctx context.Context, tx pgx.Tx, put blobPut, coll C
 		return nil, err
 	}
 	var samples []chunkSample
+	var source *flattypes.Header
 	for _, fileID := range fileIDs {
 		data, err := l.blocks.ReadFrom(ctx, tx, fileID)
 		if err != nil {
 			return nil, err
 		}
-		c, err := chunk.Open(data)
+		layout, err := fgb.ReadLayout(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
 			return nil, err
 		}
-		features, err := c.SearchAll()
+		if source == nil {
+			source = layout.Header()
+		}
+		cols := chunk.HeaderColumns(layout.Header())
+		items, err := layout.ReadFeatures(bytes.NewReader(data), layout.Rows())
 		if err != nil {
 			return nil, err
 		}
-		cols := c.Columns()
-		for _, f := range features {
-			bounds, err := featureBounds(c, f)
+		for _, item := range items {
+			bounds, ok := chunk.Bounds(layout.Header(), item.Feature)
+			if !ok {
+				return nil, errors.New("layer: overview source has no geometry")
+			}
+			id, err := storedID(item.Feature, cols, coll.IDColumn)
 			if err != nil {
 				return nil, err
 			}
-			id, err := storedID(f, cols, coll.IDColumn)
-			if err != nil {
-				return nil, err
-			}
-			input, err := inputOf(c, f)
-			if err != nil {
-				return nil, err
-			}
-			samples = append(samples, chunkSample{entry: entry{key: spatial.Key(bounds), id: id, hash: idHash(id), bounds: bounds}, input: input})
+			props := chunk.DecodePropertyText(item.Feature.PropertiesBytes(), cols)
+			samples = append(samples, chunkSample{
+				entry: entry{key: spatial.Key(bounds), id: id, hash: idHash(id), bounds: bounds},
+				input: chunk.InputFeature{Raw: item.Raw, Bounds: bounds, Properties: props},
+			})
 		}
 	}
 	samples = slices.DeleteFunc(samples, func(s chunkSample) bool {
@@ -117,33 +122,12 @@ func (l *Layer) coarseChunks(ctx context.Context, tx pgx.Tx, put blobPut, coll C
 		entries[i].cell = parent
 		entries[i].index = i
 	}
-	ds := ingest.Dataset{Columns: coll.Columns, IDColumn: coll.IDColumn, Features: inputs}
+	ds := ingest.Dataset{Header: source, Columns: coll.Columns, IDColumn: coll.IDColumn, Features: inputs}
 	row, err := l.writeRange(ctx, put, coll.Name, ds, parent, entries, level)
 	if err != nil {
 		return nil, err
 	}
-	row.seq = 0
 	return []chunkRow{row}, nil
-}
-
-func inputOf(c *chunk.Chunk, f *flattypes.Feature) (chunk.InputFeature, error) {
-	feature := c.GeoJSON(f)
-	if feature.Geometry == nil || feature.Geometry.Coordinates == nil {
-		return chunk.InputFeature{}, errors.New("layer: overview source has no coordinates")
-	}
-	coords, err := json.Marshal(feature.Geometry.Coordinates)
-	if err != nil {
-		return chunk.InputFeature{}, err
-	}
-	properties := map[string]json.RawMessage{}
-	for name, value := range chunk.DecodeProperties(f.PropertiesBytes(), c.Columns()) {
-		raw, err := json.Marshal(value)
-		if err != nil {
-			return chunk.InputFeature{}, err
-		}
-		properties[name] = raw
-	}
-	return chunk.InputFeature{Geometry: chunk.RawGeometry{Type: feature.Geometry.Type, Coordinates: coords}, Properties: properties}, nil
 }
 
 func ancestors(cells []uint64, level int) []uint64 {

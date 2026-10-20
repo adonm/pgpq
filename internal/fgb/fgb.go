@@ -57,22 +57,30 @@ func (r *Reader) Header() *flattypes.Header {
 }
 
 func (r *Reader) Next() (*flattypes.Feature, error) {
+	f, _, err := r.NextRaw()
+	return f, err
+}
+
+func (r *Reader) NextRaw() (*flattypes.Feature, []byte, error) {
 	var sizeBuf [4]byte
 	if _, err := io.ReadFull(r.in, sizeBuf[:]); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, io.EOF
+			return nil, nil, io.EOF
 		}
-		return nil, errors.New("fgb: truncated feature")
+		return nil, nil, errors.New("fgb: truncated feature")
 	}
 	size := binary.LittleEndian.Uint32(sizeBuf[:])
 	if size == 0 || size > 256<<20 {
-		return nil, errors.New("fgb: invalid feature size")
+		return nil, nil, errors.New("fgb: invalid feature size")
 	}
 	buf := make([]byte, size)
 	if _, err := io.ReadFull(r.in, buf); err != nil {
-		return nil, errors.New("fgb: truncated feature")
+		return nil, nil, errors.New("fgb: truncated feature")
 	}
-	return flattypes.GetRootAsFeature(buf, 0), nil
+	raw := make([]byte, 4+len(buf))
+	copy(raw, sizeBuf[:])
+	copy(raw[4:], buf)
+	return flattypes.GetRootAsFeature(buf, 0), raw, nil
 }
 
 func treeSize(numItems uint64, nodeSize uint16) uint64 {

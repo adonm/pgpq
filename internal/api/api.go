@@ -10,7 +10,6 @@ import (
 type Server struct {
 	Store    *store.Store
 	ReadOnly bool
-	metrics  *metrics
 	layers   *layer.Layer
 }
 
@@ -36,7 +35,7 @@ func New(st *store.Store) http.Handler {
 
 func NewWithConfig(cfg Config) http.Handler {
 	mux := http.NewServeMux()
-	s := &Server{Store: cfg.Store, ReadOnly: cfg.ReadOnly, metrics: newMetrics()}
+	s := &Server{Store: cfg.Store, ReadOnly: cfg.ReadOnly}
 	if cfg.Layers != nil {
 		s.layers = cfg.Layers
 	} else if cfg.Store != nil {
@@ -44,10 +43,8 @@ func NewWithConfig(cfg Config) http.Handler {
 	}
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	mux.HandleFunc("GET /metrics", s.metricsHandler)
 	if !s.ReadOnly {
 		mux.HandleFunc("PUT /v2/collections/{id}", s.putLayer)
-		mux.HandleFunc("PUT /v2/collections/{id}/cells/{cell}", s.putBundle)
 	}
 	mux.HandleFunc("GET /v2/collections/{id}/items", s.layerItems)
 	mux.HandleFunc("GET /v2/collections/{id}/items/{featureID}", s.layerItem)

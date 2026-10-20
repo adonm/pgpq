@@ -4,14 +4,16 @@ import (
 	"context"
 	"errors"
 
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/fgb"
 )
 
 type cellFile struct {
+	header *flattypes.Header
 	layout *fgb.Layout
 	fence  *fgb.Fence
-	chunk  *chunk.Chunk
 	cols   []chunk.Column
 }
 
@@ -43,9 +45,9 @@ func (l *Layer) cellFile(ctx context.Context, fileID, fenceFile int64) (*cellFil
 		return nil, err
 	}
 	c := &cellFile{
+		header: layout.Header(),
 		layout: layout,
 		fence:  fence,
-		chunk:  chunk.HeaderOnly(layout.Header()),
 		cols:   chunk.HeaderColumns(layout.Header()),
 	}
 	l.files.Add(fileID, c)

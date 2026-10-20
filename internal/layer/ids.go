@@ -2,8 +2,11 @@ package layer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/fgb"
@@ -68,45 +71,23 @@ func (l *Layer) Lookup(ctx context.Context, name, id string) (Hit, error) {
 }
 
 func (l *Layer) findInChunks(ctx context.Context, coll Collection, cell, key uint64, id string) ([]foundHit, error) {
-	rows, err := l.pool.Query(ctx, `select file_id, fence_file from pfgb.chunks where collection = $1 and cell = $2 and first_key <= $3 and last_key >= $3 and level = 0 order by seq`, coll.Name, spatial.ToOrdered(cell), spatial.ToOrdered(key))
+	var fileID, fenceFile int64
+	err := l.pool.QueryRow(ctx, `select file_id, fence_file from pfgb.chunks where collection = $1 and cell = $2 and level = 0`,
+		coll.Name, spatial.ToOrdered(cell)).Scan(&fileID, &fenceFile)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	type cellChunk struct {
-		fileID    int64
-		fenceFile int64
+	if fenceFile == 0 {
+		return nil, errors.New("layer: chunk has no key fence; reload the collection")
 	}
-	var chunks []cellChunk
-	for rows.Next() {
-		var c cellChunk
-		if err := rows.Scan(&c.fileID, &c.fenceFile); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		chunks = append(chunks, c)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	found, err := l.findInCell(ctx, coll, fileID, fenceFile, key, id)
+	if err != nil {
 		return nil, err
 	}
-	rows.Close()
-	var out []foundHit
-	for _, c := range chunks {
-		if c.fenceFile == 0 {
-			found, err := l.findInLegacyChunk(ctx, coll, c.fileID, id)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, found...)
-			continue
-		}
-		found, err := l.findInCell(ctx, coll, c.fileID, c.fenceFile, key, id)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, found...)
-	}
-	return out, nil
+	return found, nil
 }
 
 func (l *Layer) findInCell(ctx context.Context, coll Collection, fileID, fenceFile int64, key uint64, id string) ([]foundHit, error) {
@@ -128,9 +109,9 @@ func (l *Layer) findInCell(ctx context.Context, coll Collection, fileID, fenceFi
 			return nil, err
 		}
 		for _, f := range features {
-			bounds, err := featureBounds(cell.chunk, f)
-			if err != nil {
-				return nil, err
+			bounds, ok := chunk.Bounds(cell.header, f)
+			if !ok {
+				return nil, errors.New("layer: stored feature has no geometry")
 			}
 			foundKey := spatial.Key(bounds)
 			if foundKey > key {
@@ -144,42 +125,10 @@ func (l *Layer) findInCell(ctx context.Context, coll Collection, fileID, fenceFi
 				return nil, err
 			}
 			if stored == id {
-				out = append(out, foundHit{file: fileID, hit: Hit{Key: foundKey, ID: id, Chunk: cell.chunk, Feature: f}})
+				out = append(out, foundHit{file: fileID, hit: Hit{Key: foundKey, ID: id, Header: cell.header, Feature: f}})
 			}
 		}
 		at = end
-	}
-	return out, nil
-}
-
-func (l *Layer) findInLegacyChunk(ctx context.Context, coll Collection, fileID int64, id string) ([]foundHit, error) {
-	data, err := l.blocks.ReadAll(ctx, fileID)
-	if err != nil {
-		return nil, err
-	}
-	c, err := chunk.Open(data)
-	if err != nil {
-		return nil, err
-	}
-	features, err := c.SearchAll()
-	if err != nil {
-		return nil, err
-	}
-	cols := c.Columns()
-	var out []foundHit
-	for _, f := range features {
-		stored, err := storedID(f, cols, coll.IDColumn)
-		if err != nil {
-			return nil, err
-		}
-		if stored != id {
-			continue
-		}
-		bounds, err := featureBounds(c, f)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, foundHit{file: fileID, hit: Hit{Key: spatial.Key(bounds), ID: id, Chunk: c, Feature: f}})
 	}
 	return out, nil
 }

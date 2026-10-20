@@ -1,22 +1,15 @@
 package chunk
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"math"
 	"strconv"
 
-	flatgeobuf "github.com/flatgeobuf/flatgeobuf/src/go"
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 )
-
-type Chunk struct {
-	Data   []byte
-	header *flattypes.Header
-	fgb    *flatgeobuf.FlatGeoBuf
-}
 
 type Column struct {
 	Name string
@@ -44,37 +37,6 @@ type Feature struct {
 	Properties map[string]any `json:"properties,omitempty"`
 }
 
-func Open(data []byte) (*Chunk, error) {
-	raw, err := Decompress(data)
-	if err != nil {
-		return nil, err
-	}
-	return FromRaw(raw)
-}
-
-func FromRaw(raw []byte) (*Chunk, error) {
-	fgb, err := flatgeobuf.NewWithData(raw)
-	if err != nil {
-		return nil, err
-	}
-	return &Chunk{Data: raw, header: fgb.Header(), fgb: fgb}, nil
-}
-
-func (c *Chunk) Count() int {
-	return int(c.header.FeaturesCount())
-}
-
-func (c *Chunk) Envelope() ([4]float64, bool) {
-	var env [4]float64
-	if c.header.EnvelopeLength() < 4 {
-		return env, false
-	}
-	for i := range env {
-		env[i] = c.header.Envelope(i)
-	}
-	return env, true
-}
-
 func HeaderColumns(header *flattypes.Header) []Column {
 	n := header.ColumnsLength()
 	cols := make([]Column, 0, n)
@@ -88,41 +50,22 @@ func HeaderColumns(header *flattypes.Header) []Column {
 	return cols
 }
 
-func (c *Chunk) Columns() []Column {
-	return HeaderColumns(c.header)
-}
-
-func HeaderOnly(header *flattypes.Header) *Chunk {
-	return &Chunk{header: header}
-}
-
-func (c *Chunk) Search(minX, minY, maxX, maxY float64) ([]*flattypes.Feature, error) {
-	return c.fgb.Search(minX, minY, maxX, maxY)
-}
-
-func (c *Chunk) SearchAll() ([]*flattypes.Feature, error) {
-	env, ok := c.Envelope()
-	if !ok {
-		return nil, errors.New("chunk: missing envelope")
-	}
-	return c.Search(env[0], env[1], env[2], env[3])
-}
-
 func GeoJSONFeature(header *flattypes.Header, f *flattypes.Feature) *Feature {
 	var raw flattypes.Geometry
+	props := make(map[string]any)
+	for name, value := range DecodePropertyText(f.PropertiesBytes(), HeaderColumns(header)) {
+		decoder := json.NewDecoder(bytes.NewReader(value))
+		decoder.UseNumber()
+		var decoded any
+		if decoder.Decode(&decoded) == nil {
+			props[name] = decoded
+		}
+	}
 	return &Feature{
 		Type:       "Feature",
 		Geometry:   decodeGeometry(f.Geometry(&raw), header.GeometryType()),
-		Properties: decodeProperties(f.PropertiesBytes(), HeaderColumns(header)),
+		Properties: props,
 	}
-}
-
-func (c *Chunk) GeoJSON(f *flattypes.Feature) *Feature {
-	return GeoJSONFeature(c.header, f)
-}
-
-func DecodeProperties(buf []byte, cols []Column) map[string]any {
-	return decodeProperties(buf, cols)
 }
 
 func DecodePropertyText(buf []byte, cols []Column) map[string]json.RawMessage {
@@ -386,122 +329,6 @@ func collection(g *flattypes.Geometry, fallback flattypes.GeometryType) []Geomet
 		}
 	}
 	return out
-}
-
-func decodeProperties(buf []byte, cols []Column) map[string]any {
-	if len(buf) == 0 || len(cols) == 0 {
-		return nil
-	}
-	props := make(map[string]any, len(cols))
-	off := 0
-	for off+2 <= len(buf) {
-		idx := int(binary.LittleEndian.Uint16(buf[off:]))
-		off += 2
-		if idx >= len(cols) {
-			break
-		}
-		col := cols[idx]
-		switch col.Type {
-		case flattypes.ColumnTypeBool:
-			if off+1 > len(buf) {
-				return props
-			}
-			props[col.Name] = buf[off] != 0
-			off++
-		case flattypes.ColumnTypeByte:
-			if off+1 > len(buf) {
-				return props
-			}
-			props[col.Name] = int8(buf[off])
-			off++
-		case flattypes.ColumnTypeUByte:
-			if off+1 > len(buf) {
-				return props
-			}
-			props[col.Name] = buf[off]
-			off++
-		case flattypes.ColumnTypeShort:
-			if off+2 > len(buf) {
-				return props
-			}
-			props[col.Name] = int16(binary.LittleEndian.Uint16(buf[off:]))
-			off += 2
-		case flattypes.ColumnTypeUShort:
-			if off+2 > len(buf) {
-				return props
-			}
-			props[col.Name] = binary.LittleEndian.Uint16(buf[off:])
-			off += 2
-		case flattypes.ColumnTypeInt:
-			if off+4 > len(buf) {
-				return props
-			}
-			props[col.Name] = int32(binary.LittleEndian.Uint32(buf[off:]))
-			off += 4
-		case flattypes.ColumnTypeUInt:
-			if off+4 > len(buf) {
-				return props
-			}
-			props[col.Name] = binary.LittleEndian.Uint32(buf[off:])
-			off += 4
-		case flattypes.ColumnTypeLong:
-			if off+8 > len(buf) {
-				return props
-			}
-			props[col.Name] = int64(binary.LittleEndian.Uint64(buf[off:]))
-			off += 8
-		case flattypes.ColumnTypeULong:
-			if off+8 > len(buf) {
-				return props
-			}
-			props[col.Name] = binary.LittleEndian.Uint64(buf[off:])
-			off += 8
-		case flattypes.ColumnTypeFloat:
-			if off+4 > len(buf) {
-				return props
-			}
-			props[col.Name] = math.Float32frombits(binary.LittleEndian.Uint32(buf[off:]))
-			off += 4
-		case flattypes.ColumnTypeDouble:
-			if off+8 > len(buf) {
-				return props
-			}
-			props[col.Name] = math.Float64frombits(binary.LittleEndian.Uint64(buf[off:]))
-			off += 8
-		case flattypes.ColumnTypeString, flattypes.ColumnTypeDateTime:
-			s, n, ok := stringValue(buf, off)
-			if !ok {
-				return props
-			}
-			props[col.Name] = s
-			off += n
-		case flattypes.ColumnTypeJson:
-			s, n, ok := stringValue(buf, off)
-			if !ok {
-				return props
-			}
-			var v any
-			if json.Unmarshal([]byte(s), &v) == nil {
-				props[col.Name] = v
-			} else {
-				props[col.Name] = s
-			}
-			off += n
-		case flattypes.ColumnTypeBinary:
-			if off+4 > len(buf) {
-				return props
-			}
-			l := int(binary.LittleEndian.Uint32(buf[off:]))
-			if off+4+l > len(buf) {
-				return props
-			}
-			props[col.Name] = append([]byte{}, buf[off+4:off+4+l]...)
-			off += 4 + l
-		default:
-			return props
-		}
-	}
-	return props
 }
 
 func stringValue(buf []byte, off int) (string, int, bool) {

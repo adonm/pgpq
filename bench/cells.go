@@ -44,11 +44,7 @@ func main() {
 		if err != nil {
 			break
 		}
-		shape, err := chunk.ParseFlat(r.Header(), feat)
-		if err != nil || shape == nil {
-			continue
-		}
-		bounds, ok := shape.Bound()
+		bounds, ok := chunk.Bounds(r.Header(), feat)
 		if !ok {
 			continue
 		}

@@ -59,19 +59,13 @@ func layerBody(t *testing.T, name string, lng, lat float64, n int) []byte {
 	rng := rand.New(rand.NewSource(int64(n)))
 	features := make([]chunk.InputFeature, n)
 	for i := range features {
-		coords, err := json.Marshal([]float64{lng + (rng.Float64()-0.5)*0.05, lat + (rng.Float64()-0.5)*0.05})
-		if err != nil {
-			t.Fatal(err)
+		props := map[string]json.RawMessage{
+			"id":   json.RawMessage(strconv.Quote(fmt.Sprintf("%s-%03d", name, i))),
+			"name": json.RawMessage(strconv.Quote("feature")),
 		}
-		features[i] = chunk.InputFeature{
-			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords},
-			Properties: map[string]json.RawMessage{
-				"id":   json.RawMessage(strconv.Quote(fmt.Sprintf("%s-%03d", name, i))),
-				"name": json.RawMessage(strconv.Quote("feature")),
-			},
-		}
+		features[i] = testPoint(cols, props, lng+(rng.Float64()-0.5)*0.05, lat+(rng.Float64()-0.5)*0.05)
 	}
-	body, err := chunk.EncodeCols(name, cols, features)
+	body, err := chunk.EncodePage(name, testHeader(cols), features)
 	if err != nil {
 		t.Fatal(err)
 	}

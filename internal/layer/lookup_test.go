@@ -1,11 +1,9 @@
 package layer
 
 import (
-	"encoding/json"
 	"slices"
 	"testing"
 
-	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/spatial"
 )
 
@@ -24,16 +22,8 @@ func TestLookupFindsAFeatureMovedWithinItsPartition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bounds, ok := chunk.FeatureBounds(&mover)
-	if !ok {
-		t.Fatal("feature without bounds")
-	}
-	coords, err := json.Marshal([]float64{bounds[0] + 0.0005, bounds[1] + 0.0005})
-	if err != nil {
-		t.Fatal(err)
-	}
-	moved := mover
-	moved.Geometry.Coordinates = coords
+	bounds := mover.Bounds
+	moved := testPoint(testColumns, mover.Properties, bounds[0]+0.0005, bounds[1]+0.0005)
 	second := append(slices.Clone(base), moved)
 	if _, err := l.Load(ctx, name, datasetOf(t, name, testColumns, second), cellsOf(t, second)); err != nil {
 		t.Fatal(err)

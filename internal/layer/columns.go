@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strconv"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
@@ -197,59 +198,12 @@ func parquetMask(data []byte, filter cql.Expr, rows int) ([]bool, error) {
 }
 
 func parquetMaskAt(r io.ReaderAt, size int64, filter cql.Expr, rows int) ([]bool, error) {
-	file, err := parquet.OpenFile(r, size, parquet.SkipPageIndex(true))
-	if err != nil {
-		return nil, errors.New("layer: column file unreadable")
-	}
-	if file.NumRows() != int64(rows) {
-		return nil, fmt.Errorf("layer: column file has %d rows, chunk has %d", file.NumRows(), rows)
-	}
-	fields := file.Schema().Fields()
-	types := make(map[string]flattypes.ColumnType, len(fields))
-	wanted := make(map[string]bool)
-	for _, name := range cql.Properties(filter) {
-		wanted[name] = true
-	}
-	projected := make(parquet.Group)
-	var names []string
-	for _, field := range fields {
-		types[field.Name()] = columnTypeOf(field.Type())
-		if !wanted[field.Name()] {
-			continue
-		}
-		node := parquet.Node(parquet.Leaf(field.Type()))
-		if field.Optional() {
-			node = parquet.Optional(node)
-		} else {
-			node = parquet.Required(node)
-		}
-		projected[field.Name()] = node
-		names = append(names, field.Name())
-	}
-	var projectedSchema *parquet.Schema
-	if len(names) > 0 {
-		projectedSchema = parquet.NewSchema("columns", projected)
-	}
 	keep := make([]bool, rows)
-	offset := 0
-	metadata := file.Metadata().RowGroups
-	groups := file.RowGroups()
-	for i, group := range groups {
-		count := int(group.NumRows())
-		if offset+count > rows {
-			return nil, errors.New("layer: column file has more rows than chunk")
-		}
-		if mayMatch(filter, parquetZone(fields, metadata[i])) {
-			if err := parquetMatchGroup(group, projectedSchema, names, types, filter, keep[offset:offset+count]); err != nil {
-				return nil, err
-			}
-		}
-		offset += count
-	}
-	if offset != rows {
-		return nil, fmt.Errorf("layer: column file has %d rows, chunk has %d", offset, rows)
-	}
-	return keep, nil
+	err := parquetMatchesAt(r, size, filter, rows, 0, nil, func(row int) bool {
+		keep[row] = true
+		return true
+	})
+	return keep, err
 }
 
 func parquetZone(fields []parquet.Field, group format.RowGroup) map[string]zoneColumn {
@@ -320,16 +274,6 @@ func columnTypeOf(t parquet.Type) flattypes.ColumnType {
 	return flattypes.ColumnTypeString
 }
 
-func parquetMatchGroup(group parquet.RowGroup, schema *parquet.Schema, names []string, types map[string]flattypes.ColumnType, filter cql.Expr, keep []bool) error {
-	_, err := parquetMatchGroupRows(group, schema, names, types, filter, 0, func(row int) bool {
-		if row >= 0 && row < len(keep) {
-			keep[row] = true
-		}
-		return true
-	})
-	return err
-}
-
 func parquetMatchGroupRows(group parquet.RowGroup, schema *parquet.Schema, names []string, types map[string]flattypes.ColumnType, filter cql.Expr, base int, emit func(int) bool) (bool, error) {
 	count := int(group.NumRows())
 	if len(names) == 0 {
@@ -383,7 +327,7 @@ func parquetMatchGroupRows(group parquet.RowGroup, schema *parquet.Schema, names
 	return true, nil
 }
 
-func parquetMatchesAt(r io.ReaderAt, size int64, filter cql.Expr, rows int, start int, emit func(int) bool) error {
+func parquetMatchesAt(r io.ReaderAt, size int64, filter cql.Expr, rows int, start int, within []int, emit func(int) bool) error {
 	file, err := parquet.OpenFile(r, size, parquet.SkipPageIndex(true))
 	if err != nil {
 		return errors.New("layer: column file unreadable")
@@ -431,7 +375,8 @@ func parquetMatchesAt(r io.ReaderAt, size int64, filter cql.Expr, rows int, star
 		if offset+count > rows {
 			return errors.New("layer: column file has more rows than chunk")
 		}
-		if offset+count > start && mayMatch(filter, parquetZone(fields, metadata[i])) {
+		wanted := within == nil || (sort.SearchInts(within, offset) < len(within) && within[sort.SearchInts(within, offset)] < offset+count)
+		if offset+count > start && wanted && mayMatch(filter, parquetZone(fields, metadata[i])) {
 			stop := false
 			cont, err := parquetMatchGroupRows(group, projectedSchema, names, types, filter, offset, func(row int) bool {
 				if stop || row < start {

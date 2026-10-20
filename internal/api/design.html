@@ -218,7 +218,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <thead><tr><th>cell</th><th>DuckDB / cell</th><th>FGB / cell</th><th>FGB stage / cell</th><th>DuckDB total</th><th>FGB total</th><th>stage total</th></tr></thead>
       <tbody id="input-totals"></tbody>
     </table>
-    <p class="note">DuckDB is the loader source; FGB is the extra per-view/cell output. The FGB is uncompressed; the aggregate zstd size is 662 GB at -19, and only one cell's FGB needs to exist at a time. Neither is server storage; the server still ingests the FGB, or a prepared bundle skips that derive.</p>
+    <p class="note">DuckDB is the loader source; FGB is the extra per-view/cell output. The FGB is uncompressed; the aggregate zstd size is 662 GB at -19, and only one cell's FGB needs to exist at a time. Neither is server storage; the server ingests the FGB and copies its feature bytes into the cell file.</p>
   </div><aside class="side" id="side-model"></aside></div>
     </section>
 
@@ -272,18 +272,18 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     <p class="lede small">The choices behind the numbers, and what they cost.</p>
     <div class="box">
       <h3>Tradeoffs</h3>
-      <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once. L6 and L4 are rebuilt in the commit; L2 is queued for the background worker.</p>
-      <p><b>Detail plus three samples.</b> L8 is the detail file; the samples are L6, L4 and L2, each 2,048 per cell. L8 used to have its own sample; dropping it saves up to ~950 GB at 2,048 samples, and L4 at about 3.7 GB globally fills the z7–8 gap. L6 and L4 are rebuilt in the commit, L2 by a background worker. At high zoom detail reads only the ranges its R-tree names; the figure’s picker uses samples below z11, and the client chooses the level.</p>
+      <p><b>Whole-cell replace, no snapshots.</b> A commit deletes the cell’s old rows and files and writes the new ones in one transaction. That keeps reads on current data and removes reaping, but the commit costs the cell’s size and a racing read retries once. L6, L4 and L2 are all rebuilt in the commit.</p>
+      <p><b>Detail plus three samples.</b> L8 is the detail file; the samples are L6, L4 and L2, each 2,048 per cell. L8 used to have its own sample; dropping it saves up to ~950 GB at 2,048 samples, and L4 at about 3.7 GB globally fills the z7–8 gap. All three samples are rebuilt in the commit. At high zoom detail reads only the ranges its R-tree names; the figure’s picker uses samples below z11, and the client chooses the level.</p>
       <p><b>Parquet, not a hand-rolled sidecar.</b> A Parquet column file with 2,048-row groups writes numeric/time min/max into its footer, so a filter reads stats and only the predicate columns. That adds a dependency, but it removes the whole-sidecar scan.</p>
       <p><b>Id rows, not runs.</b> One index row per feature: a lookup is a few B-tree pages plus one file’s blocks, well under 1 MB. Count the row and its primary-key entry and it costs about 80 B per feature, or about 75 GB at 1e9. The target keys every table on a 2-byte collection id, and the name lives once in collections; the code still uses the bigint uid. A compact chunked index would need background merges to keep hash-to-cell routing.</p>
       <p><b>Sort and encode run in the loader (target).</b> The target upload is a canonical FlatGeobuf in (key, id) order with its R-tree. The server checks it and only derives the fence, Parquet columns and id rows. That takes about 70% of the ingest CPU off the server, at the cost of a stricter upload contract and trusting the loader’s index after checking its root.</p>
-      <p><b>One file per partition.</b> One virtual FlatGeobuf per L8 cell: about 100k files instead of 450k chunks, one header each, and the FGB R-tree does the spatial pruning. Its Parquet sidecar groups columns into 2,048-row groups. Per-cell detail files are now the serving layout; legacy chunks remain readable through the fallback. The L8 overview sample is gone; high-zoom reads go to this detail file.</p>
+      <p><b>One file per partition.</b> One virtual FlatGeobuf per L8 cell: about 100k files instead of 450k chunks, one header each, and the FGB R-tree does the spatial pruning. Its Parquet sidecar groups columns into 2,048-row groups. Per-cell detail files are the only serving layout. The L8 overview sample is gone; high-zoom reads go to this detail file.</p>
       <p><b>Two indexes, two questions.</b> The R-tree finds a bbox; a key fence every 256 features resumes a cursor, reaches a filtered row and turns an id into a byte range. A dense target partition’s R-tree is about 7 MB to read once and cache.</p>
     </div>
     <div class="box">
       <h3>Code size</h3>
-      <p>v2 target: 4,000 lines of production Go. The tree is 8,918 production lines plus tests after the per-cell files, FGB range reader, prepared bundle and lazy filters; the remaining gap is mostly schema/catalog simplification.</p>
-      <p class="note">v1 is gone from the tree. New writes are one FGB + Parquet columns + fence per cell; old chunk collections still read through the legacy path.</p>
+      <p>v2 target: 4,000 lines of production Go. The tree is 5,717 production lines plus tests after deleting bundles, PFA1, reprojection/flattening and the legacy path, collapsing the catalog to one row per cell, and copying raw FGB feature bytes; the remaining gap is mostly CQL and catalog simplification.</p>
+      <p class="note">v1 and the old chunk format are gone from the tree. Every write is one FGB + Parquet columns + fence per cell.</p>
     </div>
     <div class="box">
       <h3>Measured OSM benchmark</h3>
@@ -303,7 +303,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <p class="note">COPY (SELECT * FROM publish.buildings WHERE cell = :cell ORDER BY key, id) TO 'cell/buildings.fgb' WITH (FORMAT gdal, DRIVER 'FlatGeobuf', SRS 'EPSG:4326', GEOMETRY_TYPE 'MULTIPOLYGON');</p>
       <p>Measured: Monaco buildings + points, two views, <b>0.41 s</b> total to FGB (4,628 + 4,928 features; 12 MB + 1.2 MB); Luxembourg 228k buildings, one view, <b>1.73 s</b> (88 MB). GDAL read both outputs with WGS84 and the correct counts.</p>
       <p class="note">Sizes: the DuckDB file is 13 MB for Monaco (≈2.8 KB/enriched building) and 47 MB for 228k baseline buildings. At the enriched profile that is about <b>2.5 TiB of DuckDB input</b> at 1e9, and about <b>2.4 TiB of FGB output</b> uncompressed (≈2.6 KB/feature), before server block compression; compressing the FGB for upload gives the 711 B/feature path. The extra DuckDB→FGB stage costs about <b>87 µs/feature</b> enriched — ~24 h single-thread at 1e9, parallelizable per cell — before zstd. DuckDB is internally compressed; FGB is uncompressed by format. Whole-file zstd is suitable for sequential staging/upload (12.5 MB FGB → 4.4 MB at -3, 3.3 MB at -19) but loses random access; serving uses the server's block-compressed storage. The 2.4 TiB FGB total is aggregate if every FGB is retained; cell-at-a-time peak is source + one cell (dense 2.4 GB, or ~0.8 GB zstd), not 4.9 TiB. Holding every FGB compressed at -19 is ~0.66 TiB; all-at-once compressed peak is ~3.2 TiB.</p>
-      <p class="note">The simple path is DuckDB → one FGB per view/cell → PUT /v2?cells=token. That is valid today, and one view maps to one collection. The server still parses/derives a plain FGB; the prepared bundle endpoint removes that cost. A DuckDB input is loader-side, not a server format; pin DuckDB storage v1.5 so geometry CRS is persisted, or pass SRS explicitly.</p>
+      <p class="note">The simple path is DuckDB → one FGB per view/cell → PUT /v2?cells=token. That is valid today, and one view maps to one collection. The server validates the FGB and copies its feature bytes; it does not re-encode geometry or properties. A DuckDB input is loader-side, not a server format; pin DuckDB storage v1.5 so geometry CRS is persisted, or pass SRS explicitly.</p>
       <p class="note">FGB lifecycle: after a successful PUT, delete the per-cell FGB; keep it only on failure for retry. Do not archive the uncompressed FGB. If an FGB must be retained or served compressed with random access, use <b>seekable zstd</b> — independent frames plus a trailing seek table, as the FlatGeobuf <code>seekableZstd</code> examples do — not plain <code>.fgb.zst</code>, which requires decompressing the whole file. The server’s block store is already the random-access serving format; do not double-compress it.</p>
     </div>
     <div class="box">
@@ -317,7 +317,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <tr><td>id lookup</td><td>22.0 ms</td><td>0.99 ms</td><td>16.8 MB → 0.16 MB</td></tr>
         </tbody>
       </table>
-      <p class="note">Bbox and id lookup now use the FGB R-tree/fence and read only the matched feature ranges. Filters now evaluate Parquet row groups lazily and stop as soon as the page is full; a sparse 30k-point collection shows no measurable change because matches are tiny, and the dense 50k filter remains at parity because the selective mask often runs to the end. Row-range mask evaluation is the next filter optimization. Prepared bundle load on the same cell measured 1.49 s / 310 MB versus 1.63 s / 436 MB for the direct FGB load, including overview rebuild and database writes.</p>
+      <p class="note">Bbox and id lookup now use the FGB R-tree/fence and read only the matched feature ranges. Filters evaluate Parquet row groups lazily, stop as soon as the page is full, and skip row groups with no bbox candidate. A sparse 30k-point collection shows no measurable change because matches are tiny; the dense 50k filter remains at parity because a selective mask often runs to the end. Row-range mask evaluation is the next filter optimization.</p>
     </div>
     <div class="grid2">
       <div>
@@ -325,14 +325,14 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
         <ul class="dec">
           <li><span class="tag built">built</span><b>Partition unit</b><br><span>S2 level 8, a fixed grid with no per-collection setting.</span></li>
           <li><span class="tag decided">decided</span><b>Upload contract</b><br><span>A canonical FlatGeobuf in (key, id) order with its R-tree, written by the loader. The server validates it and derives the fence, columns and id rows. Sort and encode do not run on the server. Not built.</span></li>
-          <li><span class="tag built">built</span><b>Prepared bundle</b><br><span>Trusted <code>PUT /v2/collections/{id}/cells/{cell}</code> accepts a tar containing one cell’s canonical FGB, fence, Parquet columns, id rows, block hashes and manifest. The server verifies counts, R-tree root, hashes, rows, ids and samples, then COPYs. The normal PUT remains the untrusted derive path.</span></li>
+          <li><span class="tag built">built</span><b>Prepared bundle</b><br><span>Removed. The normal PUT is the only write path; it validates the canonical FGB and derives the cell files. The earlier tar verifier duplicated the read path and was read into memory.</span></li>
           <li><span class="tag built">built</span><b>Partition file</b><br><span>One FlatGeobuf, one Parquet column file and one fence per L8 cell. The FGB is sliced into 8 KB pieces and zstd-block-compressed, with a key fence every 256 features. Legacy chunks remain readable; new writes use the per-cell layout.</span></li>
-          <li><span class="tag built">built</span><b>Columns</b><br><span>One Parquet file per cell, 2,048-row groups, rows in (key, id) order. Numeric/time row-group min/max is the zone map; a filter reads stats, skips groups and projects only predicate columns. Old chunks still read PFA1.</span></li>
-          <li><span class="tag built">built</span><b>Overview levels</b><br><span>L8 is detail; the samples are L6, L4 and L2, each capped at 2,048 features per cell. L6 is built from detail, L4 from L6, L2 from L4. L6 and L4 are rebuilt in the commit; L2 by a background worker after 5 s quiet. Detail reads the L8 file through its R-tree.</span></li>
+          <li><span class="tag built">built</span><b>Columns</b><br><span>One Parquet file per cell, 2,048-row groups, rows in (key, id) order. Numeric/time row-group min/max is the zone map; a filter reads stats, skips groups and projects only predicate columns. One evaluator serves pages and counts.</span></li>
+          <li><span class="tag built">built</span><b>Overview levels</b><br><span>L8 is detail; the samples are L6, L4 and L2, each capped at 2,048 features per cell. L6 is built from detail, L4 from L6, L2 from L4. All three are rebuilt in the commit. Detail reads the L8 file through its R-tree.</span></li>
           <li><span class="tag decided">decided</span><b>Ingest</b><br><span>Each upload is one level-8 cell; the server reads only that body and writes only that cell’s rows. Not built: the /v2 load still takes multi-cell bodies.</span></li>
           <li><span class="tag decided">decided</span><b>DuckDB input</b><br><span>Loader-side virtual source: source tables plus a publish schema; one view per collection; catalog carries id, geometry, CRS, cell and key. DuckDB spatial COPY writes one FGB per view/cell; the current server can ingest it. One view is one collection. Not built; DuckDB storage v1.5 is pinned for geometry CRS.</span></li>
           <li><span class="tag decided">decided</span><b>FGB lifecycle</b><br><span>One FGB per view/cell is written, uploaded, and deleted after HTTP 200; it is retained only on failure for retry. Compressed retention, if ever needed, uses seekable zstd frames with a seek table, not a plain zstd stream. Server storage is block-compressed and is not double-compressed.</span></li>
-          <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification. L6, L4 and L2 keep up to 2,048 per cell; L8 has no sample. L4 costs about 3.7 GB globally, L6 about 59 GB and L2 tiny; dropping the L8 sample frees up to ~950 GB. L2, L4 and L6 drop subpixel areas and lines (~1.6 km, ~400 m and ~100 m at 48°N); points stay; L8 detail keeps everything. No zoom mapping on the server: the client asks for overview=N. L2 is eventually consistent. The rank is the smallest hash, not the largest bbox; changing that is a separate decision.</span></li>
+          <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification. L6, L4 and L2 keep up to 2,048 per cell; L8 has no sample. L4 costs about 3.7 GB globally, L6 about 59 GB and L2 tiny; dropping the L8 sample frees up to ~950 GB. L2, L4 and L6 drop subpixel areas and lines (~1.6 km, ~400 m and ~100 m at 48°N); points stay; L8 detail keeps everything. No zoom mapping on the server: the client asks for overview=N. Every level is current after the commit. The rank is the smallest hash, not the largest bbox; changing that is a separate decision.</span></li>
           <li><span class="tag built">built</span><b>Caches</b><br><span>Block/file bytes, a range-read block cache, and per-cell catalog rows keyed by cell and version. Bbox queries load only the cells in view; unbounded scans still load the full collection/level chunk catalog.</span></li>
           <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the current rows, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
           <li><span class="tag built">built</span><b>Id index</b><br><span>One row per feature: its id hash and key. Replaced with the cell on every upload. No runs, merges or Bloom filters.</span></li>
@@ -345,10 +345,10 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
         <ul>
           <li>Loads are held in memory and nothing spills. The measured dense cell (1,008,367 features) decodes to about 2.7 GB; the 2.5M filled-in upper bound would be about 6.7 GB and sets the worker’s memory.</li>
           <li>A filter page is still dominated by the cell’s Parquet mask scan: the per-cell change is roughly parity for filters, not faster. Early-stop or row-range mask evaluation is the next optimization.</li>
-          <li>Prepared bundles are read into memory (up to 4 GiB) and still rebuild L6/L4 overviews server-side; overviews are not included in the bundle. Legacy chunks remain readable but are not rewritten.</li>
+          <li>The old prepared-bundle endpoint is gone; the normal FGB PUT is the only write path. Large uploads are still read into memory, so the loader should send cells sized to the worker's memory budget. The writable worker caps concurrent cell writes at two and should run with GOMEMLIMIT set.</li>
           <li>A filter on a dense cell reads one predicate column from the Parquet file plus matched FGB blocks. Row-group stats skip groups, but a broad filter can still approach the column bytes, and equality on high-cardinality fields prunes poorly.</li>
           <li>numberMatched has Parquet row-group stats but no postings: it reads one predicate column across surviving groups and cannot stop early.</li>
-          <li>L2 samples are deferred: a commit queues the L2 parent and a background worker rebuilds it after 5 s quiet. The worker drains batches, so sustained uploads can make L2 lag detail, L6 and L4.</li>
+          <li>L2 is built in the same commit as detail, L6 and L4; sustained uploads make the commit larger but leave no eventually-consistent level.</li>
           <li>A commit deletes and rewrites the cell under the collection lock: a dense cell serializes uploads for seconds, and every upload pays one commit.</li>
           <li>The id index holds one row per feature. At 1 billion features that is about 74.5 GB in Postgres, and every upload inserts or deletes the cell’s rows.</li>
           <li>A walk that spans an upload can skip features added behind its cursor, and repeat one moved ahead of it. Each page is still one read.</li>
@@ -359,7 +359,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li>L4 samples cost about 3.7 GB globally, L6 about 59 GB and L2 is negligible; the L8 sample is gone. The saving is real but the L8 detail file still has to be read at high zoom.</li>
           <li>Subpixel features are dropped from the L2, L4 and L6 samples: areal and linear features smaller than one pixel (about 1.6 km, 400 m and 100 m at 48°N); points stay. L8 detail keeps everything. A client wanting a small polygon at a coarse zoom will not see it, but detail still has it.</li>
           <li>The DuckDB path has no S2 functions: publish views must expose cell/key, or a native vectorized UDF/pre-pass must add them. One view is one collection; multiple views in a cell are multiple collections. DuckDB file storage is version-coupled and is not the durable source; GeoParquet remains the interchange.</li>
-          <li>The simple DuckDB → FGB → /v2 path leaves server parse/derive in place (about 410 µs/feature enriched). Only the prepared bundle removes that cost; do not confuse fast FGB generation with fast server ingest.</li>
+          <li>The simple DuckDB → FGB → /v2 path leaves validation and sidecar derivation in place; the server copies feature bytes but still builds the fence, Parquet columns and id rows. Do not confuse fast FGB generation with fast server ingest.</li>
           <li>Building-only collections can produce empty L4/L2 samples: the subpixel filter removes footprint-sized features at those zooms. Mixed OSM layers keep larger landuse and roads. Decide whether to keep a minimum sample floor, use points/aggregates, or accept empty structure-only overviews.</li>
           <li>The enriched benchmark uses 1 m edge segmentation; 1 cm vertex spacing would add roughly two orders of magnitude more geometry and is not modelled. The mean cell is measured from building-only Luxembourg; the dense cell is the measured Île-de-France max (1,008,367). The 2.5M filled-in upper bound remains a separate assumption (~1,930/km²).</li>
           <li>The 711 B/feature upload assumes loader-side zstd. The current API accepts uncompressed FGB, measured at 2,687 B/feature; loader compression and the per-cell file layout are target work.</li>
@@ -548,7 +548,7 @@ const MODEL = {
     layout: ['the order is checked, not produced'], index: [] },
   validate: { t: 'Derive', kind: 'cpu', share: c => c.Wr.stage.derive / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.derive)} CPU`, l2: () => 'fence, cols, ids',
-    text: 'One pass over the validated features builds the key fence, the Parquet column file (2,048-row groups) and the id index rows. The L6 and L4 samples are assembled in the commit, and L2 is queued.',
+    text: 'One pass over the validated features builds the key fence, the Parquet column file (2,048-row groups) and the id index rows. The L6, L4 and L2 samples are assembled in the commit.',
     layout: ['streamed from the parsed file'], index: [] },
   sort: { t: 'Compress', kind: 'cpu', share: c => c.Wr.stage.compress / c.Wr.total,
     l1: c => `${fmtTime(c.Wr.stage.compress)} CPU`, l2: c => `${fmtBytes(c.Wr.fileBytes)}`,
@@ -560,7 +560,7 @@ const MODEL = {
     layout: ['COPY per file'], index: [] },
   commit: { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total,
     l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one transaction',
-    text: 'One transaction: lock the collection row, delete the cell’s old files, insert the new file rows, rebuild levels 6 and 4, queue level 2 for the background worker, replace the cell’s id index rows, bump the version. A reader that listed a file just before it was deleted retries once. Cost grows with the cell.',
+    text: 'One transaction: lock the collection row, delete the cell’s old files, insert the new file rows, rebuild levels 6, 4 and 2, replace the cell’s id index rows, bump the version. A reader that listed a file just before it was deleted retries once. Cost grows with the cell.',
     layout: ['files replaced in place'], index: [] },
   blobs: { t: 'blobs & files', kind: 'db', size: c => c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes + c.Wr.sampleBytes,
     l1: c => `${fmtBytes(c.Wr.fileBytes + c.Wr.idxBytes + c.Wr.fenceBytes + c.Wr.colBytes)} per cell`, l2: () => `${fmtBytes(collectionStored(W.f).detail + collectionStored(W.f).samples)} total`,
@@ -831,13 +831,13 @@ const STAGES = [
   { t: 'Write blocks', kind: 'db', share: c => c.Wr.tDb / c.Wr.total, l1: c => `${fmtBytes(c.Wr.db)} COPY`, l2: c => `${fmtTime(c.Wr.tDb)} to Postgres`,
     text: `Writes every file as ${fmt(K.block)}-byte block rows, unpublished until the commit. WAL writes about the same bytes again.` },
   { t: 'Commit', kind: 'mut', role: 'tx', share: c => K.fixed / c.Wr.total, l1: () => `${fmtTime(K.fixed)} fixed`, l2: () => 'one transaction',
-    text: 'One transaction. The commit replaces the cell’s files, rebuilds levels 6 and 4 and queues the L2 parent. A background worker rebuilds L2 after 5 s quiet; its writes are not in this transaction.' },
+    text: 'One transaction. The commit replaces the cell’s files and rebuilds levels 6, 4 and 2 before it returns.' },
 ];
 const SUBS = [
   'lock the collection row, so commits serialize',
   'delete the cell’s old files and rows',
   'insert the new file rows and fence',
-  'rebuild levels 6 and 4; queue level 2',
+  'rebuild levels 6, 4 and 2',
   'replace the id index rows',
   'bump the version and commit',
 ];
@@ -1041,7 +1041,7 @@ const SIDE = {
       <p class="note">The map zooms with the slider on OpenFreeMap Liberty; the magenta bbox is the query window and stays the same size.</p>
       <p>L8 is the detail file, not a sample. Level 6 keeps 2,048 features in each of its 16 L8 cells; level 4 keeps 2,048 in each of its 16 L6 cells; level 2 keeps 2,048 from its 16 L4 cells. A coarser level has 16 times the ground, so it keeps 16 times fewer features per km².</p>
       <p class="note">Before ranking, the zoomed-out samples drop areal and linear features smaller than one pixel: about 1.6 km for L2, 400 m for L4 and 100 m for L6 at 48°N. Points stay. L8 detail keeps everything. The survivors are still smallest-hash, not largest-bbox, so visible features stay uniform rather than big-feature-biased.</p>
-      <p class="note">L2 is rebuilt in the background: a commit queues its parent, and a worker rebuilds it after 5 s of quiet. Detail, L6 and L4 are current.</p>
+      <p class="note">L2, L4 and L6 are rebuilt in the same commit; every served level is current.</p>
       <p class="note">L8 is the detail FGB file itself. Its packed R-tree is the spatial index: it names the byte ranges a bbox needs, so a page reads only the matching blocks, not the whole cell. There is no sample above L8.</p>
       <p class="note">Below z11 each zoom picks the sample whose count is closest to one page on a log scale; from z11 detail is used. A level can overshoot and the page limit trims it; under-filled samples are marked. From the workload bar: the cell size is spread evenly over the view, and the page size is the budget.</p>
       <p class="note" id="ov-counts"></p>
@@ -1082,7 +1082,7 @@ function syncTotals() {
     return `<tr class="${t.f === W.f ? 'pick' : ''}"><td>${t.name}${t.f === W.f ? ' →' : ''}</td><td>${fmt(x.cells)}</td><td>${fmtBytes(x.per.upload)}</td><td>${fmtBytes(x.upload)}</td><td>${fmtBytes(x.stored)}<span class="tbar db" style="width:${(100 * x.stored / Math.max(...TYPES.map(y => typeTotals(y.f).stored))).toFixed(1)}%"></span></td><td>${fmtTime(x.time)}</td></tr>`;
   }).join('');
   const t = typeTotals(W.f);
-  set('#tot-note', `At ${fmtBig(W.n)}: ${fmtBytes(t.upload)} up and ${fmtBytes(W.n * K.idxRow)} of id rows. Detail storage and cell-commit time grow with the cell count; L2 rebuilds run in the background.`);
+  set('#tot-note', `At ${fmtBig(W.n)}: ${fmtBytes(t.upload)} up and ${fmtBytes(W.n * K.idxRow)} of id rows. Detail storage and cell-commit time grow with the cell count; L2, L4 and L6 are rebuilt in the commit.`);
 }
 
 function inputRows() {
@@ -1144,7 +1144,7 @@ function syncLoad() {
   set('#l-sub', k >= 7 ? `Commit sub-step ${k - 6} of ${SUBS.length}: ${SUBS[k - 7]}.` : '');
   set('#l-input', `Loader pre-stage: DuckDB ${fmtBytes(W.f * K.duck)} per cell → FGB ${fmtBytes(W.f * K.fgbOut)} in ${fmtTime(W.f * K.fgbSec)}. The FGB is uncompressed; zstd upload is ${fmtBytes(W.f * K.up)}/cell. This is loader work, before the server stages.`);
   const T = typeTotals(W.f);
-  set('#l-totals', `At ${fmtBig(W.n)}: ${fmt(T.cells)} uploads, ${fmtBytes(T.upload)} up, ${fmtBytes(T.stored)} stored, ${fmtTime(T.time)} in the cell commits. L2 rebuilds run in the background.`);
+  set('#l-totals', `At ${fmtBig(W.n)}: ${fmt(T.cells)} uploads, ${fmtBytes(T.upload)} up, ${fmtBytes(T.stored)} stored, ${fmtTime(T.time)} in the cell commits.`);
   set('#status-load', k === 0 ? 'Demo runs one upload through its seven stages.' : `Stage ${cur + 1} of 7 · ${st.t}: ${st.l1(c)}, ${st.l2(c)}.`);
 }
 function syncReads() {

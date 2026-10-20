@@ -11,11 +11,11 @@ import (
 	"github.com/adonm/postfgb/internal/spatial"
 )
 
-var chunkColumns = []string{"collection", "cell", "seq", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "col_file", "fence_file", "zone", "level"}
+var chunkColumns = []string{"collection", "cell", "first_key", "first_id", "last_key", "last_id", "minx", "miny", "maxx", "maxy", "features", "file_id", "col_file", "fence_file", "zone", "level"}
 
 func chunkValues(name string, c chunkRow) []any {
 	return []any{
-		name, spatial.ToOrdered(c.cell), int32(c.seq),
+		name, spatial.ToOrdered(c.cell),
 		spatial.ToOrdered(c.first.key), c.first.id,
 		spatial.ToOrdered(c.last.key), c.last.id,
 		c.bounds[0], c.bounds[1], c.bounds[2], c.bounds[3],
@@ -103,9 +103,6 @@ func (l *Layer) commitRows(ctx context.Context, name string, columns []chunk.Col
 	}
 	for _, row := range coarse {
 		fileIDs = append(fileIDs, row.fileID, row.colFile, row.fenceFile)
-	}
-	if err := queueOverviews(ctx, tx, name, ancestors(touched, deferredLevel), deferredLevel); err != nil {
-		return LoadResult{}, err
 	}
 	if err := replaceIDs(ctx, tx, uid, touched, entries); err != nil {
 		return LoadResult{}, err

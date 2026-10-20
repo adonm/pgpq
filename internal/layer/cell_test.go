@@ -22,14 +22,11 @@ func denseFeatures(prefix string, lng, lat, spread float64, n int, seed int64) [
 	for i := range out {
 		x := lng + (rng.Float64()-0.5)*spread
 		y := lat + (rng.Float64()-0.5)*spread
-		coords, _ := json.Marshal([]float64{x, y})
-		out[i] = chunk.InputFeature{
-			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords},
-			Properties: map[string]json.RawMessage{
-				"id":   json.RawMessage(strconv.Quote(fmt.Sprintf("%s-%05d", prefix, i))),
-				"name": json.RawMessage(strconv.Quote("dense")),
-			},
+		props := map[string]json.RawMessage{
+			"id":   json.RawMessage(strconv.Quote(fmt.Sprintf("%s-%05d", prefix, i))),
+			"name": json.RawMessage(strconv.Quote("dense")),
 		}
+		out[i] = testPoint(testColumns, props, x, y)
 	}
 	return out
 }
@@ -38,11 +35,7 @@ func featureIDsIn(t *testing.T, features []chunk.InputFeature, bbox [4]float64) 
 	t.Helper()
 	var ids []string
 	for i := range features {
-		bounds, ok := chunk.FeatureBounds(&features[i])
-		if !ok {
-			t.Fatal("feature without bounds")
-		}
-		if intersects(bounds, &bbox) {
+		if intersects(features[i].Bounds, &bbox) {
 			ids = append(ids, string(features[i].Properties["id"]))
 		}
 	}
@@ -187,9 +180,9 @@ func TestPerCellFilesFenceAndReads(t *testing.T) {
 		if hit.ID != id {
 			t.Fatalf("lookup %s returned %s", id, hit.ID)
 		}
-		bounds, err := featureBounds(hit.Chunk, hit.Feature)
-		if err != nil {
-			t.Fatal(err)
+		bounds, ok := chunk.Bounds(hit.Header, hit.Feature)
+		if !ok {
+			t.Fatal("lookup feature has no bounds")
 		}
 		if spatial.Partition(spatial.Key(bounds)) != spatial.Partition(hit.Key) {
 			t.Fatalf("%s resolved to another cell", id)
@@ -217,78 +210,5 @@ func TestPerCellSameKeyCursor(t *testing.T) {
 	paged := readAll(t, l, name, Query{Limit: 37})
 	if !slices.Equal(idsOf(paged), idsOf(all)) {
 		t.Fatal("same-key cursor paging skipped or repeated rows")
-	}
-}
-
-func TestLegacyChunkStillReadable(t *testing.T) {
-	l, ctx := openTest(t)
-	name := "layer_test_legacy_read"
-	dropCollection(t, l, name)
-	t.Cleanup(func() { dropCollection(t, l, name) })
-	features := withValues(denseFeatures("legacy", 2.35, 48.85, 0.004, 700, 102), 0)
-	cols := []chunk.Column{
-		{Name: "id", Type: flattypes.ColumnTypeString},
-		{Name: "name", Type: flattypes.ColumnTypeString},
-		{Name: "n", Type: flattypes.ColumnTypeLong},
-		{Name: "score", Type: flattypes.ColumnTypeDouble},
-		{Name: "flag", Type: flattypes.ColumnTypeBool},
-	}
-	if _, err := l.Load(ctx, name, datasetOf(t, name, cols, features), nil); err != nil {
-		t.Fatal(err)
-	}
-	var chunkID, fileID int64
-	if err := l.pool.QueryRow(ctx, `select chunk_id, file_id from pfgb.chunks where collection = $1 and level = 0`, name).Scan(&chunkID, &fileID); err != nil {
-		t.Fatal(err)
-	}
-	data, err := l.blocks.ReadAll(ctx, fileID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := chunk.Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	all, err := c.SearchAll()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := make([]map[string]json.RawMessage, len(all))
-	for i, f := range all {
-		rows[i] = chunk.DecodePropertyText(f.PropertiesBytes(), c.Columns())
-	}
-	legacy, err := chunk.EncodeAttrs(c.Columns(), rows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyCol, err := l.blocks.Put(ctx, name, "cols", legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyFGB, err := l.blocks.Put(ctx, name, "fgb", chunk.Compress(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := l.pool.Exec(ctx, `update pfgb.files set published = true where file_id = any($1)`, []int64{legacyCol, legacyFGB}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := l.pool.Exec(ctx, `update pfgb.chunks set file_id = $1, col_file = $2, fence_file = 0 where chunk_id = $3`, legacyFGB, legacyCol, chunkID); err != nil {
-		t.Fatal(err)
-	}
-	fresh := New(l.pool)
-	expr, err := cql.Parse("n >= 350")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := sortedIDs(readAll(t, fresh, name, Query{Limit: 1000, Filter: expr}))
-	if len(got) != 350 {
-		t.Fatalf("legacy filter returned %d, want 350", len(got))
-	}
-	box := box(city{"dense", 2.35, 48.85})
-	boxed := readAll(t, fresh, name, Query{Limit: 1000, BBox: box})
-	if len(boxed) != len(features) {
-		t.Fatalf("legacy bbox returned %d, want %d", len(boxed), len(features))
-	}
-	if hit, err := fresh.Lookup(ctx, name, "legacy-00007"); err != nil || hit.ID != "legacy-00007" {
-		t.Fatalf("legacy lookup: %v", err)
 	}
 }

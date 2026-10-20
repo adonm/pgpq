@@ -2,15 +2,15 @@ package layer
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"math"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
 	"github.com/adonm/postfgb/internal/blocks"
 	"github.com/adonm/postfgb/internal/chunk"
@@ -25,6 +25,7 @@ const (
 	overviewSampleCap = 2048
 	sampleLatitude    = 48.0
 	metersPerDegree   = 111320.0
+	loadWorkers       = 2
 )
 
 func samplePixelMeters(level int) float64 {
@@ -85,7 +86,6 @@ type entry struct {
 type chunkRow struct {
 	cell      uint64
 	level     int
-	seq       int
 	first     entry
 	last      entry
 	bounds    [4]float64
@@ -119,36 +119,7 @@ func (l *Layer) Load(ctx context.Context, name string, ds ingest.Dataset, cells 
 	if err != nil {
 		return LoadResult{}, err
 	}
-	for _, level := range overviewLevels {
-		rows, err := l.writeCells(ctx, l.putBlob, name, ds, groupByCell(sampleOverview(entries, level)), level)
-		if err != nil {
-			return LoadResult{}, err
-		}
-		chunks = append(chunks, rows...)
-	}
 	return l.commit(ctx, name, ds, cells, chunks, entries)
-}
-
-func sampleOverview(entries []entry, level int) []entry {
-	groups := map[uint64][]entry{}
-	for _, e := range entries {
-		if sampleTooSmall(e.bounds, level) {
-			continue
-		}
-		cell := spatial.Level(e.key, level)
-		groups[cell] = append(groups[cell], e)
-	}
-	var out []entry
-	for _, group := range groups {
-		slices.SortFunc(group, func(a, b entry) int {
-			if c := cmp.Compare(a.hash, b.hash); c != 0 {
-				return c
-			}
-			return compareKeyID(a.key, a.id, b.key, b.id)
-		})
-		out = append(out, group[:min(len(group), overviewSampleCap)]...)
-	}
-	return out
 }
 
 func indexFeatures(ds ingest.Dataset, cells []uint64) ([]entry, error) {
@@ -159,8 +130,8 @@ func indexFeatures(ds ingest.Dataset, cells []uint64) ([]entry, error) {
 	seen := make(map[string]struct{}, len(ds.Features))
 	out := make([]entry, 0, len(ds.Features))
 	for i := range ds.Features {
-		bounds, ok := chunk.FeatureBounds(&ds.Features[i])
-		if !ok || !finite(bounds) {
+		bounds := ds.Features[i].Bounds
+		if !finite(bounds) {
 			return nil, invalidf("feature %d has no usable geometry", i)
 		}
 		key := spatial.Key(bounds)
@@ -235,7 +206,7 @@ func (l *Layer) writeCells(ctx context.Context, put blobPut, name string, ds ing
 		out   []chunkRow
 		first error
 	)
-	sem := make(chan struct{}, runtime.NumCPU())
+	sem := make(chan struct{}, loadWorkers)
 	for _, cell := range cells {
 		sem <- struct{}{}
 		wg.Add(1)
@@ -267,22 +238,19 @@ func (l *Layer) writeCell(ctx context.Context, put blobPut, name string, ds inge
 	if err != nil {
 		return nil, err
 	}
-	row.seq = 0
 	return []chunkRow{row}, nil
 }
 
 func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ingest.Dataset, cell uint64, entries []entry, level int) (chunkRow, error) {
 	batch := make([]chunk.InputFeature, len(entries))
-	bounds := make([][4]float64, len(entries))
 	keys := make([]uint64, len(entries))
 	ids := make([]string, len(entries))
 	for i, e := range entries {
 		batch[i] = ds.Features[e.index]
-		bounds[i] = e.bounds
 		keys[i] = e.key
 		ids[i] = e.id
 	}
-	encoded, err := encodeCell(name, ds.Columns, batch, bounds, keys, ids)
+	encoded, err := encodeCell(name, ds.Header, batch, keys, ids)
 	if err != nil {
 		return chunkRow{}, err
 	}
@@ -319,8 +287,8 @@ type cellEncoding struct {
 	zone    string
 }
 
-func encodeCell(name string, cols []chunk.Column, batch []chunk.InputFeature, bounds [][4]float64, keys []uint64, ids []string) (cellEncoding, error) {
-	data, fence, err := chunk.EncodeOrdered(name, cols, batch, bounds, keys, ids)
+func encodeCell(name string, header *flattypes.Header, batch []chunk.InputFeature, keys []uint64, ids []string) (cellEncoding, error) {
+	data, fence, err := chunk.EncodeCell(name, header, batch, keys, ids)
 	if err != nil {
 		return cellEncoding{}, err
 	}
@@ -328,7 +296,7 @@ func encodeCell(name string, cols []chunk.Column, batch []chunk.InputFeature, bo
 	for i := range batch {
 		props[i] = batch[i].Properties
 	}
-	blob, summaries, err := encodeParquetColumns(cols, props)
+	blob, summaries, err := encodeParquetColumns(chunk.HeaderColumns(header), props)
 	if err != nil {
 		return cellEncoding{}, err
 	}

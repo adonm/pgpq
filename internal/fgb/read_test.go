@@ -40,19 +40,16 @@ func gridFeatures(n int, minX, minY, maxX, maxY float64) []testFeature {
 	for i := range out {
 		x := minX + (maxX-minX)*float64(i%60)/59
 		y := minY + (maxY-minY)*float64(i/60)/math.Max(float64(n/60-1), 1)
-		coords, _ := json.Marshal([]float64{x, y})
 		id := fmt.Sprintf("f-%05d", i)
+		props := map[string]json.RawMessage{
+			"id":   json.RawMessage(strconv.Quote(id)),
+			"name": json.RawMessage(strconv.Quote(fmt.Sprintf("name-%d", i%7))),
+		}
 		out[i] = testFeature{
 			id:     id,
 			bounds: [4]float64{x, y, x, y},
 			key:    spatial.Key([4]float64{x, y, x, y}),
-			input: chunk.InputFeature{
-				Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords},
-				Properties: map[string]json.RawMessage{
-					"id":   json.RawMessage(strconv.Quote(id)),
-					"name": json.RawMessage(strconv.Quote(fmt.Sprintf("name-%d", i%7))),
-				},
-			},
+			input:  testPoint([]chunk.Column{{Name: "id", Type: flattypes.ColumnTypeString}, {Name: "name", Type: flattypes.ColumnTypeString}}, props, x, y),
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -71,16 +68,14 @@ func encode(t *testing.T, features []testFeature) ([]byte, []fgb.FenceEntry) {
 		{Name: "name", Type: flattypes.ColumnTypeString},
 	}
 	inputs := make([]chunk.InputFeature, len(features))
-	bounds := make([][4]float64, len(features))
 	keys := make([]uint64, len(features))
 	ids := make([]string, len(features))
 	for i, f := range features {
 		inputs[i] = f.input
-		bounds[i] = f.bounds
 		keys[i] = f.key
 		ids[i] = f.id
 	}
-	data, fence, err := chunk.EncodeOrdered("cell", cols, inputs, bounds, keys, ids)
+	data, fence, err := chunk.EncodeCell("cell", testHeader(cols), inputs, keys, ids)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +141,9 @@ func TestOrderedLayoutAndBboxRanges(t *testing.T) {
 	cols := chunk.HeaderColumns(layout.Header())
 	got := make([]string, len(found))
 	for i, f := range found {
-		got[i] = fmt.Sprint(chunk.DecodeProperties(f.PropertiesBytes(), cols)["id"])
+		var id string
+		json.Unmarshal(chunk.DecodePropertyText(f.PropertiesBytes(), cols)["id"], &id)
+		got[i] = id
 	}
 	sort.Strings(got)
 	sort.Strings(want)

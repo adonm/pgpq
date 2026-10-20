@@ -38,11 +38,15 @@ var filterTexts = []string{
 
 func withValues(features []chunk.InputFeature, offset int) []chunk.InputFeature {
 	for i := range features {
-		features[i].Properties["n"] = json.RawMessage(strconv.Itoa(offset + i))
+		props := features[i].Properties
+		props["n"] = json.RawMessage(strconv.Itoa(offset + i))
 		if i%7 != 0 {
-			features[i].Properties["score"] = json.RawMessage(strconv.FormatFloat(float64(i%10)/10, 'f', -1, 64))
+			props["score"] = json.RawMessage(strconv.FormatFloat(float64(i%10)/10, 'f', -1, 64))
 		}
-		features[i].Properties["flag"] = json.RawMessage(strconv.FormatBool(i%3 == 0))
+		props["flag"] = json.RawMessage(strconv.FormatBool(i%3 == 0))
+		x := (features[i].Bounds[0] + features[i].Bounds[2]) / 2
+		y := (features[i].Bounds[1] + features[i].Bounds[3]) / 2
+		features[i] = testPoint(denseCols, props, x, y)
 	}
 	return features
 }
@@ -50,8 +54,14 @@ func withValues(features []chunk.InputFeature, offset int) []chunk.InputFeature 
 func matchingIDs(hits []Hit, expr cql.Expr) []string {
 	var ids []string
 	for _, hit := range hits {
-		cols := hit.Chunk.Columns()
-		props := chunk.DecodeProperties(hit.Feature.PropertiesBytes(), cols)
+		cols := chunk.HeaderColumns(hit.Header)
+		props := map[string]any{}
+		for name, raw := range chunk.DecodePropertyText(hit.Feature.PropertiesBytes(), cols) {
+			var value any
+			if json.Unmarshal(raw, &value) == nil {
+				props[name] = value
+			}
+		}
 		if cql.Match(expr, props, chunk.ColumnTypes(cols)) {
 			ids = append(ids, hit.ID)
 		}

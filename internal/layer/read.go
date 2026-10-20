@@ -3,9 +3,11 @@ package layer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 	"github.com/jackc/pgx/v5"
@@ -29,7 +31,8 @@ type Query struct {
 type Hit struct {
 	Key     uint64
 	ID      string
-	Chunk   *chunk.Chunk
+	Header  *flattypes.Header
+	Raw     []byte
 	Feature *flattypes.Feature
 }
 
@@ -40,6 +43,7 @@ type Page struct {
 }
 
 type chunkMeta struct {
+	cell      uint64
 	fileID    int64
 	colFile   int64
 	fenceFile int64
@@ -50,11 +54,6 @@ type chunkMeta struct {
 	firstID   string
 	lastKey   uint64
 	lastID    string
-}
-
-type located struct {
-	hit    Hit
-	bounds [4]float64
 }
 
 type catalogKey struct {
@@ -222,31 +221,28 @@ func scanChunkMeta(rows pgx.Rows) (chunkMeta, error) {
 	if err := rows.Scan(&cell, &m.fileID, &m.colFile, &m.fenceFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &firstKey, &m.firstID, &lastKey, &m.lastID, &m.zone); err != nil {
 		return m, err
 	}
+	m.cell = spatial.FromOrdered(cell)
 	m.firstKey = spatial.FromOrdered(firstKey)
 	m.lastKey = spatial.FromOrdered(lastKey)
 	return m, nil
 }
 
-func (l *Layer) loadCatalogCells(ctx context.Context, name string, level int, cells []uint64) (map[uint64][]chunkMeta, error) {
-	rows, err := l.pool.Query(ctx, `select cell, file_id, col_file, fence_file, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 and cell = any($3) order by first_key, first_id collate "C"`, name, level, orderedCells(cells))
+func (l *Layer) loadCatalogCells(ctx context.Context, name string, level int, cells []uint64) ([]chunkMeta, error) {
+	rows, err := l.pool.Query(ctx, `select cell, file_id, col_file, fence_file, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 and cell = any($3) order by cell`,
+		name, level, orderedCells(cells))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	byCell := make(map[uint64][]chunkMeta, len(cells))
+	out := make([]chunkMeta, 0, len(cells))
 	for rows.Next() {
-		var cell int64
-		var m chunkMeta
-		var firstKey, lastKey int64
-		if err := rows.Scan(&cell, &m.fileID, &m.colFile, &m.fenceFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &firstKey, &m.firstID, &lastKey, &m.lastID, &m.zone); err != nil {
+		m, err := scanChunkMeta(rows)
+		if err != nil {
 			return nil, err
 		}
-		m.firstKey = spatial.FromOrdered(firstKey)
-		m.lastKey = spatial.FromOrdered(lastKey)
-		key := spatial.FromOrdered(cell)
-		byCell[key] = append(byCell[key], m)
+		out = append(out, m)
 	}
-	return byCell, rows.Err()
+	return out, rows.Err()
 }
 
 func catalogCoverLevel(level int) int {
@@ -273,15 +269,14 @@ func (l *Layer) catalogFor(ctx context.Context, coll Collection, level int, cell
 		missing = append(missing, cell)
 	}
 	if len(missing) > 0 {
-		byCell, err := l.loadCatalogCells(ctx, coll.Name, level, missing)
+		metas, err := l.loadCatalogCells(ctx, coll.Name, level, missing)
 		if err != nil {
 			return nil, err
 		}
-		for _, cell := range missing {
-			metas := byCell[cell]
-			key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level, cell: cell}
-			l.catalogs.Add(key, metas)
-			out = append(out, metas...)
+		for _, meta := range metas {
+			key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level, cell: meta.cell}
+			l.catalogs.Add(key, []chunkMeta{meta})
+			out = append(out, meta)
 		}
 	}
 	slices.SortFunc(out, func(a, b chunkMeta) int {
@@ -303,7 +298,7 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 		return nil, nil
 	}
 	if meta.fenceFile == 0 {
-		return l.matchesLegacy(ctx, idColumn, meta, q)
+		return nil, errors.New("layer: chunk has no key fence; reload the collection")
 	}
 	cell, err := l.cellFile(ctx, meta.fileID, meta.fenceFile)
 	if err != nil {
@@ -318,18 +313,18 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 		start = cell.fence.StartRow(q.Cursor.Key, q.Cursor.ID)
 	}
 	if q.Filter != nil {
-		var candidates map[int]struct{}
+		var candidates []int
 		if q.BBox != nil {
 			rows := cell.layout.Search(q.BBox[0], q.BBox[1], q.BBox[2], q.BBox[3])
-			candidates = make(map[int]struct{}, len(rows))
 			for _, row := range rows {
 				if row.Index >= start {
-					candidates[row.Index] = struct{}{}
+					candidates = append(candidates, row.Index)
 				}
 			}
 			if len(candidates) == 0 {
 				return nil, nil
 			}
+			slices.Sort(candidates)
 		}
 		return l.matchesFilter(ctx, idColumn, meta, cell, reader, q, limit, start, candidates)
 	}
@@ -349,15 +344,16 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 	if len(candidates) > limit+2*fgb.FenceEvery {
 		candidates = candidates[:limit+2*fgb.FenceEvery]
 	}
-	features, err := cell.layout.Features(reader, candidates)
+	features, err := cell.layout.ReadFeatures(reader, candidates)
 	if err != nil {
 		return nil, err
 	}
 	hits := make([]Hit, 0, min(len(features), limit))
-	for _, f := range features {
-		bounds, err := featureBounds(cell.chunk, f)
-		if err != nil {
-			return nil, err
+	for _, item := range features {
+		f := item.Feature
+		bounds, ok := chunk.Bounds(cell.header, f)
+		if !ok {
+			return nil, errors.New("layer: stored feature has no geometry")
 		}
 		id, err := storedID(f, cell.cols, idColumn)
 		if err != nil {
@@ -370,7 +366,7 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 		if q.BBox != nil && !intersects(bounds, q.BBox) {
 			continue
 		}
-		hits = append(hits, Hit{Key: key, ID: id, Chunk: cell.chunk, Feature: f})
+		hits = append(hits, Hit{Key: key, ID: id, Header: cell.header, Raw: item.Raw, Feature: f})
 		if len(hits) == limit {
 			break
 		}
@@ -378,7 +374,7 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 	return hits, nil
 }
 
-func (l *Layer) matchesFilter(ctx context.Context, idColumn string, meta chunkMeta, cell *cellFile, fgbReader *blocks.Reader, q Query, limit, start int, candidates map[int]struct{}) ([]Hit, error) {
+func (l *Layer) matchesFilter(ctx context.Context, idColumn string, meta chunkMeta, cell *cellFile, fgbReader *blocks.Reader, q Query, limit, start int, candidates []int) ([]Hit, error) {
 	if meta.colFile == 0 {
 		return nil, errors.New("layer: chunk has no column file; reload the collection")
 	}
@@ -391,24 +387,26 @@ func (l *Layer) matchesFilter(ctx context.Context, idColumn string, meta chunkMe
 		return nil, stale(err)
 	}
 	if !bytes.HasPrefix(head, []byte(parquetMagic)) {
-		return l.matchesLegacy(ctx, idColumn, meta, q)
+		return nil, errors.New("layer: column file is not Parquet")
 	}
 	hits := make([]Hit, 0, limit)
 	var callbackErr error
-	err = parquetMatchesAt(columns, columns.Size(), q.Filter, meta.features, start, func(row int) bool {
+	err = parquetMatchesAt(columns, columns.Size(), q.Filter, meta.features, start, candidates, func(row int) bool {
 		if candidates != nil {
-			if _, ok := candidates[row]; !ok {
+			at := sort.SearchInts(candidates, row)
+			if at == len(candidates) || candidates[at] != row {
 				return true
 			}
 		}
-		f, err := cell.layout.Feature(fgbReader, fgb.Row{Index: row})
+		item, err := cell.layout.ReadFeature(fgbReader, fgb.Row{Index: row})
 		if err != nil {
 			callbackErr = err
 			return false
 		}
-		bounds, err := featureBounds(cell.chunk, f)
-		if err != nil {
-			callbackErr = err
+		f := item.Feature
+		bounds, ok := chunk.Bounds(cell.header, f)
+		if !ok {
+			callbackErr = errors.New("layer: stored feature has no geometry")
 			return false
 		}
 		id, err := storedID(f, cell.cols, idColumn)
@@ -423,7 +421,7 @@ func (l *Layer) matchesFilter(ctx context.Context, idColumn string, meta chunkMe
 		if q.BBox != nil && !intersects(bounds, q.BBox) {
 			return true
 		}
-		hits = append(hits, Hit{Key: key, ID: id, Chunk: cell.chunk, Feature: f})
+		hits = append(hits, Hit{Key: key, ID: id, Header: cell.header, Raw: item.Raw, Feature: f})
 		return len(hits) < limit
 	})
 	if err != nil {
@@ -435,143 +433,15 @@ func (l *Layer) matchesFilter(ctx context.Context, idColumn string, meta chunkMe
 	return hits, nil
 }
 
-func (l *Layer) matchesLegacy(ctx context.Context, idColumn string, meta chunkMeta, q Query) ([]Hit, error) {
-	data, err := l.blocks.ReadAll(ctx, meta.fileID)
-	if err != nil {
-		return nil, stale(err)
-	}
-	c, err := chunk.Open(data)
-	if err != nil {
-		return nil, err
-	}
-	var features []*flattypes.Feature
-	if q.BBox != nil && q.Filter == nil {
-		features, err = c.Search(q.BBox[0], q.BBox[1], q.BBox[2], q.BBox[3])
-	} else {
-		features, err = c.SearchAll()
-	}
-	if err != nil {
-		return nil, err
-	}
-	cols := c.Columns()
-	all := make([]located, 0, len(features))
-	for _, f := range features {
-		bounds, err := featureBounds(c, f)
-		if err != nil {
-			return nil, err
-		}
-		id, err := storedID(f, cols, idColumn)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, located{hit: Hit{Key: spatial.Key(bounds), ID: id, Chunk: c, Feature: f}, bounds: bounds})
-	}
-	slices.SortFunc(all, func(a, b located) int { return compareKeyID(a.hit.Key, a.hit.ID, b.hit.Key, b.hit.ID) })
-	var keep []bool
-	if q.Filter != nil {
-		keep, err = l.rowMask(ctx, meta, q.Filter, len(all))
-		if err != nil {
-			return nil, err
-		}
-	}
-	var hits []Hit
-	for i, item := range all {
-		if keep != nil && !keep[i] {
-			continue
-		}
-		if keep != nil && q.BBox != nil && !intersects(item.bounds, q.BBox) {
-			continue
-		}
-		if q.Cursor != nil && compareKeyID(item.hit.Key, item.hit.ID, q.Cursor.Key, q.Cursor.ID) <= 0 {
-			continue
-		}
-		hits = append(hits, item.hit)
-	}
-	return hits, nil
-}
-
 func (l *Layer) rowMask(ctx context.Context, meta chunkMeta, filter cql.Expr, rows int) ([]bool, error) {
 	if meta.colFile == 0 {
 		return nil, errors.New("layer: chunk has no column file; reload the collection")
 	}
-	fileReader, err := l.blocks.Open(ctx, meta.colFile)
+	reader, err := l.blocks.Open(ctx, meta.colFile)
 	if err != nil {
 		return nil, stale(err)
 	}
-	if fileReader.Size() <= 1<<20 {
-		data, err := l.blocks.ReadAll(ctx, meta.colFile)
-		if err != nil {
-			return nil, stale(err)
-		}
-		if bytes.HasPrefix(data, []byte(parquetMagic)) {
-			return parquetMask(data, filter, rows)
-		}
-		return legacyColumnMask(data, filter, rows)
-	}
-	head := make([]byte, 4)
-	if _, err := fileReader.ReadAt(head, 0); err != nil {
-		return nil, stale(err)
-	}
-	if bytes.HasPrefix(head, []byte(parquetMagic)) {
-		return parquetMaskAt(fileReader, fileReader.Size(), filter, rows)
-	}
-	data, err := l.blocks.ReadAll(ctx, meta.colFile)
-	if err != nil {
-		return nil, stale(err)
-	}
-	return legacyColumnMask(data, filter, rows)
-}
-
-func legacyColumnMask(data []byte, filter cql.Expr, rows int) ([]bool, error) {
-	reader, ok := chunk.OpenAttrs(data)
-	if !ok {
-		return nil, errors.New("layer: column file unreadable")
-	}
-	file := reader.File()
-	if file.Rows != rows {
-		return nil, fmt.Errorf("layer: column file has %d rows, chunk has %d", file.Rows, rows)
-	}
-	props := make([]map[string]any, rows)
-	for _, name := range cql.Properties(filter) {
-		if _, ok := file.Column(name); !ok {
-			continue
-		}
-		values, err := reader.Values(name)
-		if err != nil {
-			return nil, err
-		}
-		for i := range props {
-			value := values.Value(i)
-			if value == nil {
-				continue
-			}
-			if props[i] == nil {
-				props[i] = map[string]any{}
-			}
-			props[i][name] = value
-		}
-	}
-	columns := file.ColumnTypes()
-	keep := make([]bool, rows)
-	for i := range keep {
-		keep[i] = cql.Match(filter, props[i], columns)
-	}
-	return keep, nil
-}
-
-func featureBounds(c *chunk.Chunk, f *flattypes.Feature) ([4]float64, error) {
-	shape, err := chunk.ParseFlat(c.Header(), f)
-	if err != nil {
-		return [4]float64{}, err
-	}
-	if shape == nil {
-		return [4]float64{}, errors.New("layer: stored feature has no geometry")
-	}
-	bounds, ok := shape.Bound()
-	if !ok {
-		return [4]float64{}, errors.New("layer: stored feature has no extent")
-	}
-	return bounds, nil
+	return parquetMaskAt(reader, reader.Size(), filter, rows)
 }
 
 func stale(err error) error {
@@ -586,9 +456,15 @@ func intersects(bounds [4]float64, bbox *[4]float64) bool {
 }
 
 func storedID(f *flattypes.Feature, cols []chunk.Column, column string) (string, error) {
-	value, ok := chunk.DecodeProperties(f.PropertiesBytes(), cols)[column]
-	if !ok || value == nil {
+	raw := chunk.DecodePropertyText(f.PropertiesBytes(), cols)[column]
+	if len(raw) == 0 {
 		return "", fmt.Errorf("layer: stored feature lacks id %q", column)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return "", fmt.Errorf("layer: stored id %q is unusable", column)
 	}
 	text, ok := stats.CanonicalText(value)
 	if !ok || text == "" {

@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 
 	"github.com/adonm/postfgb/internal/chunk"
 	"github.com/adonm/postfgb/internal/ingest"
@@ -34,10 +31,7 @@ func (s *Server) putLayer(w http.ResponseWriter, r *http.Request) {
 		}
 		cells = parsed
 	}
-	ds, err := ingest.ReadDataset(r.Body, ingest.Options{
-		IDColumn: r.URL.Query().Get("id_column"),
-		Flatten:  flattenJSON(r),
-	})
+	ds, err := ingest.ReadDataset(r.Body, ingest.Options{IDColumn: r.URL.Query().Get("id_column")})
 	if err != nil {
 		layerError(w, err)
 		return
@@ -124,7 +118,7 @@ func writeLayerGeoJSON(w http.ResponseWriter, page layer.Page, next string, matc
 		Features:       make([]chunk.Feature, 0, len(page.Hits)),
 	}
 	for _, hit := range page.Hits {
-		feature := hit.Chunk.GeoJSON(hit.Feature)
+		feature := chunk.GeoJSONFeature(hit.Header, hit.Feature)
 		feature.ID = hit.ID
 		out.Features = append(out.Features, *feature)
 	}
@@ -136,16 +130,11 @@ func writeLayerGeoJSON(w http.ResponseWriter, page layer.Page, next string, matc
 }
 
 func writeLayerFGB(w http.ResponseWriter, r *http.Request, page layer.Page, next string) {
-	header := page.Hits[0].Chunk.Header()
-	geometry := header.GeometryType()
-	features := make([]*flattypes.Feature, len(page.Hits))
+	features := make([]chunk.InputFeature, len(page.Hits))
 	for i, hit := range page.Hits {
-		features[i] = hit.Feature
-		if hit.Chunk.Header().GeometryType() != geometry {
-			geometry = flattypes.GeometryTypeUnknown
-		}
+		features[i] = chunk.InputFeature{Raw: hit.Raw}
 	}
-	data, err := chunk.EncodeFeatures(page.Collection, header, geometry, features)
+	data, err := chunk.EncodePage(page.Collection, page.Hits[0].Header, features)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -195,40 +184,8 @@ func (s *Server) layerItem(w http.ResponseWriter, r *http.Request) {
 		layerError(w, err)
 		return
 	}
-	feature := hit.Chunk.GeoJSON(hit.Feature)
+	feature := chunk.GeoJSONFeature(hit.Header, hit.Feature)
 	feature.ID = hit.ID
 	w.Header().Set("Content-Type", "application/geo+json")
 	json.NewEncoder(w).Encode(feature)
-}
-
-const maxBundleBytes int64 = 4 << 30
-
-func (s *Server) putBundle(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("id")
-	if !store.ValidName(name) {
-		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
-		return
-	}
-	cells, err := spatial.Cells([]string{r.PathValue("cell")})
-	if err != nil || len(cells) != 1 {
-		http.Error(w, "cell must be one level-8 token", http.StatusUnprocessableEntity)
-		return
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBundleBytes))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			http.Error(w, "bundle is too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	result, err := s.layers.LoadBundle(r.Context(), name, cells[0], body)
-	if err != nil {
-		layerError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
 }

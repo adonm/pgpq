@@ -1,7 +1,6 @@
 package layer
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,21 +20,24 @@ import (
 
 const benchCollection = "layer_bench_cell_files"
 
+var benchCols = []chunk.Column{
+	{Name: "id", Type: flattypes.ColumnTypeString},
+	{Name: "name", Type: flattypes.ColumnTypeString},
+	{Name: "n", Type: flattypes.ColumnTypeLong},
+}
+
 func benchFeatures(n int) []chunk.InputFeature {
 	rng := rand.New(rand.NewSource(2026))
 	out := make([]chunk.InputFeature, n)
 	for i := range out {
 		x := 2.35 + (rng.Float64()-0.5)*0.02
 		y := 48.85 + (rng.Float64()-0.5)*0.02
-		coords, _ := json.Marshal([]float64{x, y})
-		out[i] = chunk.InputFeature{
-			Geometry: chunk.RawGeometry{Type: "Point", Coordinates: coords},
-			Properties: map[string]json.RawMessage{
-				"id":   json.RawMessage(strconv.Quote(fmt.Sprintf("bench-%05d", i))),
-				"name": json.RawMessage(strconv.Quote("bench")),
-				"n":    json.RawMessage(strconv.Itoa(i)),
-			},
+		props := map[string]json.RawMessage{
+			"id":   json.RawMessage(strconv.Quote(fmt.Sprintf("bench-%05d", i))),
+			"name": json.RawMessage(strconv.Quote("bench")),
+			"n":    json.RawMessage(strconv.Itoa(i)),
 		}
+		out[i] = testPoint(benchCols, props, x, y)
 	}
 	return out
 }
@@ -59,19 +61,7 @@ func benchLayer(b *testing.B) (*Layer, context.Context, []chunk.InputFeature) {
 	dropCollectionBench(ctx, b, l, benchCollection)
 	b.Cleanup(func() { dropCollectionBench(context.Background(), b, l, benchCollection) })
 	features := benchFeatures(50000)
-	cols := []chunk.Column{
-		{Name: "id", Type: flattypes.ColumnTypeString},
-		{Name: "name", Type: flattypes.ColumnTypeString},
-		{Name: "n", Type: flattypes.ColumnTypeLong},
-	}
-	body, err := chunk.EncodeCols(benchCollection, cols, features)
-	if err != nil {
-		b.Fatal(err)
-	}
-	ds, err := ingest.ReadDataset(bytes.NewReader(body), ingest.Options{Flatten: true})
-	if err != nil {
-		b.Fatal(err)
-	}
+	ds := benchDataset(b, features)
 	if _, err := l.Load(ctx, benchCollection, ds, nil); err != nil {
 		b.Fatal(err)
 	}
@@ -130,32 +120,14 @@ func BenchmarkCellFileLookup(b *testing.B) {
 
 func benchDataset(b *testing.B, features []chunk.InputFeature) ingest.Dataset {
 	b.Helper()
-	cols := []chunk.Column{
-		{Name: "id", Type: flattypes.ColumnTypeString},
-		{Name: "name", Type: flattypes.ColumnTypeString},
-		{Name: "n", Type: flattypes.ColumnTypeLong},
-	}
-	body, err := chunk.EncodeCols(benchCollection, cols, features)
-	if err != nil {
-		b.Fatal(err)
-	}
-	ds, err := ingest.ReadDataset(bytes.NewReader(body), ingest.Options{Flatten: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	return ds
+	return ingest.Dataset{Header: testHeader(benchCols, flattypes.GeometryTypePoint), Columns: benchCols, IDColumn: "id", Features: features}
 }
 
 func benchCell(b *testing.B, features []chunk.InputFeature) uint64 {
 	b.Helper()
-	bounds, ok := chunk.FeatureBounds(&features[0])
-	if !ok {
-		b.Fatal("benchmark feature has no bounds")
-	}
-	cell := spatial.Partition(spatial.Key(bounds))
+	cell := spatial.Partition(spatial.Key(features[0].Bounds))
 	for i := range features {
-		bounds, ok := chunk.FeatureBounds(&features[i])
-		if !ok || spatial.Partition(spatial.Key(bounds)) != cell {
+		if spatial.Partition(spatial.Key(features[i].Bounds)) != cell {
 			b.Fatal("benchmark features span more than one cell")
 		}
 	}
@@ -170,22 +142,6 @@ func BenchmarkCellFileDirectLoad(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := l.Load(ctx, benchCollection, ds, cells); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkCellFileBundleLoad(b *testing.B) {
-	l, ctx, features := benchLayer(b)
-	ds := benchDataset(b, features)
-	cell := benchCell(b, features)
-	bundle, err := BuildBundle(benchCollection, ds, cell)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := l.LoadBundle(ctx, benchCollection, cell, bundle); err != nil {
 			b.Fatal(err)
 		}
 	}
