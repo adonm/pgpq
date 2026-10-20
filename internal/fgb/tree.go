@@ -105,13 +105,9 @@ func BuildIndex(items []Item, nodeSize uint16) []byte {
 }
 
 func Nodes(count uint64, nodeSize uint16) uint64 {
-	if count == 0 || nodeSize < 2 {
-		return 0
+	var total uint64
+	for _, level := range LevelCounts(count, nodeSize) {
+		total += level
 	}
-	nodes := count
-	for n := count; n > 1; {
-		n = (n + uint64(nodeSize) - 1) / uint64(nodeSize)
-		nodes += n
-	}
-	return nodes
+	return total
 }

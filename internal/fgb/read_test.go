@@ -202,3 +202,22 @@ func TestFenceHandlesEqualKeys(t *testing.T) {
 		t.Fatalf("a cursor after the fence starts at %d", got)
 	}
 }
+
+func TestSingleFeatureIndexRoundTrip(t *testing.T) {
+	features := gridFeatures(1, 2.30, 48.80, 2.40, 48.90)
+	data, _ := encode(t, features)
+	layout, err := fgb.ReadLayout(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.Count() != 1 {
+		t.Fatalf("layout count = %d", layout.Count())
+	}
+	reader, err := fgb.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Next(); err != nil {
+		t.Fatal(err)
+	}
+}

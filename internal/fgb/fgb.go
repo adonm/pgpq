@@ -84,13 +84,5 @@ func (r *Reader) NextRaw() (*flattypes.Feature, []byte, error) {
 }
 
 func treeSize(numItems uint64, nodeSize uint16) uint64 {
-	if nodeSize < 2 || numItems == 0 {
-		return 0
-	}
-	nodes := numItems
-	for n := numItems; n > 1; {
-		n = (n + uint64(nodeSize) - 1) / uint64(nodeSize)
-		nodes += n
-	}
-	return nodes * 40
+	return Nodes(numItems, nodeSize) * NodeBytes
 }
