@@ -25,6 +25,8 @@ const (
 	parquetRowGroupRows = 2048
 )
 
+var columnCompression = &zstd.Codec{Level: zstd.SpeedBetterCompression}
+
 type columnKind uint8
 
 const (
@@ -81,7 +83,7 @@ func encodeParquetColumns(cols []chunk.Column, rows []map[string]json.RawMessage
 	writer := parquet.NewWriter(&buf, &parquet.WriterConfig{
 		Schema:             schema,
 		MaxRowsPerRowGroup: parquetRowGroupRows,
-		Compression:        &zstd.Codec{Level: zstd.SpeedBetterCompression},
+		Compression:        columnCompression,
 	})
 	if _, err := writer.WriteRows(out); err != nil {
 		return nil, nil, err
