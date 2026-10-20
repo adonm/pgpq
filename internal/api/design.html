@@ -282,7 +282,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     </div>
     <div class="box">
       <h3>Code size</h3>
-      <p>v2 target: 4,000 lines of production Go. After removing v1 and adding Parquet/L4 the tree is 7,110 production lines plus tests; the remaining gap is the storage alignment.</p>
+      <p>v2 target: 4,000 lines of production Go. After removing v1 and adding Parquet/L4 and the read path the tree is 7,363 production lines plus tests; the remaining gap is the storage alignment.</p>
       <p class="note">v1 is gone from the tree. Parquet columns are built per chunk; the next pass replaces chunks with one file per cell.</p>
     </div>
     <div class="box">
@@ -306,6 +306,21 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
       <p class="note">The simple path is DuckDB → one FGB per view/cell → PUT /v2?cells=token. That is valid today, and one view maps to one collection. The server still parses/derives the FGB; the prepared bundle is only needed to remove that server cost. A DuckDB input is loader-side, not a server format; pin DuckDB storage v1.5 so geometry CRS is persisted, or pass SRS explicitly.</p>
       <p class="note">FGB lifecycle: after a successful PUT, delete the per-cell FGB; keep it only on failure for retry. Do not archive the uncompressed FGB. If an FGB must be retained or served compressed with random access, use <b>seekable zstd</b> — independent frames plus a trailing seek table, as the FlatGeobuf <code>seekableZstd</code> examples do — not plain <code>.fgb.zst</code>, which requires decompressing the whole file. The server’s block store is already the random-access serving format; do not double-compress it.</p>
     </div>
+    <div class="box">
+      <h3>Read path after the change (measured)</h3>
+      <p>Per-cell catalog lookup and range-read Parquet filters are now implemented. On the current 2 MiB chunks they are a wash:</p>
+      <table aria-label="Read benchmark before and after the range reader">
+        <thead><tr><th>request</th><th>old warm</th><th>new warm</th><th>new cold</th></tr></thead>
+        <tbody>
+          <tr><td>Monaco enriched bbox</td><td>26 ms</td><td>29 ms</td><td>43 ms</td></tr>
+          <tr><td>Monaco filter</td><td>148 ms</td><td>140 ms</td><td>192 ms</td></tr>
+          <tr><td>Monaco numberMatched</td><td>15 ms</td><td>20 ms</td><td>19 ms</td></tr>
+          <tr><td>Luxembourg bbox</td><td>8 ms</td><td>8 ms</td><td>15 ms</td></tr>
+          <tr><td>Luxembourg exact filter</td><td>0.96 s</td><td>1.01 s</td><td>1.15 s</td></tr>
+        </tbody>
+      </table>
+      <p class="note">The 0.66–3.9 MB column files are too small for range reads to beat the whole-file cache, and the 46-chunk catalog is too small for per-cell lookup to matter. The target ~100 MB per-cell column files are where this path is expected to pay. This is why the design’s 1e9 read model remains an extrapolation until per-cell storage and the prepared bundle are built.</p>
+    </div>
     <div class="grid2">
       <div>
         <h3>Decisions</h3>
@@ -319,7 +334,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <li><span class="tag decided">decided</span><b>DuckDB input</b><br><span>Loader-side virtual source: source tables plus a publish schema; one view per collection; catalog carries id, geometry, CRS, cell and key. DuckDB spatial COPY writes one FGB per view/cell; the current server can ingest it. One view is one collection. Not built; DuckDB storage v1.5 is pinned for geometry CRS.</span></li>
           <li><span class="tag decided">decided</span><b>FGB lifecycle</b><br><span>One FGB per view/cell is written, uploaded, and deleted after HTTP 200; it is retained only on failure for retry. Compressed retention, if ever needed, uses seekable zstd frames with a seek table, not a plain zstd stream. Server storage is block-compressed and is not double-compressed.</span></li>
           <li><span class="tag built">built</span><b>Samples and zoom</b><br><span>Full geometry, no simplification. L6, L4 and L2 keep up to 2,048 per cell; L8 has no sample. L4 costs about 3.7 GB globally, L6 about 59 GB and L2 tiny; dropping the L8 sample frees up to ~950 GB. L2, L4 and L6 drop subpixel areas and lines (~1.6 km, ~400 m and ~100 m at 48°N); points stay; L8 detail keeps everything. No zoom mapping on the server: the client asks for overview=N. L2 is eventually consistent. The rank is the smallest hash, not the largest bbox; changing that is a separate decision.</span></li>
-          <li><span class="tag built">built</span><b>Caches</b><br><span>Two 256 MiB LRUs per worker: block bytes and the collection catalog. The catalog is still per collection; per-cell file rows keyed by cell and version are the target.</span></li>
+          <li><span class="tag built">built</span><b>Caches</b><br><span>Block/file bytes, a range-read block cache, and per-cell catalog rows keyed by cell and version. Bbox queries load only the cells in view; unbounded scans still load the full collection/level chunk catalog.</span></li>
           <li><span class="tag built">built</span><b>Paging</b><br><span>A cursor is the (key, id) of the last feature returned. Each page reads the current rows, so a walk follows uploads that land between pages. Cursors never expire.</span></li>
           <li><span class="tag built">built</span><b>Id index</b><br><span>One row per feature: its id hash and key. Replaced with the cell on every upload. No runs, merges or Bloom filters.</span></li>
           <li><span class="tag decided">decided</span><b>Collection id</b><br><span>A smallint id in every table; the name lives only in collections. That caps collections at 32,767, and int is the fallback beyond it. Not built: the code still uses the bigint uid.</span></li>

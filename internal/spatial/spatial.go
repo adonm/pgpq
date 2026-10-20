@@ -11,6 +11,7 @@ import (
 const PartitionLevel = 8
 
 const maxCells = 1 << 14
+const maxCoverCells = 256
 
 func Key(bounds [4]float64) uint64 {
 	lng := math.Max(-180, math.Min(180, (bounds[0]+bounds[2])/2))
@@ -74,4 +75,33 @@ func ToOrdered(key uint64) int64 {
 
 func FromOrdered(v int64) uint64 {
 	return uint64(v) ^ (1 << 63)
+}
+
+func Cover(bounds [4]float64, level int) []uint64 {
+	if level < 0 || level > 30 {
+		return nil
+	}
+	if bounds[0] <= -180 && bounds[2] >= 180 && bounds[1] <= -90 && bounds[3] >= 90 {
+		return nil
+	}
+	rect := s2.RectFromLatLng(s2.LatLngFromDegrees(bounds[1], bounds[0]))
+	for _, p := range [][2]float64{
+		{bounds[0], bounds[1]},
+		{bounds[0], bounds[3]},
+		{bounds[2], bounds[1]},
+		{bounds[2], bounds[3]},
+	} {
+		rect = rect.AddPoint(s2.LatLngFromDegrees(p[1], p[0]))
+	}
+	coverer := &s2.RegionCoverer{MinLevel: level, MaxLevel: level, MaxCells: maxCoverCells}
+	covering := coverer.Covering(rect)
+	if len(covering) == 0 || len(covering) >= maxCoverCells {
+		return nil
+	}
+	cells := make([]uint64, len(covering))
+	for i, cell := range covering {
+		cells[i] = uint64(cell)
+	}
+	slices.Sort(cells)
+	return slices.Compact(cells)
 }

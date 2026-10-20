@@ -193,7 +193,11 @@ func unquoteColumnText(raw []byte) []byte {
 }
 
 func parquetMask(data []byte, filter cql.Expr, rows int) ([]bool, error) {
-	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	return parquetMaskAt(bytes.NewReader(data), int64(len(data)), filter, rows)
+}
+
+func parquetMaskAt(r io.ReaderAt, size int64, filter cql.Expr, rows int) ([]bool, error) {
+	file, err := parquet.OpenFile(r, size, parquet.SkipPageIndex(true))
 	if err != nil {
 		return nil, errors.New("layer: column file unreadable")
 	}

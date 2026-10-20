@@ -3,6 +3,7 @@ package blocks
 import (
 	"bytes"
 	"context"
+	"io"
 	"math/rand"
 	"os"
 	"testing"
@@ -85,5 +86,45 @@ func TestReadAllServesRepeatReadsFromCache(t *testing.T) {
 	got, err := cached.ReadAll(ctx, id)
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("repeat read after the blocks were removed: %v", err)
+	}
+}
+
+func TestReaderAtRanges(t *testing.T) {
+	st, ctx := openTest(t)
+	const collection = "blocks_reader_at_test"
+	t.Cleanup(func() {
+		if _, err := st.Pool.Exec(context.Background(), `delete from pfgb.blocks where file_id in (select file_id from pfgb.files where collection = $1)`, collection); err != nil {
+			t.Error(err)
+		}
+		if _, err := st.Pool.Exec(context.Background(), `delete from pfgb.files where collection = $1`, collection); err != nil {
+			t.Error(err)
+		}
+	})
+	data := make([]byte, 3*Size+17)
+	rand.New(rand.NewSource(19)).Read(data)
+	for _, cacheBytes := range []int64{0, 1 << 20} {
+		s := New(st.Pool, cacheBytes)
+		id, err := s.Put(ctx, collection, "test", data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := s.Open(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Size() != int64(len(data)) {
+			t.Fatalf("size = %d, want %d", r.Size(), len(data))
+		}
+		for _, tc := range []struct{ off, n int }{{0, 7}, {Size - 3, 11}, {2 * Size, 21}, {len(data) - 5, 10}} {
+			got := make([]byte, tc.n)
+			n, err := r.ReadAt(got, int64(tc.off))
+			wantN := min(tc.n, len(data)-tc.off)
+			if err != nil && !(err == io.EOF && wantN < tc.n) {
+				t.Fatalf("cache %d read %d+%d: %v", cacheBytes, tc.off, tc.n, err)
+			}
+			if n != wantN || !bytes.Equal(got[:n], data[tc.off:tc.off+wantN]) {
+				t.Fatalf("cache %d read %d+%d: n=%d want %d", cacheBytes, tc.off, tc.n, n, wantN)
+			}
+		}
 	}
 }

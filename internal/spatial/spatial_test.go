@@ -71,3 +71,18 @@ func TestOrderedEncodingPreservesOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestCover(t *testing.T) {
+	bounds := [4]float64{7.40, 43.72, 7.45, 43.76}
+	for _, level := range []int{2, 4, 6, 8} {
+		cells := Cover(bounds, level)
+		if len(cells) == 0 {
+			t.Fatalf("level %d has no cover", level)
+		}
+		for _, cell := range cells {
+			if got := int(s2.CellID(cell).Level()); got != level {
+				t.Fatalf("level %d cell has level %d", level, got)
+			}
+		}
+	}
+}

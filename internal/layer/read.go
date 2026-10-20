@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/adonm/postfgb/internal/blocks"
 	"github.com/adonm/postfgb/internal/chunk"
@@ -43,6 +44,8 @@ type chunkMeta struct {
 	features int
 	bounds   [4]float64
 	zone     string
+	firstKey uint64
+	firstID  string
 	lastKey  uint64
 	lastID   string
 }
@@ -57,7 +60,10 @@ type catalogKey struct {
 	uid        int64
 	version    int64
 	level      int
+	cell       uint64
 }
+
+const maxCatalogCells = 256
 
 func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	page, err := l.items(ctx, name, q, false)
@@ -84,7 +90,11 @@ func (l *Layer) items(ctx context.Context, name string, q Query, fresh bool) (Pa
 	if q.Cursor != nil && (q.Cursor.UID != coll.UID || q.Cursor.Level != q.Level) {
 		return Page{}, ErrBadCursor
 	}
-	metas, err := l.catalogOf(ctx, coll, q.Level, fresh)
+	var cells []uint64
+	if q.BBox != nil {
+		cells = spatial.Cover(*q.BBox, catalogCoverLevel(q.Level))
+	}
+	metas, err := l.catalogFor(ctx, coll, q.Level, cells, fresh)
 	if err != nil {
 		return Page{}, err
 	}
@@ -163,7 +173,7 @@ func (l *Layer) Count(ctx context.Context, name string, filter cql.Expr) (int64,
 
 func (l *Layer) catalogOf(ctx context.Context, coll Collection, level int, fresh bool) ([]chunkMeta, error) {
 	if fresh {
-		key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level}
+		key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level, cell: 0}
 		metas, err := l.loadCatalog(ctx, coll.Name, level)
 		if err != nil {
 			return nil, err
@@ -175,7 +185,7 @@ func (l *Layer) catalogOf(ctx context.Context, coll Collection, level int, fresh
 }
 
 func (l *Layer) catalog(ctx context.Context, coll Collection, level int) ([]chunkMeta, error) {
-	key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level}
+	key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level, cell: 0}
 	if metas, ok := l.catalogs.Get(key); ok {
 		return metas, nil
 	}
@@ -188,22 +198,94 @@ func (l *Layer) catalog(ctx context.Context, coll Collection, level int) ([]chun
 }
 
 func (l *Layer) loadCatalog(ctx context.Context, name string, level int) ([]chunkMeta, error) {
-	rows, err := l.pool.Query(ctx, `select file_id, col_file, features, minx, miny, maxx, maxy, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 order by first_key, first_id collate "C"`, name, level)
+	rows, err := l.pool.Query(ctx, `select cell, file_id, col_file, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 order by first_key, first_id collate "C"`, name, level)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var metas []chunkMeta
 	for rows.Next() {
-		var m chunkMeta
-		var lastKey int64
-		if err := rows.Scan(&m.fileID, &m.colFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &lastKey, &m.lastID, &m.zone); err != nil {
+		m, err := scanChunkMeta(rows)
+		if err != nil {
 			return nil, err
 		}
-		m.lastKey = spatial.FromOrdered(lastKey)
 		metas = append(metas, m)
 	}
 	return metas, rows.Err()
+}
+
+func scanChunkMeta(rows pgx.Rows) (chunkMeta, error) {
+	var m chunkMeta
+	var cell, firstKey, lastKey int64
+	if err := rows.Scan(&cell, &m.fileID, &m.colFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &firstKey, &m.firstID, &lastKey, &m.lastID, &m.zone); err != nil {
+		return m, err
+	}
+	m.firstKey = spatial.FromOrdered(firstKey)
+	m.lastKey = spatial.FromOrdered(lastKey)
+	return m, nil
+}
+
+func (l *Layer) loadCatalogCells(ctx context.Context, name string, level int, cells []uint64) (map[uint64][]chunkMeta, error) {
+	rows, err := l.pool.Query(ctx, `select cell, file_id, col_file, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pfgb.chunks where collection = $1 and level = $2 and cell = any($3) order by first_key, first_id collate "C"`, name, level, orderedCells(cells))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byCell := make(map[uint64][]chunkMeta, len(cells))
+	for rows.Next() {
+		var cell int64
+		var m chunkMeta
+		var firstKey, lastKey int64
+		if err := rows.Scan(&cell, &m.fileID, &m.colFile, &m.features, &m.bounds[0], &m.bounds[1], &m.bounds[2], &m.bounds[3], &firstKey, &m.firstID, &lastKey, &m.lastID, &m.zone); err != nil {
+			return nil, err
+		}
+		m.firstKey = spatial.FromOrdered(firstKey)
+		m.lastKey = spatial.FromOrdered(lastKey)
+		key := spatial.FromOrdered(cell)
+		byCell[key] = append(byCell[key], m)
+	}
+	return byCell, rows.Err()
+}
+
+func catalogCoverLevel(level int) int {
+	if level == detailLevel {
+		return spatial.PartitionLevel
+	}
+	return level
+}
+
+func (l *Layer) catalogFor(ctx context.Context, coll Collection, level int, cells []uint64, fresh bool) ([]chunkMeta, error) {
+	if len(cells) == 0 || len(cells) > maxCatalogCells {
+		return l.catalogOf(ctx, coll, level, fresh)
+	}
+	var out []chunkMeta
+	var missing []uint64
+	for _, cell := range cells {
+		key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level, cell: cell}
+		if !fresh {
+			if metas, ok := l.catalogs.Get(key); ok {
+				out = append(out, metas...)
+				continue
+			}
+		}
+		missing = append(missing, cell)
+	}
+	if len(missing) > 0 {
+		byCell, err := l.loadCatalogCells(ctx, coll.Name, level, missing)
+		if err != nil {
+			return nil, err
+		}
+		for _, cell := range missing {
+			metas := byCell[cell]
+			key := catalogKey{collection: coll.Name, uid: coll.UID, version: coll.Version, level: level, cell: cell}
+			l.catalogs.Add(key, metas)
+			out = append(out, metas...)
+		}
+	}
+	slices.SortFunc(out, func(a, b chunkMeta) int {
+		return compareKeyID(a.firstKey, a.firstID, b.firstKey, b.firstID)
+	})
+	return out, nil
 }
 
 func catalogSize(metas []chunkMeta) int64 {
@@ -273,13 +355,35 @@ func (l *Layer) rowMask(ctx context.Context, meta chunkMeta, filter cql.Expr, ro
 	if meta.colFile == 0 {
 		return nil, errors.New("layer: chunk has no column file; reload the collection")
 	}
+	fileReader, err := l.blocks.Open(ctx, meta.colFile)
+	if err != nil {
+		return nil, stale(err)
+	}
+	if fileReader.Size() <= 1<<20 {
+		data, err := l.blocks.ReadAll(ctx, meta.colFile)
+		if err != nil {
+			return nil, stale(err)
+		}
+		if bytes.HasPrefix(data, []byte(parquetMagic)) {
+			return parquetMask(data, filter, rows)
+		}
+		return legacyColumnMask(data, filter, rows)
+	}
+	head := make([]byte, 4)
+	if _, err := fileReader.ReadAt(head, 0); err != nil {
+		return nil, stale(err)
+	}
+	if bytes.HasPrefix(head, []byte(parquetMagic)) {
+		return parquetMaskAt(fileReader, fileReader.Size(), filter, rows)
+	}
 	data, err := l.blocks.ReadAll(ctx, meta.colFile)
 	if err != nil {
 		return nil, stale(err)
 	}
-	if bytes.HasPrefix(data, []byte(parquetMagic)) {
-		return parquetMask(data, filter, rows)
-	}
+	return legacyColumnMask(data, filter, rows)
+}
+
+func legacyColumnMask(data []byte, filter cql.Expr, rows int) ([]bool, error) {
 	reader, ok := chunk.OpenAttrs(data)
 	if !ok {
 		return nil, errors.New("layer: column file unreadable")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -22,9 +23,15 @@ type querier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+type blockKey struct {
+	fileID int64
+	n      int32
+}
+
 type Store struct {
 	pool  *pgxpool.Pool
 	cache *lru.Cache[int64, []byte]
+	block *lru.Cache[blockKey, []byte]
 	loads singleflight.Group
 }
 
@@ -32,6 +39,7 @@ func New(pool *pgxpool.Pool, cacheBytes int64) *Store {
 	s := &Store{pool: pool}
 	if cacheBytes > 0 {
 		s.cache = lru.New[int64, []byte](cacheBytes, func(data []byte) int64 { return int64(len(data)) })
+		s.block = lru.New[blockKey, []byte](cacheBytes/2, func(data []byte) int64 { return int64(len(data)) })
 	}
 	return s
 }
@@ -130,4 +138,111 @@ func readFile(ctx context.Context, q querier, fileID int64) ([]byte, error) {
 		return nil, fmt.Errorf("blocks: file %d has %d bytes, want %d", fileID, len(out), size)
 	}
 	return out, nil
+}
+
+type Reader struct {
+	store  *Store
+	ctx    context.Context
+	fileID int64
+	size   int64
+}
+
+func (s *Store) Open(ctx context.Context, fileID int64) (*Reader, error) {
+	var size int64
+	if err := s.pool.QueryRow(ctx, `select bytes from pfgb.files where file_id = $1`, fileID).Scan(&size); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &Reader{store: s, ctx: ctx, fileID: fileID, size: size}, nil
+}
+
+func (r *Reader) Size() int64 { return r.size }
+
+func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, errors.New("blocks: negative offset")
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if off >= r.size {
+		return 0, io.EOF
+	}
+	end := off + int64(len(p))
+	if end > r.size {
+		end = r.size
+	}
+	if r.store.cache != nil {
+		if data, ok := r.store.cache.Get(r.fileID); ok {
+			n := copy(p, data[off:end])
+			if int64(n) < int64(len(p)) {
+				return n, io.EOF
+			}
+			return n, nil
+		}
+	}
+	first := int32(off / Size)
+	last := int32((end - 1) / Size)
+	fetched := make(map[int32][]byte, last-first+1)
+	need := make([]int32, 0, last-first+1)
+	for n := first; n <= last; n++ {
+		if r.store.block != nil {
+			if _, ok := r.store.block.Get(blockKey{r.fileID, n}); ok {
+				continue
+			}
+		}
+		need = append(need, n)
+	}
+	if len(need) > 0 {
+		rows, err := r.store.pool.Query(r.ctx, `select n, data from pfgb.blocks where file_id = $1 and n between $2 and $3 order by n`, r.fileID, first, last)
+		if err != nil {
+			return 0, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var n int32
+			var data []byte
+			if err := rows.Scan(&n, &data); err != nil {
+				return 0, err
+			}
+			fetched[n] = data
+			if r.store.block != nil {
+				r.store.block.Add(blockKey{r.fileID, n}, data)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+	}
+	written := 0
+	for n := first; n <= last; n++ {
+		var data []byte
+		if r.store.block != nil {
+			if b, ok := r.store.block.Get(blockKey{r.fileID, n}); ok {
+				data = b
+			}
+		}
+		if data == nil {
+			data = fetched[n]
+		}
+		if data == nil {
+			return written, fmt.Errorf("blocks: file %d is missing block %d", r.fileID, n)
+		}
+		lo := int64(0)
+		if n == first {
+			lo = off - int64(n)*Size
+		}
+		hi := int64(len(data))
+		if n == last {
+			hi = end - int64(n)*Size
+		}
+		copied := copy(p[written:], data[lo:hi])
+		written += copied
+	}
+	if written < len(p) {
+		return written, io.EOF
+	}
+	return written, nil
 }

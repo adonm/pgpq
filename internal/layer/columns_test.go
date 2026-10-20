@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"slices"
 	"strconv"
@@ -352,4 +353,44 @@ func countDifferent(a, b []bool) int {
 		}
 	}
 	return n
+}
+
+type countingReaderAt struct {
+	r io.ReaderAt
+	n int64
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.r.ReadAt(p, off)
+	c.n += int64(n)
+	return n, err
+}
+
+func TestParquetMaskRangeReads(t *testing.T) {
+	cols := []chunk.Column{{Name: "n", Type: flattypes.ColumnTypeLong}}
+	rows := make([]map[string]json.RawMessage, 4097)
+	for i := range rows {
+		rows[i] = map[string]json.RawMessage{"n": json.RawMessage(strconv.Itoa(i))}
+	}
+	blob, _, err := encodeParquetColumns(cols, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expr, err := cql.Parse("n = 999999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := &countingReaderAt{r: bytes.NewReader(blob)}
+	got, err := parquetMaskAt(counter, int64(len(blob)), expr, len(rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, keep := range got {
+		if keep {
+			t.Fatalf("row %d matched an impossible filter", i)
+		}
+	}
+	if counter.n >= int64(len(blob)) {
+		t.Fatalf("range read fetched the whole file: %d of %d", counter.n, len(blob))
+	}
 }
