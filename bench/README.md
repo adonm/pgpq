@@ -29,3 +29,8 @@ The enriched Monaco FGB is 3.3 MB after zstd -19. Per feature: 2,687 B raw, 711 
 Dense density was counted offline from the 1.1 GB Île-de-France buildings FGB with `mise exec -- go run ./bench/cells.go -file <file>`: 3,417,734 features, 24 L8 cells, mean 142,406, max 1,008,367 (token 47e67), in 17.6 s at 32 MB RSS. It was not loaded into Postgres, to avoid flattening the host. Use this command for dense-city profiles; `prepare.sh` handles country-level extracts only.
 
 Luxembourg is rural: its 95,863 max is ~74 buildings/km². The 2.5M dense-cell assumption is ~1,930/km² (L8 cells average ~1,297 km²), which is plausible for a dense metro but was not measured here; a dense city extract is the next benchmark.
+
+
+## DuckDB direct FGB
+
+DuckDB 1.5.6 spatial supports `COPY ... WITH (FORMAT gdal, DRIVER 'FlatGeobuf', SRS 'EPSG:4326', GEOMETRY_TYPE ...)`. A DuckDB file can expose one view per collection in a `publish` schema and write one FGB per view/cell directly; the current server can ingest those FGBs with `cells=<token>`. Tested: Monaco buildings + points (two views) 0.41 s, 12 MB + 1.2 MB; Luxembourg 228k buildings 1.73 s, 88 MB. GDAL validated WGS84, 4,628, 4,928 and 228,273 features. This is the simple path; it does not skip the server's parse/derive. Pin DuckDB storage v1.5 for geometry CRS, and provide `cell`/`key` columns (DuckDB has no S2 function by default).
