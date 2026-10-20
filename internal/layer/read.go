@@ -317,6 +317,22 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 	if q.Cursor != nil {
 		start = cell.fence.StartRow(q.Cursor.Key, q.Cursor.ID)
 	}
+	if q.Filter != nil {
+		var candidates map[int]struct{}
+		if q.BBox != nil {
+			rows := cell.layout.Search(q.BBox[0], q.BBox[1], q.BBox[2], q.BBox[3])
+			candidates = make(map[int]struct{}, len(rows))
+			for _, row := range rows {
+				if row.Index >= start {
+					candidates[row.Index] = struct{}{}
+				}
+			}
+			if len(candidates) == 0 {
+				return nil, nil
+			}
+		}
+		return l.matchesFilter(ctx, idColumn, meta, cell, reader, q, limit, start, candidates)
+	}
 	var candidates []fgb.Row
 	if q.BBox != nil {
 		candidates = cell.layout.Search(q.BBox[0], q.BBox[1], q.BBox[2], q.BBox[3])
@@ -329,19 +345,6 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 			return nil, nil
 		}
 		candidates = rows[start:]
-	}
-	if q.Filter != nil {
-		keep, err := l.rowMask(ctx, meta, q.Filter, meta.features)
-		if err != nil {
-			return nil, err
-		}
-		matched := make([]fgb.Row, 0, min(len(candidates), limit+fgb.FenceEvery))
-		for _, row := range candidates {
-			if row.Index < len(keep) && keep[row.Index] {
-				matched = append(matched, row)
-			}
-		}
-		candidates = matched
 	}
 	if len(candidates) > limit+2*fgb.FenceEvery {
 		candidates = candidates[:limit+2*fgb.FenceEvery]
@@ -371,6 +374,63 @@ func (l *Layer) matches(ctx context.Context, idColumn string, meta chunkMeta, q 
 		if len(hits) == limit {
 			break
 		}
+	}
+	return hits, nil
+}
+
+func (l *Layer) matchesFilter(ctx context.Context, idColumn string, meta chunkMeta, cell *cellFile, fgbReader *blocks.Reader, q Query, limit, start int, candidates map[int]struct{}) ([]Hit, error) {
+	if meta.colFile == 0 {
+		return nil, errors.New("layer: chunk has no column file; reload the collection")
+	}
+	columns, err := l.blocks.Open(ctx, meta.colFile)
+	if err != nil {
+		return nil, stale(err)
+	}
+	head := make([]byte, 4)
+	if _, err := columns.ReadAt(head, 0); err != nil {
+		return nil, stale(err)
+	}
+	if !bytes.HasPrefix(head, []byte(parquetMagic)) {
+		return l.matchesLegacy(ctx, idColumn, meta, q)
+	}
+	hits := make([]Hit, 0, limit)
+	var callbackErr error
+	err = parquetMatchesAt(columns, columns.Size(), q.Filter, meta.features, start, func(row int) bool {
+		if candidates != nil {
+			if _, ok := candidates[row]; !ok {
+				return true
+			}
+		}
+		f, err := cell.layout.Feature(fgbReader, fgb.Row{Index: row})
+		if err != nil {
+			callbackErr = err
+			return false
+		}
+		bounds, err := featureBounds(cell.chunk, f)
+		if err != nil {
+			callbackErr = err
+			return false
+		}
+		id, err := storedID(f, cell.cols, idColumn)
+		if err != nil {
+			callbackErr = err
+			return false
+		}
+		key := spatial.Key(bounds)
+		if q.Cursor != nil && compareKeyID(key, id, q.Cursor.Key, q.Cursor.ID) <= 0 {
+			return true
+		}
+		if q.BBox != nil && !intersects(bounds, q.BBox) {
+			return true
+		}
+		hits = append(hits, Hit{Key: key, ID: id, Chunk: cell.chunk, Feature: f})
+		return len(hits) < limit
+	})
+	if err != nil {
+		return nil, err
+	}
+	if callbackErr != nil {
+		return nil, callbackErr
 	}
 	return hits, nil
 }

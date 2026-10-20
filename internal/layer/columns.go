@@ -321,13 +321,26 @@ func columnTypeOf(t parquet.Type) flattypes.ColumnType {
 }
 
 func parquetMatchGroup(group parquet.RowGroup, schema *parquet.Schema, names []string, types map[string]flattypes.ColumnType, filter cql.Expr, keep []bool) error {
+	_, err := parquetMatchGroupRows(group, schema, names, types, filter, 0, func(row int) bool {
+		if row >= 0 && row < len(keep) {
+			keep[row] = true
+		}
+		return true
+	})
+	return err
+}
+
+func parquetMatchGroupRows(group parquet.RowGroup, schema *parquet.Schema, names []string, types map[string]flattypes.ColumnType, filter cql.Expr, base int, emit func(int) bool) (bool, error) {
 	count := int(group.NumRows())
 	if len(names) == 0 {
-		value := cql.Match(filter, nil, types)
-		for i := range keep {
-			keep[i] = value
+		if cql.Match(filter, nil, types) {
+			for i := 0; i < count; i++ {
+				if !emit(base + i) {
+					return false, nil
+				}
+			}
 		}
-		return nil
+		return true, nil
 	}
 	reader := parquet.NewRowGroupReader(group, &parquet.ReaderConfig{Schema: schema})
 	defer reader.Close()
@@ -343,25 +356,104 @@ func parquetMatchGroup(group parquet.RowGroup, schema *parquet.Schema, names []s
 				}
 				column := value.Column()
 				if column < 0 || column >= len(names) {
-					return errors.New("layer: column file row is malformed")
+					return false, errors.New("layer: column file row is malformed")
 				}
 				props[names[column]] = parquetGoValue(types[names[column]], value)
 			}
-			keep[read+i] = cql.Match(filter, props, types)
+			if cql.Match(filter, props, types) {
+				if !emit(base + read + i) {
+					return false, nil
+				}
+			}
 		}
 		read += n
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return err
+			return false, err
 		}
 		if n == 0 {
 			break
 		}
 	}
 	if read != count {
-		return fmt.Errorf("layer: column file row group has %d rows, want %d", read, count)
+		return false, fmt.Errorf("layer: column file row group has %d rows, want %d", read, count)
+	}
+	return true, nil
+}
+
+func parquetMatchesAt(r io.ReaderAt, size int64, filter cql.Expr, rows int, start int, emit func(int) bool) error {
+	file, err := parquet.OpenFile(r, size, parquet.SkipPageIndex(true))
+	if err != nil {
+		return errors.New("layer: column file unreadable")
+	}
+	if file.NumRows() != int64(rows) {
+		return fmt.Errorf("layer: column file has %d rows, chunk has %d", file.NumRows(), rows)
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start >= rows {
+		return nil
+	}
+	fields := file.Schema().Fields()
+	types := make(map[string]flattypes.ColumnType, len(fields))
+	wanted := make(map[string]bool)
+	for _, name := range cql.Properties(filter) {
+		wanted[name] = true
+	}
+	projected := make(parquet.Group)
+	var names []string
+	for _, field := range fields {
+		types[field.Name()] = columnTypeOf(field.Type())
+		if !wanted[field.Name()] {
+			continue
+		}
+		node := parquet.Node(parquet.Leaf(field.Type()))
+		if field.Optional() {
+			node = parquet.Optional(node)
+		} else {
+			node = parquet.Required(node)
+		}
+		projected[field.Name()] = node
+		names = append(names, field.Name())
+	}
+	var projectedSchema *parquet.Schema
+	if len(names) > 0 {
+		projectedSchema = parquet.NewSchema("columns", projected)
+	}
+	metadata := file.Metadata().RowGroups
+	groups := file.RowGroups()
+	offset := 0
+	for i, group := range groups {
+		count := int(group.NumRows())
+		if offset+count > rows {
+			return errors.New("layer: column file has more rows than chunk")
+		}
+		if offset+count > start && mayMatch(filter, parquetZone(fields, metadata[i])) {
+			stop := false
+			cont, err := parquetMatchGroupRows(group, projectedSchema, names, types, filter, offset, func(row int) bool {
+				if stop || row < start {
+					return true
+				}
+				if !emit(row) {
+					stop = true
+					return false
+				}
+				return true
+			})
+			if err != nil {
+				return err
+			}
+			if !cont {
+				return nil
+			}
+		}
+		offset += count
+	}
+	if offset != rows {
+		return fmt.Errorf("layer: column file has %d rows, chunk has %d", offset, rows)
 	}
 	return nil
 }

@@ -282,7 +282,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     </div>
     <div class="box">
       <h3>Code size</h3>
-      <p>v2 target: 4,000 lines of production Go. The tree is 8,766 production lines plus tests after the per-cell files, FGB range reader and prepared bundle; the remaining gap is mostly schema/catalog simplification.</p>
+      <p>v2 target: 4,000 lines of production Go. The tree is 8,918 production lines plus tests after the per-cell files, FGB range reader, prepared bundle and lazy filters; the remaining gap is mostly schema/catalog simplification.</p>
       <p class="note">v1 is gone from the tree. New writes are one FGB + Parquet columns + fence per cell; old chunk collections still read through the legacy path.</p>
     </div>
     <div class="box">
@@ -317,7 +317,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <tr><td>id lookup</td><td>22.0 ms</td><td>0.99 ms</td><td>16.8 MB → 0.16 MB</td></tr>
         </tbody>
       </table>
-      <p class="note">Bbox and id lookup now use the FGB R-tree/fence and read only the matched feature ranges. Filters are at parity: the cell’s Parquet mask still scans its predicate columns; early-stop/row-range mask evaluation is the next filter optimization. Prepared bundle load on the same cell measured 1.49 s / 310 MB versus 1.63 s / 436 MB for the direct FGB load, including overview rebuild and database writes.</p>
+      <p class="note">Bbox and id lookup now use the FGB R-tree/fence and read only the matched feature ranges. Filters now evaluate Parquet row groups lazily and stop as soon as the page is full; a sparse 30k-point collection shows no measurable change because matches are tiny, and the dense 50k filter remains at parity because the selective mask often runs to the end. Row-range mask evaluation is the next filter optimization. Prepared bundle load on the same cell measured 1.49 s / 310 MB versus 1.63 s / 436 MB for the direct FGB load, including overview rebuild and database writes.</p>
     </div>
     <div class="grid2">
       <div>

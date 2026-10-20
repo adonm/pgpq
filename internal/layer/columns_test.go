@@ -394,3 +394,43 @@ func TestParquetMaskRangeReads(t *testing.T) {
 		t.Fatalf("range read fetched the whole file: %d of %d", counter.n, len(blob))
 	}
 }
+
+func TestParquetMatchesStopsEarly(t *testing.T) {
+	cols := []chunk.Column{{Name: "n", Type: flattypes.ColumnTypeLong}}
+	rows := make([]map[string]json.RawMessage, 4097)
+	for i := range rows {
+		rows[i] = map[string]json.RawMessage{"n": json.RawMessage(strconv.Itoa(i))}
+	}
+	blob, _, err := encodeParquetColumns(cols, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expr, err := cql.Parse("n >= 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, last := 0, -1
+	err = parquetMatchesAt(bytes.NewReader(blob), int64(len(blob)), expr, len(rows), 0, func(row int) bool {
+		count++
+		last = row
+		return count < 10
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 10 || last != 9 {
+		t.Fatalf("early stop visited %d rows, last %d", count, last)
+	}
+	count, last = 0, -1
+	err = parquetMatchesAt(bytes.NewReader(blob), int64(len(blob)), expr, len(rows), 2048, func(row int) bool {
+		count++
+		last = row
+		return count < 3
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 || last != 2050 {
+		t.Fatalf("started read visited %d rows, last %d", count, last)
+	}
+}
