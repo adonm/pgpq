@@ -62,7 +62,11 @@ func matchingIDs(hits []Hit, expr cql.Expr) []string {
 				props[name] = value
 			}
 		}
-		if cql.Match(expr, props, chunk.ColumnTypes(cols)) {
+		types := make(map[string]flattypes.ColumnType, len(cols))
+		for _, col := range cols {
+			types[col.Name] = col.Type
+		}
+		if cql.Match(expr, props, types) {
 			ids = append(ids, hit.ID)
 		}
 	}

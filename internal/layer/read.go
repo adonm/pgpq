@@ -142,6 +142,11 @@ func (l *Layer) Count(ctx context.Context, name string, filter cql.Expr) (int64,
 	if err != nil {
 		return 0, err
 	}
+	if filter == nil {
+		var total int64
+		err := l.pool.QueryRow(ctx, `select coalesce(sum(features), 0) from pfgb.chunks where collection = $1 and level = 0`, name).Scan(&total)
+		return total, err
+	}
 	metas, err := l.catalog(ctx, coll, detailLevel)
 	if err != nil {
 		return 0, err
@@ -390,7 +395,42 @@ func (l *Layer) matchesFilter(ctx context.Context, idColumn string, meta chunkMe
 		return nil, errors.New("layer: column file is not Parquet")
 	}
 	hits := make([]Hit, 0, limit)
+	pending := make([]fgb.Row, 0, min(limit, 64))
+	batch := min(limit, 64)
 	var callbackErr error
+	process := func() bool {
+		items, err := cell.layout.ReadFeatures(fgbReader, pending)
+		if err != nil {
+			callbackErr = err
+			return false
+		}
+		for _, item := range items {
+			f := item.Feature
+			bounds, ok := chunk.Bounds(cell.header, f)
+			if !ok {
+				callbackErr = errors.New("layer: stored feature has no geometry")
+				return false
+			}
+			id, err := storedID(f, cell.cols, idColumn)
+			if err != nil {
+				callbackErr = err
+				return false
+			}
+			key := spatial.Key(bounds)
+			if q.Cursor != nil && compareKeyID(key, id, q.Cursor.Key, q.Cursor.ID) <= 0 {
+				continue
+			}
+			if q.BBox != nil && !intersects(bounds, q.BBox) {
+				continue
+			}
+			hits = append(hits, Hit{Key: key, ID: id, Header: cell.header, Raw: item.Raw, Feature: f})
+			if len(hits) == limit {
+				return false
+			}
+		}
+		pending = pending[:0]
+		return true
+	}
 	err = parquetMatchesAt(columns, columns.Size(), q.Filter, meta.features, start, candidates, func(row int) bool {
 		if candidates != nil {
 			at := sort.SearchInts(candidates, row)
@@ -398,34 +438,20 @@ func (l *Layer) matchesFilter(ctx context.Context, idColumn string, meta chunkMe
 				return true
 			}
 		}
-		item, err := cell.layout.ReadFeature(fgbReader, fgb.Row{Index: row})
-		if err != nil {
-			callbackErr = err
-			return false
-		}
-		f := item.Feature
-		bounds, ok := chunk.Bounds(cell.header, f)
-		if !ok {
-			callbackErr = errors.New("layer: stored feature has no geometry")
-			return false
-		}
-		id, err := storedID(f, cell.cols, idColumn)
-		if err != nil {
-			callbackErr = err
-			return false
-		}
-		key := spatial.Key(bounds)
-		if q.Cursor != nil && compareKeyID(key, id, q.Cursor.Key, q.Cursor.ID) <= 0 {
+		pending = append(pending, fgb.Row{Index: row})
+		if len(pending) < batch {
 			return true
 		}
-		if q.BBox != nil && !intersects(bounds, q.BBox) {
-			return true
-		}
-		hits = append(hits, Hit{Key: key, ID: id, Header: cell.header, Raw: item.Raw, Feature: f})
-		return len(hits) < limit
+		return process()
 	})
 	if err != nil {
 		return nil, err
+	}
+	if callbackErr != nil {
+		return nil, callbackErr
+	}
+	if len(pending) > 0 && len(hits) < limit {
+		process()
 	}
 	if callbackErr != nil {
 		return nil, callbackErr

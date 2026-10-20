@@ -11,8 +11,7 @@ import (
 )
 
 type Row struct {
-	Index  int
-	Offset uint64
+	Index int
 }
 
 type Layout struct {
@@ -20,7 +19,6 @@ type Layout struct {
 	featuresAt int64
 	size       int64
 	tree       *index.PackedRTree
-	index      []byte
 	rows       []Row
 	offsets    []uint64
 }
@@ -64,7 +62,7 @@ func ReadLayout(r io.ReaderAt, size int64) (*Layout, error) {
 			return nil, err
 		}
 		tree := index.NewPackedRTreeFromData(indexData, count, nodeSize, true)
-		layout := &Layout{header: header, featuresAt: at + length, size: size, tree: tree, index: indexData}
+		layout := &Layout{header: header, featuresAt: at + length, size: size, tree: tree}
 		layout.loadRows()
 		if len(layout.rows) != int(count) {
 			return nil, errors.New("fgb: index does not cover every feature")
@@ -79,7 +77,7 @@ func (l *Layout) loadRows() {
 	l.rows = make([]Row, len(hits))
 	l.offsets = make([]uint64, len(hits))
 	for i, hit := range hits {
-		l.rows[i] = Row{Index: int(hit.Index), Offset: hit.Offset}
+		l.rows[i] = Row{Index: int(hit.Index)}
 		l.offsets[i] = hit.Offset
 	}
 }
@@ -100,7 +98,7 @@ func (l *Layout) Search(minX, minY, maxX, maxY float64) []Row {
 	hits := l.tree.Search(minX, minY, maxX, maxY)
 	rows := make([]Row, len(hits))
 	for i, hit := range hits {
-		rows[i] = Row{Index: int(hit.Index), Offset: hit.Offset}
+		rows[i] = Row{Index: int(hit.Index)}
 	}
 	return rows
 }
@@ -164,36 +162,10 @@ func (l *Layout) ReadFeatures(r io.ReaderAt, rows []Row) ([]RawFeature, error) {
 	return out, nil
 }
 
-func (l *Layout) Feature(r io.ReaderAt, row Row) (*flattypes.Feature, error) {
-	features, err := l.Features(r, []Row{row})
-	if err != nil {
-		return nil, err
-	}
-	return features[0], nil
-}
-
 func (l *Layout) ReadFeature(r io.ReaderAt, row Row) (RawFeature, error) {
 	features, err := l.ReadFeatures(r, []Row{row})
 	if err != nil {
 		return RawFeature{}, err
 	}
 	return features[0], nil
-}
-
-func (l *Layout) FeatureOffset(row int) (int64, bool) {
-	if row < 0 || row >= len(l.offsets) {
-		return 0, false
-	}
-	return l.featuresAt + int64(l.offsets[row]), true
-}
-
-func (l *Layout) RootBBox() ([4]float64, bool) {
-	if len(l.index) < NodeBytes {
-		return [4]float64{}, false
-	}
-	return NodeBBox(l.index[:NodeBytes]), true
-}
-
-func (l *Layout) IndexBytes() []byte {
-	return l.index
 }

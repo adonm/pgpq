@@ -13,7 +13,7 @@ var reservedParams = map[string]bool{
 	"bbox": true, "limit": true, "offset": true, "f": true,
 	"filter": true, "filter-lang": true, "format": true,
 	"overview": true, "numberMatched": true,
-	"datetime": true, "crs": true, "bbox-crs": true,
+	"datetime": true, "crs": true, "bbox-crs": true, "flatten": true,
 	"z": true, "x": true, "y": true, "cursor": true,
 }
 
@@ -87,12 +87,4 @@ func typedLiteral(value string) any {
 		return n
 	}
 	return value
-}
-
-func flattenJSON(r *http.Request) bool {
-	switch strings.ToLower(r.URL.Query().Get("flatten")) {
-	case "off", "none", "false", "0":
-		return false
-	}
-	return true
 }

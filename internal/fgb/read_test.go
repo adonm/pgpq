@@ -105,16 +105,6 @@ func TestOrderedLayoutAndBboxRanges(t *testing.T) {
 		if row.Index != i {
 			t.Fatalf("row %d has index %d", i, row.Index)
 		}
-		offset, ok := layout.FeatureOffset(i)
-		if !ok {
-			t.Fatalf("row %d has no offset", i)
-		}
-		if i%fgb.FenceEvery == 0 {
-			fenceOffset, ok := fence.RowOffset(i)
-			if !ok || fenceOffset != uint64(offset) {
-				t.Fatalf("row %d fence offset %d, want %d", i, fenceOffset, offset)
-			}
-		}
 	}
 	for i := 0; i < len(features); i += fgb.FenceEvery {
 		if got := fence.StartRow(features[i].key, features[i].id); got > i {

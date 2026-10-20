@@ -8,9 +8,8 @@ import (
 )
 
 type Server struct {
-	Store    *store.Store
-	ReadOnly bool
-	layers   *layer.Layer
+	Store  *store.Store
+	layers *layer.Layer
 }
 
 type Config struct {
@@ -20,11 +19,9 @@ type Config struct {
 }
 
 type link struct {
-	Href      string `json:"href"`
-	Rel       string `json:"rel"`
-	Type      string `json:"type,omitempty"`
-	Title     string `json:"title,omitempty"`
-	Templated bool   `json:"templated,omitempty"`
+	Href string `json:"href"`
+	Rel  string `json:"rel"`
+	Type string `json:"type,omitempty"`
 }
 
 const crs84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
@@ -35,7 +32,7 @@ func New(st *store.Store) http.Handler {
 
 func NewWithConfig(cfg Config) http.Handler {
 	mux := http.NewServeMux()
-	s := &Server{Store: cfg.Store, ReadOnly: cfg.ReadOnly}
+	s := &Server{Store: cfg.Store}
 	if cfg.Layers != nil {
 		s.layers = cfg.Layers
 	} else if cfg.Store != nil {
@@ -43,7 +40,7 @@ func NewWithConfig(cfg Config) http.Handler {
 	}
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	if !s.ReadOnly {
+	if !cfg.ReadOnly {
 		mux.HandleFunc("PUT /v2/collections/{id}", s.putLayer)
 	}
 	mux.HandleFunc("GET /v2/collections/{id}/items", s.layerItems)

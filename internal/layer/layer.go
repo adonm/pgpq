@@ -78,9 +78,8 @@ func decodeColumns(data []byte) ([]chunk.Column, error) {
 
 func (l *Layer) Collection(ctx context.Context, name string) (Collection, error) {
 	var c Collection
-	var columns []byte
-	err := l.pool.QueryRow(ctx, `select uid, version, coalesce(id_column, ''), columns_json from pfgb.collections where name = $1`, name).
-		Scan(&c.UID, &c.Version, &c.IDColumn, &columns)
+	err := l.pool.QueryRow(ctx, `select uid, version, coalesce(id_column, '') from pfgb.collections where name = $1`, name).
+		Scan(&c.UID, &c.Version, &c.IDColumn)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, store.ErrNotFound
 	}
@@ -88,8 +87,7 @@ func (l *Layer) Collection(ctx context.Context, name string) (Collection, error)
 		return c, err
 	}
 	c.Name = name
-	c.Columns, err = decodeColumns(columns)
-	return c, err
+	return c, nil
 }
 
 func invalidf(format string, args ...any) error {

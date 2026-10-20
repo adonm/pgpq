@@ -3,7 +3,6 @@ package cql
 import (
 	"math"
 	"testing"
-	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 )
@@ -164,32 +163,6 @@ func TestEvalLogic(t *testing.T) {
 		if got := evalText(t, tc.text, numeric, tc.props); got != tc.want {
 			t.Errorf("%s over %v = %v, want %v", tc.text, tc.props, got, tc.want)
 		}
-	}
-}
-
-func TestEvalDatetime(t *testing.T) {
-	columns := map[string]flattypes.ColumnType{"c_date": flattypes.ColumnTypeDateTime}
-	lo := time.Date(2026, 1, 5, 0, 30, 0, 0, time.UTC)
-	hi := time.Date(2026, 1, 6, 0, 30, 0, 0, time.UTC)
-	window := And(&Compare{Prop: "c_date", Op: ">=", Value: lo}, &Compare{Prop: "c_date", Op: "<=", Value: hi})
-	for _, tc := range []struct {
-		value string
-		want  bool
-	}{
-		{"2026-01-05T12:00:00Z", true},
-		{"2026-01-06T01:00:00Z", false},
-		{"2026-01-05T12:00:00", true},
-		{"garbage", false},
-	} {
-		if got := Match(window, map[string]any{"c_date": tc.value}, columns); got != tc.want {
-			t.Errorf("datetime window over %q = %v, want %v", tc.value, got, tc.want)
-		}
-	}
-	if Match(&Compare{Prop: "c_date", Op: ">", Value: lo}, map[string]any{"c_date": "2026-01-05T00:30:00Z"}, columns) {
-		t.Error("equal timestamps are not strictly greater")
-	}
-	if !Match(&Compare{Prop: "c_date", Op: ">=", Value: lo}, map[string]any{"c_date": "2026-01-05T00:30:00Z"}, columns) {
-		t.Error("a zone-less stored value should parse as UTC and satisfy >=")
 	}
 }
 

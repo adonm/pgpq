@@ -81,13 +81,6 @@ func ReadFence(r io.ReaderAt, size int64) (*Fence, error) {
 	return DecodeFence(data)
 }
 
-func (f *Fence) Entries() []FenceEntry {
-	if f == nil {
-		return nil
-	}
-	return f.entries
-}
-
 func (f *Fence) Len() int {
 	if f == nil {
 		return 0
@@ -116,15 +109,4 @@ func (f *Fence) StartRow(key uint64, id string) int {
 		lo = len(f.entries) - 1
 	}
 	return lo * FenceEvery
-}
-
-func (f *Fence) RowOffset(row int) (uint64, bool) {
-	if f == nil || row < 0 {
-		return 0, false
-	}
-	at := row / FenceEvery
-	if at >= len(f.entries) {
-		return 0, false
-	}
-	return f.entries[at].Offset, true
 }

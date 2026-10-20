@@ -84,10 +84,8 @@ func (l *Layer) commitRows(ctx context.Context, name string, columns []chunk.Col
 		return LoadResult{}, err
 	}
 	rows := make([][]any, len(chunks))
-	fileIDs := make([]int64, 0, len(chunks)*3)
 	for i, c := range chunks {
 		rows[i] = chunkValues(name, c)
-		fileIDs = append(fileIDs, c.fileID, c.colFile, c.fenceFile)
 	}
 	if len(rows) > 0 {
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pfgb", "chunks"}, chunkColumns, pgx.CopyFromRows(rows)); err != nil {
@@ -101,17 +99,11 @@ func (l *Layer) commitRows(ctx context.Context, name string, columns []chunk.Col
 	if err != nil {
 		return LoadResult{}, err
 	}
-	for _, row := range coarse {
-		fileIDs = append(fileIDs, row.fileID, row.colFile, row.fenceFile)
-	}
 	if err := replaceIDs(ctx, tx, uid, touched, entries); err != nil {
 		return LoadResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `update pfgb.collections set version = version + 1, id_column = $2, columns_json = $3 where name = $1`,
 		name, idColumn, encoded); err != nil {
-		return LoadResult{}, err
-	}
-	if err := l.blocks.Publish(ctx, tx, fileIDs); err != nil {
 		return LoadResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/big"
 	"strings"
-	"time"
 
 	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 )
@@ -17,17 +16,6 @@ const (
 	triFalse
 	triTrue
 )
-
-var timeLayouts = []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"}
-
-func ParseTime(text string) (time.Time, bool) {
-	for _, layout := range timeLayouts {
-		if t, err := time.Parse(layout, text); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
 
 func Match(e Expr, props map[string]any, columns map[string]flattypes.ColumnType) bool {
 	return eval(e, props, columns) == triTrue
@@ -166,8 +154,6 @@ func matchEquality(prop string, value any, props map[string]any) bool {
 		return matchNumber(cur, value)
 	case string:
 		return matchString(cur, v)
-	case time.Time:
-		return matchTime(cur, v)
 	}
 	return matchString(cur, fmt.Sprint(value))
 }
@@ -223,30 +209,10 @@ func matchString(cur any, value string) bool {
 	return false
 }
 
-func matchTime(cur any, value time.Time) bool {
-	text, ok := cur.(string)
-	if !ok {
-		return false
-	}
-	t, ok := ParseTime(text)
-	return ok && t.Equal(value)
-}
-
 func matchOrdered(prop, op string, value any, props map[string]any) truth {
 	cur, ok := props[prop]
 	if !ok || cur == nil {
 		return triUnknown
-	}
-	if t, ok := value.(time.Time); ok {
-		text, ok := cur.(string)
-		if !ok {
-			return triUnknown
-		}
-		stored, ok := ParseTime(text)
-		if !ok {
-			return triUnknown
-		}
-		return fromCompare(op, stored.Compare(t))
 	}
 	if bv, ok := value.(bool); ok {
 		b, ok := cur.(bool)

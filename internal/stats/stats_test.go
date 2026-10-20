@@ -1,7 +1,7 @@
 package stats
 
 import (
-	"math"
+	"encoding/json"
 	"testing"
 )
 
@@ -46,24 +46,14 @@ func TestNumber(t *testing.T) {
 }
 
 func TestCanonicalText(t *testing.T) {
-	max := int64(math.MaxInt64)
-	if got, ok := CanonicalText(max); !ok || got != "9223372036854775807" {
+	if got, ok := CanonicalText(json.Number("9223372036854775807")); !ok || got != "9223372036854775807" {
 		t.Fatalf("int64 max = %q, %v", got, ok)
 	}
-	if got, ok := CanonicalText(int64(math.MinInt64)); !ok || got != "-9223372036854775808" {
+	if got, ok := CanonicalText(json.Number("-9223372036854775808")); !ok || got != "-9223372036854775808" {
 		t.Fatalf("int64 min = %q, %v", got, ok)
 	}
-	if got, ok := CanonicalText(float64(2) * 1); !ok || got != "2" {
-		t.Fatalf("float 2 = %q, %v", got, ok)
-	}
-	if got, ok := CanonicalText(float32(0.1)); !ok || got != "0.1" {
-		t.Fatalf("float32 0.1 = %q, %v", got, ok)
-	}
-	if got, ok := CanonicalText(0.1); !ok || got != "0.1" {
-		t.Fatalf("float64 0.1 = %q, %v", got, ok)
-	}
-	if got, ok := CanonicalText(math.Copysign(0, -1)); !ok || got != "0" {
-		t.Fatalf("negative zero = %q, %v", got, ok)
+	if got, ok := CanonicalText(json.Number("2.50")); !ok || got != "2.5" {
+		t.Fatalf("decimal = %q, %v", got, ok)
 	}
 	if got, ok := CanonicalText("hello"); !ok || got != "hello" {
 		t.Fatalf("string = %q, %v", got, ok)

@@ -62,10 +62,8 @@ type coarseStep struct {
 }
 
 var (
-	overviewLevels = []int{}
-	coarseSteps    = []coarseStep{{level: 6, from: detailLevel}, {level: 4, from: 6}}
-	deferredLevel  = 2
-	servedLevels   = []int{2, 4, 6}
+	coarseSteps  = []coarseStep{{level: 6, from: detailLevel}, {level: 4, from: 6}, {level: 2, from: 4}}
+	servedLevels = []int{2, 4, 6}
 )
 
 type blobPut func(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error)
@@ -147,7 +145,7 @@ func indexFeatures(ds ingest.Dataset, cells []uint64) ([]entry, error) {
 			return nil, invalidf("duplicate id %q", id)
 		}
 		seen[id] = struct{}{}
-		out = append(out, entry{key: key, id: id, hash: idHash(id), cell: cell, index: i, bounds: bounds})
+		out = append(out, entry{key: key, id: id, cell: cell, index: i, bounds: bounds})
 	}
 	return out, nil
 }

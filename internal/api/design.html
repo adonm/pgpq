@@ -282,7 +282,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
     </div>
     <div class="box">
       <h3>Code size</h3>
-      <p>v2 target: 4,000 lines of production Go. The tree is 5,710 production lines plus tests after deleting bundles, PFA1, reprojection/flattening and the legacy path, collapsing the catalog to one row per cell, and copying raw FGB feature bytes; the remaining gap is mostly CQL and catalog simplification.</p>
+      <p>v2 target: 4,000 lines of production Go. The tree is 5,588 production lines plus tests after deleting bundles, PFA1, reprojection/flattening and the legacy path, collapsing the catalog to one row per cell, and copying raw FGB feature bytes; the remaining gap is mostly CQL and catalog simplification.</p>
       <p class="note">v1 and the old chunk format are gone from the tree. Every write is one FGB + Parquet columns + fence per cell.</p>
     </div>
     <div class="box">
@@ -317,7 +317,7 @@ footer{padding:12px 20px;color:var(--mut);font-size:11px;letter-spacing:.04em;bo
           <tr><td>id lookup</td><td>22.0 ms</td><td>0.99 ms</td><td>16.8 MB → 0.16 MB</td></tr>
         </tbody>
       </table>
-      <p class="note">Bbox and id lookup now use the FGB R-tree/fence and read only the matched feature ranges. Filters evaluate Parquet row groups lazily, stop as soon as the page is full, and skip row groups with no bbox candidate. A sparse 30k-point collection shows no measurable change because matches are tiny; the dense 50k filter remains at parity because a selective mask often runs to the end. Row-range mask evaluation is the next filter optimization.</p>
+      <p class="note">Bbox and id lookup now use the FGB R-tree/fence and read only the matched feature ranges. Filters evaluate Parquet row groups lazily, stop as soon as the page is full, skip row groups with no bbox candidate, and read matching features in contiguous FGB batches. A sparse 30k-point collection shows no measurable change because matches are tiny; the dense 50k filter remains at parity because a selective mask often runs to the end. Row-range mask evaluation is the next filter optimization.</p>
     </div>
     <div class="grid2">
       <div>

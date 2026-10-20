@@ -19,30 +19,6 @@ func CanonicalText(v any) (string, bool) {
 		return "false", true
 	case json.Number:
 		return Number(string(x))
-	case int:
-		return strconv.FormatInt(int64(x), 10), true
-	case int8:
-		return strconv.FormatInt(int64(x), 10), true
-	case int16:
-		return strconv.FormatInt(int64(x), 10), true
-	case int32:
-		return strconv.FormatInt(int64(x), 10), true
-	case int64:
-		return strconv.FormatInt(x, 10), true
-	case uint:
-		return strconv.FormatUint(uint64(x), 10), true
-	case uint8:
-		return strconv.FormatUint(uint64(x), 10), true
-	case uint16:
-		return strconv.FormatUint(uint64(x), 10), true
-	case uint32:
-		return strconv.FormatUint(uint64(x), 10), true
-	case uint64:
-		return strconv.FormatUint(x, 10), true
-	case float32:
-		return decimal(float64(x), 32), true
-	case float64:
-		return decimal(x, 64), true
 	}
 	return "", false
 }

@@ -120,11 +120,6 @@ func (s *Store) PutTxEncoded(ctx context.Context, tx pgx.Tx, collection, kind, e
 	return id, nil
 }
 
-func (s *Store) Publish(ctx context.Context, tx pgx.Tx, fileIDs []int64) error {
-	_, err := tx.Exec(ctx, `update pfgb.files set published = true where file_id = any($1)`, fileIDs)
-	return err
-}
-
 func (s *Store) ReadAll(ctx context.Context, fileID int64) ([]byte, error) {
 	if s.cache != nil {
 		if data, ok := s.cache.Get(fileID); ok {

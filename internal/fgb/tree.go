@@ -57,14 +57,6 @@ func NodeBBox(data []byte) [4]float64 {
 	return bbox
 }
 
-func NodeOffset(data []byte) uint64 {
-	return binary.LittleEndian.Uint64(data[32:NodeBytes])
-}
-
-func SetNodeOffset(data []byte, offset uint64) {
-	binary.LittleEndian.PutUint64(data[32:NodeBytes], offset)
-}
-
 func Parents(children []byte, start uint64, nodeSize uint16) []byte {
 	step := int(nodeSize) * NodeBytes
 	out := make([]byte, 0, ((len(children)+step-1)/step)*NodeBytes)
