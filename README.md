@@ -2,7 +2,7 @@
 
 GeoParquet 2.0 over PostgreSQL.
 
-`pgpq` stores each spatial cell as a native GeoParquet 2.0 file split into 8,120-byte inline `bytea` chunks; Parquet pages are compressed with zstd, so there is no second compression layer. Geometry is Parquet `GEOMETRY` (WKB, OGC:CRS84), so Parquet's own row-group geospatial statistics do the spatial pruning. There is no FlatGeobuf sidecar and no custom spatial index.
+`pgpq` stores each spatial cell as a native GeoParquet 2.0 file split into 8,120-byte inline `bytea` chunks; Parquet pages are compressed with zstd, so there is no second compression layer. Geometry is Parquet `GEOMETRY` (WKB, OGC:CRS84), so Parquet's own row-group geospatial statistics do the spatial pruning.
 
 The upload format is a DuckDB file. A view in the file becomes one collection; `layer_catalog` can supply the view, id column and geometry column. The server exports the view with the DuckDB CLI, splits it into level-8 S2 cells, and writes GeoParquet cells. The core stays cgo-free; DuckDB is an external command, configured by `PGPQ_DUCKDB`.
 
@@ -38,7 +38,7 @@ JSON is the default response. `f=geoparquet` returns a filtered GeoParquet 2.0 p
 4. Read matching rows, evaluate exact bbox/filter in Go, and stop at the page limit.
 5. Return JSON or a filtered GeoParquet 2.0 file.
 
-The result is a virtual GeoParquet dataset per collection/overview without a separate tile pyramid or FGB index.
+The result is a virtual GeoParquet dataset per collection/overview without a separate tile pyramid or custom spatial index.
 
 ## Measured
 

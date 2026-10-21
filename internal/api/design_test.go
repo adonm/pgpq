@@ -17,4 +17,10 @@ func TestDesignPageIsServedAsHTML(t *testing.T) {
 	if !strings.Contains(body, "pgpq v2") || !strings.Contains(body, "GeoParquet 2.0") {
 		t.Fatal("design page body missing")
 	}
+	if !strings.Contains(body, "bootstrap@6.0.0-alpha.1") {
+		t.Fatal("design page is not Bootstrap 6")
+	}
+	if strings.Contains(body, "<script") {
+		t.Fatal("design page must not require a script/build step")
+	}
 }

@@ -97,10 +97,6 @@ func (s *Server) layerItems(w http.ResponseWriter, r *http.Request) {
 	}
 	next := layerNextLink(r, page.Next)
 	wantParquet := r.URL.Query().Get("f") == "geoparquet" || strings.Contains(r.Header.Get("Accept"), "application/vnd.apache.parquet")
-	if r.URL.Query().Get("f") == "flatgeobuf" {
-		http.Error(w, "FlatGeobuf output is no longer served; use f=geoparquet", http.StatusBadRequest)
-		return
-	}
 	if wantParquet {
 		writeLayerParquet(w, r, page, next)
 		return

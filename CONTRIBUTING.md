@@ -17,7 +17,7 @@ DuckDB ingest needs the external `duckdb` binary; set `PGPQ_DUCKDB` when it is n
 
 ## Rules
 
-- GeoParquet geometry is native `GEOMETRY`/`GEOGRAPHY` with WKB and OGC:CRS84. Do not reintroduce FlatGeobuf or a hand-written spatial index.
+- GeoParquet geometry is native `GEOMETRY`/`GEOGRAPHY` with WKB and OGC:CRS84. Do not add a sidecar spatial index.
 - Parquet compression is internal zstd. Do not wrap the cell file in a second zstd frame.
 - Verify `f=geoparquet` output with GDAL: save the response and run `ogrinfo` on it.
 - Migrations are append-only; never edit an applied migration.
