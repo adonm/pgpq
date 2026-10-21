@@ -16,34 +16,36 @@ type zoneColumn struct {
 
 func encodeZone(cols []geo.Column, features []geo.Feature) (string, error) {
 	zone := make([]zoneColumn, len(cols))
+	minimum := make([]float64, len(cols))
+	maximum := make([]float64, len(cols))
+	seen := make([]bool, len(cols))
 	for i, col := range cols {
 		zone[i].Name = col.Name
+		numeric := col.Type == cql.Int || col.Type == cql.Double
 		for _, feature := range features {
 			value, ok := feature.Props[col.Name]
 			if !ok || value == nil {
 				zone[i].Nulls++
 				continue
 			}
-			if col.Type != cql.Int && col.Type != cql.Double {
+			if !numeric {
 				continue
 			}
-			var f float64
-			switch n := value.(type) {
-			case int64:
-				f = float64(n)
-			case float64:
-				f = n
-			default:
+			number, ok := numberOf(value)
+			if !ok {
 				continue
 			}
-			if zone[i].Min == nil || f < *zone[i].Min {
-				v := f
-				zone[i].Min = &v
+			if !seen[i] || number < minimum[i] {
+				minimum[i] = number
 			}
-			if zone[i].Max == nil || f > *zone[i].Max {
-				v := f
-				zone[i].Max = &v
+			if !seen[i] || number > maximum[i] {
+				maximum[i] = number
 			}
+			seen[i] = true
+		}
+		if seen[i] {
+			zone[i].Min = &minimum[i]
+			zone[i].Max = &maximum[i]
 		}
 	}
 	out, err := json.Marshal(zone)

@@ -29,12 +29,11 @@ type Dataset struct {
 }
 
 type File struct {
-	reader     io.ReaderAt
-	file       *parquet.File
-	fields     []parquet.Field
-	geometry   int
-	key        int
-	attrs      []Column
-	attrIndex  []int
-	geometryAt int
+	reader   io.ReaderAt
+	file     *parquet.File
+	fields   []parquet.Field
+	geometry int
+	key      int
+	attrs    []Column
+	types    []cql.Type
 }

@@ -4,15 +4,15 @@ GeoParquet 2.0 over PostgreSQL.
 
 `pgpq` stores each spatial cell as a native GeoParquet 2.0 file split into 8,120-byte inline `bytea` chunks; Parquet pages are compressed with zstd, so there is no second compression layer. Geometry is Parquet `GEOMETRY` (WKB, OGC:CRS84), so Parquet's own row-group geospatial statistics do the spatial pruning.
 
-The upload format is a DuckDB file. A view in the file becomes one collection; `layer_catalog` can supply the view, id column and geometry column. The server exports the view with the DuckDB CLI, splits it into level-8 S2 cells, and writes GeoParquet cells. The core stays cgo-free; DuckDB is an external command, configured by `PGPQ_DUCKDB`.
+The upload format is native GeoParquet 2.0. The server reads the Parquet file directly, splits it into level-8 S2 cells, and writes GeoParquet cells. It requires a native Parquet `GEOMETRY`/`GEOGRAPHY` column with WKB and an OGC:CRS84/EPSG:4326 CRS; GeoParquet 1.1 and DuckDB files are rejected. The core stays cgo-free and needs no DuckDB or GDAL at runtime.
 
-GeoParquet 2.0 input is also accepted directly for loader compatibility.
+DuckDB 1.5.6+ with the `spatial` extension can produce the upload files with `GEOPARQUET_VERSION 'V2'`. That is how the OSM benchmark prepares its input, outside the server process.
 
 ## Current surface
 
 | Path | Content |
 | --- | --- |
-| `PUT /v2/collections/{id}` (writable) | replace a collection from a DuckDB file; `view=` selects a view, `id_column=` overrides the id, `cells=` scopes a load. GeoParquet 2.0 bodies are accepted directly. |
+| `PUT /v2/collections/{id}` (writable) | replace a collection from a native GeoParquet 2.0 file; `id_column=` overrides the id, `cells=` scopes a load. |
 | `POST /v2/collections/{id}` (writable) | merge/append into existing L8 cells; touched cells and their parent samples are rewritten and sorted |
 | `GET /v2/collections/{id}/items` | `bbox`, CQL2-text property filters, `limit`, cursor paging, `overview=0\|2\|4\|6`, `numberMatched=true`, and `f=geoparquet` or `Accept: application/vnd.apache.parquet` |
 | `GET /v2/collections/{id}/items/{featureID}` | one feature by stored id |
@@ -58,7 +58,7 @@ Warm localhost, PostgreSQL 18.6, 6 vCPU, median of 30 requests:
 | Luxembourg bbox → GeoParquet | 53.5 ms | 63.1 ms | 101 kB |
 | Monaco bbox, 1,000 rows → GeoParquet | 143.1 ms | 163.7 ms | 770 kB |
 
-DuckDB ingest: Monaco 12.6 MB / 4,628 features in 1.24–1.27 s; Luxembourg 48.2 MB / 228,273 features in 8.18 s. A one-row append rewrote one Monaco cell and its parents in 0.86 s; repeating the same 4,628-row append kept the count at 4,628. The chunk table holds 13,343 rows of 8,120 bytes inline, with no TOAST indirection. Database size is about 212 MB.
+GeoParquet 2.0 ingest: Monaco layers upload in 0.15–0.21 s; Andorra layers in 0.20–0.43 s. A one-row append rewrote one Monaco cell and its parents in 0.86 s; repeating the same 4,628-row append kept the count at 4,628. The chunk table holds 13,343 rows of 8,120 bytes inline, with no TOAST indirection. Database size is about 212 MB.
 
 ## Heavy cell
 
@@ -66,7 +66,7 @@ One L8 cell with 1,000,000 points, generated in DuckDB:
 
 | Operation | Result |
 | --- | ---: |
-| DuckDB upload | 19.9 s, 1.39 GB peak RSS |
+| GeoParquet 2.0 upload | 19.9 s, 1.39 GB peak RSS |
 | Stored detail cell | 10.0 MB, 489 row groups of 2,048 |
 | bbox, 100 rows → JSON | 4.3 ms |
 | bbox, 1,000 rows → JSON | 11.8 ms |
@@ -81,7 +81,7 @@ The query numbers are good. The one-file-per-cell rewrite is acceptable under th
 
 ## OSM benchmark harness
 
-`bench/osm/` loads one small OSM PBF as separate layers, one layer at a time. It uses capped GDAL and DuckDB processes, a disposable PostgreSQL database, a test worker on `:8094`, GDAL-verifies every GeoParquet response, and cleans up through SQL. Start with [bench/osm/README.md](bench/osm/README.md).
+`bench/osm/` loads one small OSM PBF as separate layers, one layer at a time. A capped DuckDB container extracts the OSM layers with the spatial extension and writes native GeoParquet 2.0; the Go worker uploads those files directly. The harness uses a disposable PostgreSQL database, a test worker on `:8094`, DuckDB-verifies every GeoParquet response, and cleans up through SQL. Start with [bench/osm/README.md](bench/osm/README.md).
 
 ```sh
 bench/osm/serve.sh
@@ -95,18 +95,18 @@ Monaco and Andorra were measured end to end; the harness never targets public `:
 ```sh
 mise install
 just pg-up
-PGPQ_DUCKDB=/path/to/duckdb just serve
+just serve
 ```
 
 ```sh
-curl -T source.duckdb -H 'Content-Type: application/vnd.duckdb' \
-  'http://localhost:8080/v2/collections/buildings?view=layer_buildings&id_column=bench_id'
+curl -T source.parquet -H 'Content-Type: application/vnd.apache.parquet' \
+  'http://localhost:8080/v2/collections/buildings?id_column=bench_id'
 curl 'http://localhost:8080/v2/collections/buildings/items?bbox=7.4,43.7,7.45,43.76&limit=100'
 curl 'http://localhost:8080/v2/collections/buildings/items?bbox=7.4,43.7,7.45,43.76&limit=100&f=geoparquet' -o page.parquet
 ```
 
 ## Status
 
-Pre-alpha. Working today: DuckDB and GeoParquet ingest, GeoParquet 2.0 native geometry/WKB storage, 8,120-byte inline GeoParquet chunks with internal zstd pages, S2 cell catalogs, Parquet row-group spatial and attribute pruning, L2/L4/L6 samples, id lookup, cursor paging, JSON/GeoParquet responses, readonly/writable workers and probes.
+Pre-alpha. Working today: native GeoParquet 2.0 ingest, GeoParquet 2.0 native geometry/WKB storage, 8,120-byte inline GeoParquet chunks with internal zstd pages, S2 cell catalogs, Parquet row-group spatial and attribute pruning, L2/L4/L6 samples, id lookup, cursor paging, JSON/GeoParquet responses, readonly/writable workers and probes.
 
 Not in this pass: collection listing/discovery, authentication, generated OpenAPI, and multi-geometry collections.

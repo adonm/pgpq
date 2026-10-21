@@ -34,7 +34,7 @@ done
 [ -n "$psql_cmd" ] || psql_cmd=$(find_psql_command) || die "no psql command; pass --psql or set PGPQ_OSM_PSQL"
 
 if [ -z "$names" ]; then
-	while IFS='|' read -r name osm_layer where select filter id_sql assert_field; do
+	while IFS='|' read -r name osm_layer where select filter id_column id_sql assert_field; do
 		case "$name" in ''|'#'*) continue ;; esac
 		names=${names:+$names,}${prefix}${name}
 	done <"$here/layers.tsv"

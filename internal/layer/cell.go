@@ -6,20 +6,12 @@ import (
 	"io"
 	"sync"
 
-	"github.com/jackc/pgx/v5"
-
-	"github.com/adonm/pgpq/internal/geo"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/adonm/pgpq/internal/spatial"
+	"github.com/adonm/pgpq/internal/geo"
 )
 
-type cellKey struct {
-	uid     int64
-	version int64
-	level   int
-	cell    uint64
-}
+const chunkBytes = 8120
 
 type cellMeta struct {
 	cell     uint64
@@ -35,7 +27,7 @@ type cellMeta struct {
 	zone     string
 }
 
-type catalogKey struct {
+type cellKey struct {
 	uid     int64
 	version int64
 	level   int
@@ -47,16 +39,10 @@ func (l *Layer) cellFile(ctx context.Context, coll Collection, meta cellMeta) (*
 	if file, ok := l.cells.Get(key); ok {
 		return file, nil
 	}
-	if meta.bytes == 0 || meta.cellID == 0 {
-		if err := l.pool.QueryRow(ctx, `select bytes, cell_id from pgpq.cells where collection_uid = $1 and level = $2 and cell = $3`,
-			coll.UID, meta.level, spatial.ToOrdered(meta.cell)).Scan(&meta.bytes, &meta.cellID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, ErrStale
-			}
-			return nil, err
-		}
+	if meta.bytes <= 0 || meta.cellID == 0 {
+		return nil, ErrStale
 	}
-	reader := &chunkReader{pool: l.pool, ctx: context.WithoutCancel(ctx), cellID: meta.cellID, size: meta.bytes, cache: make(map[int32][]byte)}
+	reader := &chunkReader{pool: l.pool, ctx: context.WithoutCancel(ctx), cellID: meta.cellID, size: meta.bytes, cache: make(map[int32][]byte, min(meta.bytes/chunkBytes+1, 4096))}
 	file, err := geo.Open(reader, meta.bytes)
 	if err != nil {
 		return nil, err
@@ -96,9 +82,9 @@ func (r *chunkReader) ReadAt(p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	first := int32(off / 8120)
+	first := int32(off / chunkBytes)
 	end := min(off+int64(len(p)), r.size)
-	last := int32((end - 1) / 8120)
+	last := int32((end - 1) / chunkBytes)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	missing := false
@@ -136,11 +122,11 @@ func (r *chunkReader) ReadAt(p []byte, off int64) (int, error) {
 		}
 		lo := int64(0)
 		if n == first {
-			lo = off - int64(n)*8120
+			lo = off - int64(n)*chunkBytes
 		}
 		hi := int64(len(data))
 		if n == last {
-			hi = min(hi, end-int64(n)*8120)
+			hi = min(hi, end-int64(n)*chunkBytes)
 		}
 		if lo < 0 || lo > hi {
 			return written, io.ErrUnexpectedEOF

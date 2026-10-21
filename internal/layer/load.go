@@ -16,6 +16,7 @@ import (
 
 const (
 	overviewSampleCap = 2048
+	sampleBuffer      = 4 * overviewSampleCap
 	loadWorkers       = 2
 )
 
@@ -25,27 +26,19 @@ var coarseSteps = []struct {
 }{{6, 0}, {4, 6}, {2, 4}}
 
 type entry struct {
-	key    uint64
-	id     string
-	cell   uint64
-	index  int
-	bounds [4]float64
+	cell  uint64
+	index int
 }
 
 type cellRow struct {
-	cell     uint64
-	level    int
-	features int
-	bytes    int64
-	cellID   int64
-	bounds   [4]float64
-	firstKey uint64
-	firstID  string
-	lastKey  uint64
-	lastID   string
-	zone     string
-	data     []byte
-	items    []geo.Feature
+	cellMeta
+	data  []byte
+	items []geo.Feature
+}
+
+type sample struct {
+	hash    uint64
+	feature geo.Feature
 }
 
 type LoadResult struct {
@@ -63,28 +56,19 @@ func (l *Layer) Load(ctx context.Context, name string, ds geo.Dataset, cells []u
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return LoadResult{}, err
 	}
-	entries, err := indexFeatures(ds, cells)
+	entries, err := indexFeatures(ds.Features, cells)
 	if err != nil {
 		return LoadResult{}, err
 	}
-	groups := groupByCell(entries)
-	detail := make(map[uint64][]geo.Feature, len(groups))
-	for cell, group := range groups {
-		features := make([]geo.Feature, len(group))
-		for i, entry := range group {
-			features[i] = ds.Features[entry.index]
-			features[i].Key = entry.key
-			features[i].ID = entry.id
-		}
-		if appendMode && coll.UID != 0 {
+	detail := groupFeatures(ds.Features, entries)
+	if appendMode && coll.UID != 0 {
+		for cell, features := range detail {
 			old, err := l.existingFeatures(ctx, coll, 0, cell)
 			if err != nil {
 				return LoadResult{}, err
 			}
-			features = mergeFeatures(old, features)
+			detail[cell] = mergeFeatures(old, features)
 		}
-		slices.SortFunc(features, func(a, b geo.Feature) int { return compareKeyID(a.Key, a.ID, b.Key, b.ID) })
-		detail[cell] = features
 	}
 	rows, err := l.writeCells(ctx, ds, detail, 0)
 	if err != nil {
@@ -107,14 +91,14 @@ func (l *Layer) Load(ctx context.Context, name string, ds geo.Dataset, cells []u
 			var features []geo.Feature
 			for _, child := range children {
 				if row, ok := byLevel[step.from][child]; ok {
-					features = append(features, row.items...)
+					features = append(features, sampleFeatures(row.items, step.level)...)
 					continue
 				}
 				old, err := l.existingFeatures(ctx, coll, step.from, child)
 				if err != nil {
 					return LoadResult{}, err
 				}
-				features = append(features, old...)
+				features = append(features, sampleFeatures(old, step.level)...)
 			}
 			overview[parent] = sampleFeatures(features, step.level)
 		}
@@ -128,30 +112,31 @@ func (l *Layer) Load(ctx context.Context, name string, ds geo.Dataset, cells []u
 	return l.commit(ctx, name, ds, cells, rows, detail, whole)
 }
 
-func indexFeatures(ds geo.Dataset, cells []uint64) ([]entry, error) {
+func indexFeatures(features []geo.Feature, cells []uint64) ([]entry, error) {
 	listed := make(map[uint64]bool, len(cells))
 	for _, cell := range cells {
 		listed[cell] = true
 	}
-	seen := make(map[string]struct{}, len(ds.Features))
-	out := make([]entry, 0, len(ds.Features))
-	for i := range ds.Features {
-		bounds := ds.Features[i].Bounds
-		if !finite(bounds) {
+	seen := make(map[string]struct{}, len(features))
+	entries := make([]entry, 0, len(features))
+	for i := range features {
+		feature := &features[i]
+		if !finite(feature.Bounds) {
 			return nil, invalidf("feature %d has no usable geometry", i)
 		}
-		key := spatial.Key(bounds)
+		key := spatial.Key(feature.Bounds)
 		cell := spatial.Partition(key)
 		if cells != nil && !listed[cell] {
 			return nil, invalidf("feature %d lies outside the listed cells", i)
 		}
-		if _, dup := seen[ds.Features[i].ID]; dup {
-			return nil, invalidf("duplicate id %q", ds.Features[i].ID)
+		if _, dup := seen[feature.ID]; dup {
+			return nil, invalidf("duplicate id %q", feature.ID)
 		}
-		seen[ds.Features[i].ID] = struct{}{}
-		out = append(out, entry{key: key, id: ds.Features[i].ID, cell: cell, index: i, bounds: bounds})
+		seen[feature.ID] = struct{}{}
+		feature.Key = key
+		entries = append(entries, entry{cell: cell, index: i})
 	}
-	return out, nil
+	return entries, nil
 }
 
 func finite(bounds [4]float64) bool {
@@ -163,15 +148,20 @@ func finite(bounds [4]float64) bool {
 	return true
 }
 
-func groupByCell(entries []entry) map[uint64][]entry {
-	groups := make(map[uint64][]entry)
-	for _, e := range entries {
-		groups[e.cell] = append(groups[e.cell], e)
-	}
-	for cell := range groups {
-		slices.SortFunc(groups[cell], func(a, b entry) int {
-			return compareKeyID(a.key, a.id, b.key, b.id)
-		})
+func groupFeatures(features []geo.Feature, entries []entry) map[uint64][]geo.Feature {
+	slices.SortFunc(entries, func(a, b entry) int { return cmp.Compare(a.cell, b.cell) })
+	groups := make(map[uint64][]geo.Feature)
+	for start := 0; start < len(entries); {
+		end := start + 1
+		for end < len(entries) && entries[end].cell == entries[start].cell {
+			end++
+		}
+		cellFeatures := make([]geo.Feature, end-start)
+		for i := start; i < end; i++ {
+			cellFeatures[i-start] = features[entries[i].index]
+		}
+		groups[entries[start].cell] = cellFeatures
+		start = end
 	}
 	return groups
 }
@@ -240,18 +230,17 @@ func rowMap(rows []cellRow) map[uint64]cellRow {
 }
 
 func mergeFeatures(old, incoming []geo.Feature) []geo.Feature {
-	merged := make(map[string]geo.Feature, len(old)+len(incoming))
-	for _, feature := range old {
-		merged[feature.ID] = feature
-	}
+	replaced := make(map[string]struct{}, len(incoming))
 	for _, feature := range incoming {
-		merged[feature.ID] = feature
+		replaced[feature.ID] = struct{}{}
 	}
-	out := make([]geo.Feature, 0, len(merged))
-	for _, feature := range merged {
-		out = append(out, feature)
+	merged := old[:0]
+	for _, feature := range old {
+		if _, ok := replaced[feature.ID]; !ok {
+			merged = append(merged, feature)
+		}
 	}
-	return out
+	return append(merged, incoming...)
 }
 
 func (l *Layer) writeCells(ctx context.Context, ds geo.Dataset, groups map[uint64][]geo.Feature, level int) ([]cellRow, error) {
@@ -268,14 +257,14 @@ func (l *Layer) writeCells(ctx context.Context, ds geo.Dataset, groups map[uint6
 	var (
 		mu    sync.Mutex
 		wg    sync.WaitGroup
-		out   []cellRow
 		first error
 	)
+	out := make([]cellRow, len(cells))
 	sem := make(chan struct{}, min(loadWorkers, runtime.NumCPU()))
-	for _, cell := range cells {
+	for i, cell := range cells {
 		sem <- struct{}{}
 		wg.Add(1)
-		go func(cell uint64) {
+		go func(i int, cell uint64) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			row, err := l.writeCell(ds, cell, groups[cell], level)
@@ -288,8 +277,8 @@ func (l *Layer) writeCells(ctx context.Context, ds geo.Dataset, groups map[uint6
 				}
 				return
 			}
-			out = append(out, row)
-		}(cell)
+			out[i] = row
+		}(i, cell)
 	}
 	wg.Wait()
 	if first != nil {
@@ -308,45 +297,53 @@ func (l *Layer) writeCell(ds geo.Dataset, cell uint64, features []geo.Feature, l
 	if err != nil {
 		return cellRow{}, err
 	}
-	bounds := features[0].Bounds
-	for _, feature := range features[1:] {
-		bounds[0] = min(bounds[0], feature.Bounds[0])
-		bounds[1] = min(bounds[1], feature.Bounds[1])
-		bounds[2] = max(bounds[2], feature.Bounds[2])
-		bounds[3] = max(bounds[3], feature.Bounds[3])
-	}
 	first, last := features[0], features[len(features)-1]
 	return cellRow{
-		cell:     cell,
-		level:    level,
-		features: len(features),
-		bytes:    int64(len(raw)),
-		bounds:   bounds,
-		firstKey: first.Key,
-		firstID:  first.ID,
-		lastKey:  last.Key,
-		lastID:   last.ID,
-		zone:     zone,
-		data:     raw,
-		items:    features,
+		cellMeta: cellMeta{
+			cell:     cell,
+			level:    level,
+			features: len(features),
+			bytes:    int64(len(raw)),
+			bounds:   geo.FeatureBounds(features),
+			firstKey: first.Key,
+			firstID:  first.ID,
+			lastKey:  last.Key,
+			lastID:   last.ID,
+			zone:     zone,
+		},
+		data:  raw,
+		items: features,
 	}, nil
 }
 
 func sampleFeatures(features []geo.Feature, level int) []geo.Feature {
-	features = slices.DeleteFunc(features, func(feature geo.Feature) bool {
-		return sampleTooSmall(feature.Bounds, level)
-	})
-	slices.SortFunc(features, func(a, b geo.Feature) int {
-		if c := cmp.Compare(idHash(a.ID), idHash(b.ID)); c != 0 {
+	samples := make([]sample, 0, min(len(features), sampleBuffer))
+	for _, feature := range features {
+		if sampleTooSmall(feature.Bounds, level) {
+			continue
+		}
+		samples = append(samples, sample{hash: idHash(feature.ID), feature: feature})
+		if len(samples) == sampleBuffer {
+			samples = trimSamples(samples)
+		}
+	}
+	samples = trimSamples(samples)
+	sampled := make([]geo.Feature, len(samples))
+	for i, item := range samples {
+		sampled[i] = item.feature
+	}
+	slices.SortFunc(sampled, func(a, b geo.Feature) int { return compareKeyID(a.Key, a.ID, b.Key, b.ID) })
+	return sampled
+}
+
+func trimSamples(samples []sample) []sample {
+	slices.SortFunc(samples, func(a, b sample) int {
+		if c := cmp.Compare(a.hash, b.hash); c != 0 {
 			return c
 		}
-		return compareKeyID(a.Key, a.ID, b.Key, b.ID)
+		return compareKeyID(a.feature.Key, a.feature.ID, b.feature.Key, b.feature.ID)
 	})
-	features = features[:min(len(features), overviewSampleCap)]
-	slices.SortFunc(features, func(a, b geo.Feature) int {
-		return compareKeyID(a.Key, a.ID, b.Key, b.ID)
-	})
-	return features
+	return samples[:min(len(samples), overviewSampleCap)]
 }
 
 func samplePixelMeters(level int) float64 {

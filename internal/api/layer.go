@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/adonm/pgpq/internal/duck"
 	"github.com/adonm/pgpq/internal/geo"
 	"github.com/adonm/pgpq/internal/layer"
 	"github.com/adonm/pgpq/internal/spatial"
@@ -32,17 +30,7 @@ func (s *Server) putLayer(w http.ResponseWriter, r *http.Request) {
 		}
 		cells = parsed
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	var ds geo.Dataset
-	if len(body) >= 12 && string(body[8:12]) == "DUCK" {
-		ds, err = duck.Read(r.Context(), body, name, r.URL.Query().Get("id_column"), r.URL.Query().Get("view"))
-	} else {
-		ds, err = geo.ReadDataset(bytes.NewReader(body), geo.Options{IDColumn: r.URL.Query().Get("id_column")})
-	}
+	ds, err := geo.ReadDataset(r.Body, geo.Options{IDColumn: r.URL.Query().Get("id_column")})
 	if err != nil {
 		layerError(w, err)
 		return

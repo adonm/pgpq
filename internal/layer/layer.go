@@ -28,14 +28,14 @@ const cacheBytes = 256 << 20
 type Layer struct {
 	pool     *pgxpool.Pool
 	cells    *lru.Cache[cellKey, *geo.File]
-	catalogs *lru.Cache[catalogKey, []cellMeta]
+	catalogs *lru.Cache[cellKey, []cellMeta]
 }
 
 func New(pool *pgxpool.Pool) *Layer {
 	return &Layer{
 		pool:     pool,
-		cells:    lru.New[cellKey, *geo.File](cacheBytes, func(*geo.File) int64 { return 1 << 20 }),
-		catalogs: lru.New[catalogKey, []cellMeta](cacheBytes, catalogSize),
+		cells:    lru.New[cellKey, *geo.File](cacheBytes, func(file *geo.File) int64 { return file.Size() }),
+		catalogs: lru.New[cellKey, []cellMeta](cacheBytes, catalogSize),
 	}
 }
 

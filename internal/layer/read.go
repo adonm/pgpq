@@ -23,12 +23,11 @@ type Hit struct {
 }
 
 type Page struct {
-	Collection string
-	IDColumn   string
-	Geometry   string
-	Columns    []geo.Column
-	Hits       []Hit
-	Next       *Cursor
+	IDColumn string
+	Geometry string
+	Columns  []geo.Column
+	Hits     []Hit
+	Next     *Cursor
 }
 
 const maxCatalogCells = 256
@@ -58,7 +57,8 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	page := Page{Collection: name, IDColumn: coll.IDColumn, Geometry: coll.Geometry, Columns: coll.Columns}
+	page := Page{IDColumn: coll.IDColumn, Geometry: coll.Geometry, Columns: coll.Columns}
+	types := columnTypes(coll.Columns)
 	for _, meta := range metas {
 		if len(page.Hits) == q.Limit {
 			break
@@ -90,7 +90,7 @@ func (l *Layer) Items(ctx context.Context, name string, q Query) (Page, error) {
 			if q.BBox != nil && !intersects(feature.Bounds, q.BBox) {
 				return true
 			}
-			if q.Filter != nil && !cql.Match(q.Filter, feature.Props, columnTypes(coll.Columns)) {
+			if q.Filter != nil && !cql.Match(q.Filter, feature.Props, types) {
 				return true
 			}
 			page.Hits = append(page.Hits, Hit{Key: feature.Key, Feature: feature})
@@ -121,6 +121,7 @@ func (l *Layer) Count(ctx context.Context, name string, filter cql.Expr) (int64,
 	if err != nil {
 		return 0, err
 	}
+	types := columnTypes(coll.Columns)
 	var total int64
 	for _, meta := range metas {
 		zone, err := decodeZone(meta.zone)
@@ -134,22 +135,20 @@ func (l *Layer) Count(ctx context.Context, name string, filter cql.Expr) (int64,
 		if err != nil {
 			return 0, err
 		}
-		groups := selectGroups(file, Query{Filter: filter, Level: 0, Limit: 1})
-		err = file.Scan(groups, coll.IDColumn, func(feature geo.Feature) bool {
-			if cql.Match(filter, feature.Props, columnTypes(coll.Columns)) {
-				total++
-			}
-			return true
+		groups := selectGroups(file, Query{Filter: filter})
+		matched, err := file.Count(groups, func(props map[string]any) bool {
+			return cql.Match(filter, props, types)
 		})
 		if err != nil {
 			return 0, err
 		}
+		total += int64(matched)
 	}
 	return total, nil
 }
 
 func (l *Layer) catalog(ctx context.Context, coll Collection, level int) ([]cellMeta, error) {
-	key := catalogKey{uid: coll.UID, version: coll.Version, level: level}
+	key := cellKey{uid: coll.UID, version: coll.Version, level: level}
 	if metas, ok := l.catalogs.Get(key); ok {
 		return metas, nil
 	}
@@ -163,7 +162,7 @@ func (l *Layer) catalogFor(ctx context.Context, coll Collection, level int, cell
 	var out []cellMeta
 	var missing []uint64
 	for _, cell := range cells {
-		key := catalogKey{uid: coll.UID, version: coll.Version, level: level, cell: cell}
+		key := cellKey{uid: coll.UID, version: coll.Version, level: level, cell: cell}
 		if metas, ok := l.catalogs.Get(key); ok {
 			out = append(out, metas...)
 			continue
@@ -176,7 +175,7 @@ func (l *Layer) catalogFor(ctx context.Context, coll Collection, level int, cell
 			return nil, err
 		}
 		for _, meta := range metas {
-			key := catalogKey{uid: coll.UID, version: coll.Version, level: level, cell: meta.cell}
+			key := cellKey{uid: coll.UID, version: coll.Version, level: level, cell: meta.cell}
 			l.catalogs.Add(key, []cellMeta{meta})
 			out = append(out, meta)
 		}
@@ -217,7 +216,7 @@ func (l *Layer) catalogQuery(ctx context.Context, coll Collection, level int, ce
 		return nil, err
 	}
 	if cells == nil {
-		key := catalogKey{uid: coll.UID, version: coll.Version, level: level}
+		key := cellKey{uid: coll.UID, version: coll.Version, level: level}
 		l.catalogs.Add(key, metas)
 	}
 	return metas, nil

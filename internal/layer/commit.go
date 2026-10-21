@@ -102,11 +102,11 @@ func (l *Layer) commit(ctx context.Context, name string, ds geo.Dataset, cells [
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"pgpq", "cells"}, cellColumns, pgx.CopyFromRows(values)); err != nil {
 		return LoadResult{}, err
 	}
-	chunks := make([][]any, 0)
+	chunks := make([][]any, 0, len(rows))
 	for _, row := range rows {
-		for n := 0; n*8120 < len(row.data); n++ {
-			end := min((n+1)*8120, len(row.data))
-			chunks = append(chunks, []any{row.cellID, n, row.data[n*8120 : end]})
+		for n := 0; n*chunkBytes < len(row.data); n++ {
+			end := min((n+1)*chunkBytes, len(row.data))
+			chunks = append(chunks, []any{row.cellID, n, row.data[n*chunkBytes : end]})
 		}
 	}
 	if len(chunks) > 0 {
@@ -154,16 +154,34 @@ func deleteAll(ctx context.Context, tx pgx.Tx, uid int64) error {
 }
 
 func replaceIDs(ctx context.Context, tx pgx.Tx, uid int64, groups map[uint64][]geo.Feature) error {
-	var values [][]any
-	for cell, features := range groups {
-		for row, feature := range features {
-			values = append(values, []any{uid, int64(idHash(feature.ID)), spatial.ToOrdered(cell), row})
-		}
+	type idCell struct {
+		cell     int64
+		features []geo.Feature
 	}
-	if len(values) == 0 {
+	cells := make([]idCell, 0, len(groups))
+	total := 0
+	for cell, features := range groups {
+		if len(features) == 0 {
+			continue
+		}
+		cells = append(cells, idCell{cell: spatial.ToOrdered(cell), features: features})
+		total += len(features)
+	}
+	if total == 0 {
 		return nil
 	}
-	_, err := tx.CopyFrom(ctx, pgx.Identifier{"pgpq", "ids"}, []string{"collection_uid", "hash", "cell", "row"}, pgx.CopyFromRows(values))
+	cell, row := 0, 0
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"pgpq", "ids"}, []string{"collection_uid", "hash", "cell", "row"},
+		pgx.CopyFromSlice(total, func(int) ([]any, error) {
+			for row == len(cells[cell].features) {
+				cell++
+				row = 0
+			}
+			feature := cells[cell].features[row]
+			values := []any{uid, int64(idHash(feature.ID)), cells[cell].cell, row}
+			row++
+			return values, nil
+		}))
 	return err
 }
 

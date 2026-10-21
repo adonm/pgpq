@@ -66,7 +66,7 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <h1 class="display-5 fw-semibold">GeoParquet 2.0 inside PostgreSQL.</h1>
 <p class="lead text-body-secondary col-xl-9">One logical GeoParquet file per S2 L8 cell, stored as 8,120-byte inline <code>bytea</code> chunks. Native Parquet geometry and row-group statistics do spatial pruning; no tile pyramid and no sidecar index.</p>
 <div class="d-flex flex-wrap gap-2 mt-4">
-<span class="badge text-bg-success">DuckDB upload</span>
+<span class="badge text-bg-success">GeoParquet 2.0 upload</span>
 <span class="badge text-bg-success">GeoParquet 2.0</span>
 <span class="badge text-bg-success">2,048-row groups</span>
 <span class="badge text-bg-success">L8 compaction</span>
@@ -88,9 +88,9 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <div class="col-lg-8">
 <figure class="figure">
 <svg viewBox="0 0 900 330" role="img" aria-labelledby="context-svg-title">
-<title id="context-svg-title">Operators and data loaders supply DuckDB files. API clients receive JSON or GeoParquet through an adjacent auth proxy. pgpq stores cells and catalog in PostgreSQL.</title>
+<title id="context-svg-title">Operators and data loaders supply native GeoParquet 2.0 files. API clients receive JSON or GeoParquet through an adjacent auth proxy. pgpq stores cells and catalog in PostgreSQL.</title>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
-<rect class="node" x="30" y="42" width="180" height="72" rx="8"/><text class="node-label" x="120" y="70" text-anchor="middle">Data loader</text><text class="node-sub" x="120" y="89" text-anchor="middle">DuckDB feature views</text>
+<rect class="node" x="30" y="42" width="180" height="72" rx="8"/><text class="node-label" x="120" y="70" text-anchor="middle">Data loader</text><text class="node-sub" x="120" y="89" text-anchor="middle">GeoParquet 2.0 files</text>
 <rect class="node" x="30" y="216" width="180" height="72" rx="8"/><text class="node-label" x="120" y="244" text-anchor="middle">API client</text><text class="node-sub" x="120" y="263" text-anchor="middle">maps · dashboards · tools</text>
 <rect class="node hot" x="360" y="118" width="180" height="92" rx="10"/><text class="node-label" x="450" y="151" text-anchor="middle">pgpq</text><text class="node-sub" x="450" y="170" text-anchor="middle">GeoParquet cell service</text><text class="node-sub" x="450" y="185" text-anchor="middle">JSON / GeoParquet</text>
 <rect class="node" x="690" y="42" width="180" height="72" rx="8"/><text class="node-label" x="780" y="70" text-anchor="middle">PostgreSQL 18</text><text class="node-sub" x="780" y="89" text-anchor="middle">catalog + inline chunks</text>
@@ -113,7 +113,7 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <h3 class="h6 text-warning">Assumptions</h3>
 <ul class="mb-0">
 <li>One PostgreSQL holds the catalog and cell payloads.</li>
-<li>DuckDB is the loader format; the server shells out to the CLI.</li>
+<li>Uploads are native GeoParquet 2.0; the server has no converter at runtime.</li>
 <li>Updates are batched, typically hourly.</li>
 <li>No auth or TLS inside pgpq.</li>
 </ul>
@@ -127,21 +127,21 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <p class="text-body-secondary">Separately deployable units and the static data paths between them. Runtime ordering is in the dynamic views below.</p>
 <figure class="figure">
 <svg viewBox="0 0 1000 300" role="img" aria-labelledby="container-svg-title">
-<title id="container-svg-title">Clients reach a writable or readonly pgpq worker through an auth proxy. The writable worker runs the DuckDB CLI and writes PostgreSQL. Both workers read PostgreSQL.</title>
+<title id="container-svg-title">Clients reach a writable or readonly pgpq worker through an auth proxy. The writable worker ingests GeoParquet 2.0 and writes PostgreSQL. Both workers read PostgreSQL.</title>
 <rect class="node" x="20" y="106" width="150" height="76" rx="8"/><text class="node-label" x="95" y="136" text-anchor="middle">Clients</text><text class="node-sub" x="95" y="154" text-anchor="middle">JSON / GeoParquet</text>
 <rect class="node" x="220" y="106" width="160" height="76" rx="8"/><text class="node-label" x="300" y="136" text-anchor="middle">Auth proxy</text><text class="node-sub" x="300" y="154" text-anchor="middle">public / internal</text>
 <rect class="node hot" x="440" y="30" width="190" height="86" rx="8"/><text class="node-label" x="535" y="60" text-anchor="middle">writable worker</text><text class="node-sub" x="535" y="79" text-anchor="middle">ingest + query</text><text class="node-sub" x="535" y="94" text-anchor="middle">:8080</text>
 <rect class="node ok" x="440" y="182" width="190" height="86" rx="8"/><text class="node-label" x="535" y="212" text-anchor="middle">readonly workers</text><text class="node-sub" x="535" y="231" text-anchor="middle">query only</text><text class="node-sub" x="535" y="246" text-anchor="middle">:8081</text>
-<rect class="node" x="700" y="30" width="150" height="86" rx="8"/><text class="node-label" x="775" y="60" text-anchor="middle">DuckDB CLI</text><text class="node-sub" x="775" y="79" text-anchor="middle">external process</text><text class="node-sub" x="775" y="94" text-anchor="middle">PGPQ_DUCKDB</text>
+<rect class="node" x="700" y="30" width="150" height="86" rx="8"/><text class="node-label" x="775" y="60" text-anchor="middle">GeoParquet 2.0</text><text class="node-sub" x="775" y="79" text-anchor="middle">native geometry</text><text class="node-sub" x="775" y="94" text-anchor="middle">upload body</text>
 <rect class="node" x="700" y="182" width="280" height="86" rx="8"/><text class="node-label" x="840" y="212" text-anchor="middle">PostgreSQL 18</text><text class="node-sub" x="840" y="231" text-anchor="middle">pgpq.collections · cells · cell_chunks · ids</text><text class="node-sub" x="840" y="246" text-anchor="middle">inline 8,120-byte chunks</text>
 <path class="edge" d="M170 144 H220 M380 144 C410 144 410 73 440 73 M380 144 C410 144 410 225 440 225"/>
-<path class="edge" d="M630 73 H700 M630 225 H700"/>
-<path class="edge" d="M850 73 C880 73 880 182 850 182"/>
+<path class="edge" d="M700 73 H630 M630 225 H700 M630 73 C660 73 660 210 700 225"/>
 <text class="diagram-note" x="400" y="160">route</text>
-<text class="diagram-note" x="645" y="58">export</text>
+<text class="diagram-note" x="665" y="58">upload</text>
 <text class="diagram-note" x="645" y="242">SELECT</text>
+<text class="diagram-note" x="670" y="170">write</text>
 </svg>
-<figcaption>Only the writable worker needs the DuckDB CLI and write privileges. Readonly workers need only <code>SELECT</code> and no DDL.</figcaption>
+<figcaption>Only the writable worker needs write privileges. Readonly workers need only <code>SELECT</code> and no DDL. Both accept native GeoParquet 2.0 uploads only.</figcaption>
 </figure>
 </section>
 
@@ -152,9 +152,9 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <div class="col-lg-7">
 <figure class="figure">
 <svg viewBox="0 0 900 340" role="img" aria-labelledby="component-svg-title">
-<title id="component-svg-title">HTTP API separates load and query. Load uses DuckDB export, S2 split, GeoParquet writer and chunk writer. Query uses catalog, chunk reader, Parquet reader, CQL and output encoding.</title>
+<title id="component-svg-title">HTTP API separates load and query. Load uses a GeoParquet 2.0 reader, S2 split, GeoParquet writer and chunk writer. Query uses catalog, chunk reader, Parquet reader, CQL and output encoding.</title>
 <rect class="node" x="20" y="130" width="130" height="76" rx="8"/><text class="node-label" x="85" y="160" text-anchor="middle">HTTP API</text><text class="node-sub" x="85" y="178" text-anchor="middle">PUT · POST · GET</text>
-<rect class="node" x="200" y="30" width="170" height="86" rx="8"/><text class="node-label" x="285" y="60" text-anchor="middle">loader</text><text class="node-sub" x="285" y="79" text-anchor="middle">DuckDB export + S2</text><text class="node-sub" x="285" y="94" text-anchor="middle">GeoParquet writer</text>
+<rect class="node" x="200" y="30" width="170" height="86" rx="8"/><text class="node-label" x="285" y="60" text-anchor="middle">loader</text><text class="node-sub" x="285" y="79" text-anchor="middle">GeoParquet 2.0 + S2</text><text class="node-sub" x="285" y="94" text-anchor="middle">GeoParquet writer</text>
 <rect class="node" x="200" y="220" width="170" height="86" rx="8"/><text class="node-label" x="285" y="250" text-anchor="middle">query</text><text class="node-sub" x="285" y="269" text-anchor="middle">catalog + row groups</text><text class="node-sub" x="285" y="284" text-anchor="middle">CQL + paging</text>
 <rect class="node" x="430" y="30" width="160" height="86" rx="8"/><text class="node-label" x="510" y="60" text-anchor="middle">GeoParquet 2.0</text><text class="node-sub" x="510" y="79" text-anchor="middle">native GEOMETRY/WKB</text><text class="node-sub" x="510" y="94" text-anchor="middle">2,048-row groups</text>
 <rect class="node" x="430" y="220" width="160" height="86" rx="8"/><text class="node-label" x="510" y="250" text-anchor="middle">chunk reader</text><text class="node-sub" x="510" y="269" text-anchor="middle">(cell_id, no)</text><text class="node-sub" x="510" y="284" text-anchor="middle">8,120 B inline</text>
@@ -170,7 +170,7 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <div class="card h-100"><div class="card-body">
 <h3 class="h6 text-warning">Responsibilities</h3>
 <dl class="row mb-0 small">
-<dt class="col-4">loader</dt><dd class="col-8">DuckDB export, S2 assignment, sort, GeoParquet encode, 8,120-byte chunking, overview samples.</dd>
+<dt class="col-4">loader</dt><dd class="col-8">Native GeoParquet 2.0 read, S2 assignment, sort, GeoParquet encode, 8,120-byte chunking, overview samples.</dd>
 <dt class="col-4">catalog</dt><dd class="col-8">one row per collection/level/cell; bounds, key range, feature count, zone, <code>cell_id</code>.</dd>
 <dt class="col-4">chunk reader</dt><dd class="col-8">primary-key range reads over <code>(cell_id,no)</code>; small per-file cache.</dd>
 <dt class="col-4">query</dt><dd class="col-8">cell pruning, Parquet row-group stats, exact CQL/bbox, cursor paging, output encoding.</dd>
@@ -185,18 +185,18 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <p class="text-body-secondary">One upload story. Structural components are static above; this diagram shows only order.</p>
 <figure class="figure">
 <svg viewBox="0 0 1000 250" role="img" aria-labelledby="ingest-svg-title">
-<title id="ingest-svg-title">An upload is exported by DuckDB, split by S2 L8 cell, sorted, encoded as GeoParquet, split into chunks, and committed with parent samples.</title>
+<title id="ingest-svg-title">An upload is validated as native GeoParquet 2.0, split by S2 L8 cell, sorted, encoded as GeoParquet, split into chunks, and committed with parent samples.</title>
 <defs><marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
-<rect class="node" x="18" y="62" width="130" height="70" rx="8"/><text class="node-label" x="83" y="90" text-anchor="middle">1 · upload</text><text class="node-sub" x="83" y="108" text-anchor="middle">DuckDB file</text>
-<rect class="node" x="184" y="62" width="150" height="70" rx="8"/><text class="node-label" x="259" y="90" text-anchor="middle">2 · export</text><text class="node-sub" x="259" y="108" text-anchor="middle">DuckDB CLI → PQ</text>
+<rect class="node" x="18" y="62" width="130" height="70" rx="8"/><text class="node-label" x="83" y="90" text-anchor="middle">1 · upload</text><text class="node-sub" x="83" y="108" text-anchor="middle">GeoParquet 2.0</text>
+<rect class="node" x="184" y="62" width="150" height="70" rx="8"/><text class="node-label" x="259" y="90" text-anchor="middle">2 · validate</text><text class="node-sub" x="259" y="108" text-anchor="middle">native GEOMETRY</text>
 <rect class="node hot" x="370" y="62" width="150" height="70" rx="8"/><text class="node-label" x="445" y="90" text-anchor="middle">3 · partition</text><text class="node-sub" x="445" y="108" text-anchor="middle">S2 L8 + sort</text>
 <rect class="node" x="556" y="62" width="150" height="70" rx="8"/><text class="node-label" x="631" y="90" text-anchor="middle">4 · encode</text><text class="node-sub" x="631" y="108" text-anchor="middle">GeoParquet 2.0</text>
 <rect class="node" x="742" y="62" width="130" height="70" rx="8"/><text class="node-label" x="807" y="90" text-anchor="middle">5 · chunk</text><text class="node-sub" x="807" y="108" text-anchor="middle">8,120 B inline</text>
 <rect class="node ok" x="908" y="62" width="76" height="70" rx="8"/><text class="node-label" x="946" y="90" text-anchor="middle">6 · commit</text><text class="node-sub" x="946" y="108" text-anchor="middle">+ parents</text>
 <path id="inpath" class="edge dashed" d="M148 97 H184 M334 97 H370 M520 97 H556 M706 97 H742 M872 97 H908"/>
 <circle class="packet" cx="0" cy="0" r="5" fill="var(--accent)"><animateMotion dur="5s" repeatCount="indefinite"><mpath href="#inpath"/></animateMotion></circle>
-<text class="diagram-note" x="83" y="175" text-anchor="middle">one view</text>
-<text class="diagram-note" x="259" y="175" text-anchor="middle">external process</text>
+<text class="diagram-note" x="83" y="175" text-anchor="middle">one file</text>
+<text class="diagram-note" x="259" y="175" text-anchor="middle">no converter</text>
 <text class="diagram-note" x="445" y="175" text-anchor="middle">L8 = partition</text>
 <text class="diagram-note" x="631" y="175" text-anchor="middle">native GEOMETRY</text>
 <text class="diagram-note" x="807" y="175" text-anchor="middle">no TOAST</text>
@@ -236,27 +236,26 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <div class="col-lg-7">
 <ol class="list-group list-group-numbered">
 <li class="list-group-item bg-transparent">Use a city-sized PBF: Monaco (~1 MB) or Andorra (~4 MB). Avoid Île-de-France (387 MB) and Luxembourg (56 MB) for routine runs.</li>
-<li class="list-group-item bg-transparent"><code>prepare.sh</code> converts one OSM PBF to per-layer GeoParquet 2.0 through a 768 MB / 1 CPU GDAL container; <code>build.sh</code> assembles a DuckDB file with one view per layer and a <code>layer_catalog</code>.</li>
+<li class="list-group-item bg-transparent"><code>prepare.sh</code> uses a 768 MB / 1 CPU DuckDB container with the spatial extension to convert one OSM PBF into per-layer native GeoParquet 2.0 files and a <code>meta.json</code>.</li>
 <li class="list-group-item bg-transparent"><code>serve.sh</code> creates a disposable <code>pgpq_osm_bench</code> database and starts a writable worker on :8094 with <code>GOMEMLIMIT=1GiB</code>, two connections, and migrations. It refuses public ports.</li>
-<li class="list-group-item bg-transparent"><code>run.sh</code> loads one layer, times bbox/filter/id/GeoParquet/overview/numberMatched, verifies both GeoParquet pages with GDAL, deletes the test collection, then moves on.</li>
+<li class="list-group-item bg-transparent"><code>run.sh</code> POSTs one prepared 2.0 file, times bbox/filter/id/GeoParquet/overview/numberMatched, verifies both GeoParquet pages with DuckDB, deletes the test collection, then moves on.</li>
 </ol>
-<p class="small text-body-secondary mb-0">Harness measurements: Monaco uploads 0.23–0.28 s, bbox 4–9 ms, id 2–3 ms, GeoParquet 27–34 ms; Andorra uploads 0.31–0.61 s. The test worker peaked at 228 MB RSS. See <code>bench/osm/README.md</code>.</p>
+<p class="small text-body-secondary mb-0">Harness measurements: Monaco uploads 0.13–0.21 s, bbox 4–8 ms, id 2–3 ms, GeoParquet 22–29 ms; Andorra uploads 0.20–0.43 s. The test worker runs at 1 GiB. See <code>bench/osm/README.md</code>.</p>
 </div>
 <div class="col-lg-5">
-<pre>export PGPQ_DUCKDB=/path/to/duckdb
-just pg-up
+<pre>just pg-up
 go build -o bin/pgpq ./cmd/pgpq
 
 # terminal 2: disposable :8094 worker
 bench/osm/serve.sh
 
-# terminal 1: prepare -> DuckDB -> POST
+# terminal 1: DuckDB prepare -> POST
 # benchmark -> cleanup
 bench/osm/run.sh \
   --pbf monaco.osm.pbf \
   --work /tmp/opencode/bench/osm-monaco \
   --reps 10</pre>
-<p class="small text-body-secondary mb-0">One layer at a time; one request at a time. GDAL is capped at 768 MB, DuckDB at 512 MB/1 thread, and the server at 1 GiB. Country extracts are intentionally out of scope.</p>
+<p class="small text-body-secondary mb-0">One layer at a time; one request at a time. DuckDB is capped at 768 MB / 1 CPU and the server at 1 GiB. Country extracts are intentionally out of scope.</p>
 </div>
 </div>
 </section>
@@ -328,8 +327,8 @@ pgpq.ids
 </table>
 </div>
 <div class="row g-3">
-<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">1.26 s</div><div class="text-body-secondary">Monaco DuckDB ingest · 4,628 features · 12.6 MB</div></div></div></div>
-<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">8.18 s</div><div class="text-body-secondary">Luxembourg DuckDB ingest · 228,273 features · 48.2 MB</div></div></div></div>
+<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">0.13–0.21 s</div><div class="text-body-secondary">Monaco GeoParquet 2.0 ingest · 4,628 buildings</div></div></div></div>
+<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">0.20–0.43 s</div><div class="text-body-secondary">Andorra GeoParquet 2.0 ingest · 8,833 roads</div></div></div></div>
 <div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">161 MB</div><div class="text-body-secondary">database · 13,343 inline chunks · ~107 MB chunk table</div></div></div></div>
 </div>
 <div class="alert alert-warning mt-4" role="alert"><strong>Heavy cell:</strong> 1,000,000 points, 10.0 MB detail, ingest 19.9 s / 1.39 GB peak; bbox 100 / 1,000: 4.3 / 11.8 ms; filter 11.8 ms; id 10.5 ms; numberMatched 1.9 s; L2 8.5 ms; GeoParquet 11.1 ms. One hourly batch append rewrites the cell in 20.9 s / 1.39 GB.</div>
@@ -348,7 +347,7 @@ pgpq.ids
 <section id="limits" class="mb-5" aria-labelledby="limits-title">
 <h2 id="limits-title" class="h3 mb-3">Limits</h2>
 <ul class="list-group list-group-flush">
-<li class="list-group-item bg-transparent">DuckDB ingest requires the external <code>duckdb</code> binary and spatial extension; the server never links DuckDB.</li>
+<li class="list-group-item bg-transparent">Uploads must be native GeoParquet 2.0; the server has no DuckDB, GDAL or converter dependency at runtime.</li>
 <li class="list-group-item bg-transparent">One root geometry column, OGC:CRS84/EPSG:4326 only. Nested schema and multiple geometry columns are deferred.</li>
 <li class="list-group-item bg-transparent">One-file-per-cell append is for hourly batches. Use <code>PUT</code> for a full snapshot; avoid per-row appends.</li>
 <li class="list-group-item bg-transparent">Filtered <code>numberMatched</code> scans surviving row groups; it is not a posting-list count.</li>

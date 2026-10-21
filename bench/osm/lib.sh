@@ -13,18 +13,6 @@ note() {
 	echo "== $*" >&2
 }
 
-find_duckdb() {
-	if [ -n "${PGPQ_DUCKDB:-}" ]; then
-		echo "$PGPQ_DUCKDB"
-		return
-	fi
-	if command -v duckdb >/dev/null 2>&1; then
-		command -v duckdb
-		return
-	fi
-	return 1
-}
-
 find_psql_command() {
 	if [ -n "${PGPQ_OSM_PSQL:-}" ]; then
 		echo "$PGPQ_OSM_PSQL"

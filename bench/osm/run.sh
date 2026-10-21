@@ -9,7 +9,7 @@ usage() {
 	cat >&2 <<'EOF'
 usage: run.sh --pbf FILE [options]
 
-Prepare, build and benchmark one small OSM PBF against a test worker.
+Prepare and benchmark one small OSM PBF against a test worker.
 Defaults to http://127.0.0.1:8094 and refuses public 8080/8081.
 
 options:
@@ -25,19 +25,17 @@ options:
   --force               rebuild intermediate GeoParquet
   --skip-prepare        reuse existing GeoParquet
   --keep                do not delete test collections
-  --no-verify           skip the GDAL GeoParquet check
+  --no-verify           skip the DuckDB GeoParquet check
   --psql CMD            psql command prefix for cleanup
   --allow-remote        allow a non-loopback test worker
 
 environment:
-  PGPQ_DUCKDB           duckdb CLI (also used by the server)
-  PGPQ_OSM_PSQL         psql command prefix, e.g. "psql postgres://.../pgpq_osm_bench"
-                        or "docker exec -i postfgb-postgres-1 psql -U postgres -d pgpq_osm_bench"
-  PGPQ_OSM_GDAL_IMAGE   default ghcr.io/osgeo/gdal:ubuntu-full-latest
-  PGPQ_OSM_GDAL_MEM     default 768m
-  PGPQ_OSM_DUCKDB_MEM   default 512MB
-  PGPQ_OSM_DUCKDB_THREADS default 1
-  GOMEMLIMIT            server cap, default set by serve.sh to 1GiB
+  PGPQ_OSM_PSQL          psql command prefix, e.g. "psql postgres://.../pgpq_osm_bench"
+                         or "docker exec -i postfgb-postgres-1 psql -U postgres -d pgpq_osm_bench"
+  PGPQ_OSM_DUCKDB_IMAGE  default duckdb/duckdb:1.5.6
+  PGPQ_OSM_DUCKDB_MEM    default 768m
+  PGPQ_OSM_DUCKDB_CPUS   default 1
+  GOMEMLIMIT             server cap, default set by serve.sh to 1GiB
 
 Start a disposable worker first:
   bench/osm/serve.sh
@@ -123,32 +121,19 @@ else
 	prepare_seconds=$(awk -v a="$start" -v b="$end" 'BEGIN { printf "%.3f", (b-a)/1000000000 }')
 fi
 
-build_seconds=0
-build_rss_kb=0
-start=$(date +%s%N)
-if command -v /usr/bin/time >/dev/null 2>&1; then
-	/usr/bin/time -f '%e %M' -o "$work/build.time" \
-		"$here/build.sh" --work "$work" --extract "$extract" --layers "$layers" --prefix "$prefix"
-	read -r build_seconds build_rss_kb <"$work/build.time"
-else
-	"$here/build.sh" --work "$work" --extract "$extract" --layers "$layers" --prefix "$prefix"
-	end=$(date +%s%N)
-	build_seconds=$(awk -v a="$start" -v b="$end" 'BEGIN { printf "%.3f", (b-a)/1000000000 }')
-fi
-
-db=$work/$extract.duckdb
-db_bytes=$(stat -c %s "$db")
-stages="{"
 if [ -n "$prepare_seconds" ]; then
-	stages+="\"prepare_seconds\":$prepare_seconds,"
+	printf '{"prepare_seconds":%s}\n' "$prepare_seconds" >"$work/stages.json"
+else
+	rm -f "$work/stages.json"
 fi
-stages+="\"build_seconds\":$build_seconds,\"build_rss_kb\":$build_rss_kb,\"duckdb_bytes\":$db_bytes}"
-printf '%s\n' "$stages" >"$work/stages.json"
 
 args=(
 	--base-url "$url"
-	--duckdb-file "$db"
-	--meta "$work/$extract.meta.json"
+	--parquet-dir "$work/parquet"
+	--extract "$extract"
+	--meta "$work/meta.json"
+	--layers-file "$here/layers.tsv"
+	--duckdb-image "${PGPQ_OSM_DUCKDB_IMAGE:-duckdb/duckdb:1.5.6}"
 	--layers "$layers"
 	--prefix "$prefix"
 	--out-dir "$work/report"

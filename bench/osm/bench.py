@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Upload one DuckDB layer file per layer, measure pgpq, and clean up.
+"""Upload one prepared GeoParquet 2.0 layer per collection and measure pgpq.
 
 The harness is deliberately sequential: one POST, one collection, one set of
 requests, one DELETE. It never talks to a public worker and never runs more
-than one layer at a time.
+than one layer at a time. A capped DuckDB container extracts the OSM layers
+and writes native GeoParquet 2.0; this script uploads those files directly.
 """
 
 import argparse
@@ -22,6 +23,7 @@ import urllib.request
 from pathlib import Path
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$")
+LAYERS_FILE = Path(__file__).with_name("layers.tsv")
 
 
 class BenchError(RuntimeError):
@@ -168,47 +170,107 @@ def collection_present(base_url, collection, timeout=30):
         raise
 
 
-def verify_parquet(path, expected, gdal_image, timeout=180):
-    if not gdal_image:
-        return {"status": "skipped", "reason": "no gdal image"}
+def verify_parquet(path, expected, duckdb_image, timeout=180):
+    if not duckdb_image:
+        return {"status": "skipped", "reason": "no DuckDB image"}
     if not path.exists():
         return {"status": "failed", "reason": "missing file"}
     directory = path.parent.resolve()
+    name = path.name.replace("'", "''")
+    sql = (
+        "INSTALL spatial; LOAD spatial; "
+        f"SELECT count(*) AS features, any_value(ST_GeometryType(geometry)) AS geometry_type, "
+        f"(SELECT logical_type FROM parquet_schema('/data/{name}') WHERE name = 'geometry') AS logical_type "
+        f"FROM read_parquet('/data/{name}')"
+    )
     command = [
         "docker", "run", "--rm", "--memory", "512m", "--cpus", "1",
-        "-v", f"{directory}:/data:ro", gdal_image,
-        "ogrinfo", "-ro", "-so", f"/data/{path.name}", path.stem,
+        "-v", f"{directory}:/data:ro", duckdb_image,
+        "duckdb", "-json", "-c", sql,
     ]
     try:
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
     except FileNotFoundError:
         return {"status": "skipped", "reason": "docker not found"}
     except subprocess.TimeoutExpired:
-        return {"status": "failed", "reason": "ogrinfo timed out"}
-    output = result.stdout
-    count_match = re.search(r"Feature Count:\s*(-?\d+)", output)
-    geometry_match = re.search(r"^Geometry:\s*(.+)$", output, re.MULTILINE)
-    count = int(count_match.group(1)) if count_match else None
-    geometry = geometry_match.group(1).strip() if geometry_match else None
-    ok = result.returncode == 0 and count == expected
+        return {"status": "failed", "reason": "DuckDB verification timed out"}
+    try:
+        row = json.loads(result.stdout)[0]
+    except (ValueError, IndexError):
+        return {"status": "failed", "reason": result.stdout.strip()[-600:] or f"DuckDB exit {result.returncode}"}
+    count = row.get("features")
+    geometry = row.get("geometry_type")
+    logical = row.get("logical_type") or ""
+    ok = result.returncode == 0 and count == expected and "GeometryType" in logical
     if expected > 0:
-        ok = ok and geometry not in (None, "None", "Unknown (any)")
+        ok = ok and geometry not in (None, "None", "UNKNOWN")
     if not ok:
-        tail = "\n".join(output.strip().splitlines()[-12:])
         return {
             "status": "failed",
-            "reason": tail or f"ogrinfo exit {result.returncode}",
+            "reason": f"features={count} expected={expected} geometry={geometry} logical={logical[:120]}",
             "feature_count": count,
             "geometry": geometry,
         }
-    return {"status": "ok", "feature_count": count, "geometry": geometry}
+    return {"status": "ok", "feature_count": count, "geometry": geometry, "logical_type": logical}
+
+
+def load_json_rows(path):
+    text = Path(path).read_text().strip()
+    if not text:
+        return []
+    try:
+        rows = json.loads(text)
+    except ValueError:
+        try:
+            rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+        except ValueError as exc:
+            fail(f"cannot parse {path}: {exc}")
+    if not isinstance(rows, list):
+        fail(f"{path} must contain JSON rows")
+    return rows
+
+
+def read_layer_defs(path):
+    rows = {}
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError as exc:
+        fail(f"cannot read layers file {path}: {exc}")
+    for number, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("|")
+        if len(fields) != 8:
+            fail(f"{path}:{number}: expected 8 pipe-separated fields, got {len(fields)}")
+        name, osm_layer, where, select, cql_filter, id_column, id_sql, assert_field = fields
+        if not NAME_RE.match(name):
+            fail(f"{path}:{number}: invalid layer name {name!r}")
+        if not id_column or not id_sql:
+            fail(f"{path}:{number}: id_column and id_sql are required")
+        rows[name] = {
+            "name": name,
+            "osm_layer": osm_layer,
+            "where": where,
+            "select": select,
+            "filter": cql_filter,
+            "id_column": id_column,
+            "id_sql": id_sql,
+            "assert_field": assert_field,
+        }
+    if not rows:
+        fail(f"no layers in {path}")
+    return rows
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=os.environ.get("PGPQ_OSM_URL", "http://127.0.0.1:8094"))
-    parser.add_argument("--duckdb-file", required=True)
+    parser.add_argument("--parquet-dir", required=True)
+    parser.add_argument("--extract", required=True)
     parser.add_argument("--meta", required=True)
+    parser.add_argument("--layers-file", default=str(LAYERS_FILE))
+    parser.add_argument("--duckdb-image", default=os.environ.get("PGPQ_OSM_DUCKDB_IMAGE", "duckdb/duckdb:1.5.6"))
     parser.add_argument("--layers", default="")
     parser.add_argument("--prefix", default=os.environ.get("PGPQ_OSM_PREFIX", "osm_"))
     parser.add_argument("--out-dir", required=True)
@@ -220,7 +282,6 @@ def build_parser():
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--psql-cmd", default="")
     parser.add_argument("--keep", action="store_true")
-    parser.add_argument("--gdal-image", default=os.environ.get("PGPQ_OSM_GDAL_IMAGE", "ghcr.io/osgeo/gdal:ubuntu-full-latest"))
     parser.add_argument("--no-verify", action="store_true")
     parser.add_argument("--allow-remote", action="store_true")
     parser.add_argument("--stages", default="")
@@ -247,19 +308,27 @@ def main():
     work = Path(args.out_dir)
     pages = work / "pages"
     pages.mkdir(parents=True, exist_ok=True)
-    meta_rows = json.loads(Path(args.meta).read_text())
-    meta = {row["layer"]: row for row in meta_rows}
+    parquet_dir = Path(args.parquet_dir).resolve()
+    if not parquet_dir.is_dir():
+        fail(f"missing parquet directory: {parquet_dir}")
+    defs = read_layer_defs(args.layers_file)
     wanted = [part for part in args.layers.split(",") if part]
     if not wanted:
-        wanted = list(meta)
-    missing = [layer for layer in wanted if layer not in meta]
+        wanted = list(defs)
+    missing = [layer for layer in wanted if layer not in defs]
     if missing:
-        fail(f"layers missing from meta: {', '.join(missing)}")
+        fail(f"layers missing from {args.layers_file}: {', '.join(missing)}")
+    meta_rows = load_json_rows(args.meta)
+    meta_by_layer = {row["layer"]: row for row in meta_rows}
+    meta = {}
+    for layer in wanted:
+        source = parquet_dir / f"{args.extract}_{layer}.parquet"
+        if not source.is_file():
+            fail(f"missing prepared layer: {source}")
+        if layer not in meta_by_layer:
+            fail(f"layer missing from {args.meta}: {layer}")
+        meta[layer] = {**defs[layer], **meta_by_layer[layer]}
 
-    duckdb_file = Path(args.duckdb_file).resolve()
-    if not duckdb_file.is_file():
-        fail(f"missing DuckDB file: {duckdb_file}")
-    body = duckdb_file.read_bytes()
     stage_info = {}
     if args.stages:
         try:
@@ -269,10 +338,9 @@ def main():
 
     bbox_override = parse_float_list(args.bbox, 4, "--bbox") if args.bbox else None
     limits = {
-        "gdal_memory": os.environ.get("PGPQ_OSM_GDAL_MEM", "768m"),
-        "gdal_cpus": os.environ.get("PGPQ_OSM_GDAL_CPUS", "1"),
-        "duckdb_memory": os.environ.get("PGPQ_OSM_DUCKDB_MEM", "512MB"),
-        "duckdb_threads": os.environ.get("PGPQ_OSM_DUCKDB_THREADS", "1"),
+        "duckdb_image": args.duckdb_image,
+        "duckdb_memory": os.environ.get("PGPQ_OSM_DUCKDB_MEM", "768m"),
+        "duckdb_cpus": os.environ.get("PGPQ_OSM_DUCKDB_CPUS", "1"),
         "go_memory": os.environ.get("GOMEMLIMIT", "1GiB"),
         "request_mode": "sequential",
     }
@@ -280,9 +348,10 @@ def main():
     report = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "base_url": base_url,
-        "duckdb_file": str(duckdb_file),
-        "duckdb_bytes": duckdb_file.stat().st_size,
+        "parquet_dir": str(parquet_dir),
+        "extract": args.extract,
         "meta": str(Path(args.meta).resolve()),
+        "layers_file": str(Path(args.layers_file).resolve()),
         "reps": args.reps,
         "limit": args.limit,
         "parquet_limit": args.parquet_limit,
@@ -350,19 +419,23 @@ def main():
             if collection_present(base_url, collection):
                 fail(f"{collection} still exists after cleanup; does --psql-cmd target the worker's database?")
         try:
-            note(f"POST {duckdb_file.name} -> {collection}")
+            source = parquet_dir / f"{args.extract}_{layer}.parquet"
+            body = source.read_bytes()
+            note(f"POST {source.name} -> {collection}")
+            upload_url = f"{base_url}/v2/collections/{urllib.parse.quote(collection, safe='')}?{urllib.parse.urlencode({'id_column': row['id_column']})}"
             elapsed, payload, _headers = http_call(
-                f"{base_url}/v2/collections/{urllib.parse.quote(collection, safe='')}",
+                upload_url,
                 method="POST",
                 data=body,
-                headers={"Content-Type": "application/vnd.duckdb"},
+                headers={"Content-Type": "application/vnd.apache.parquet"},
                 timeout=args.timeout,
             )
             loaded = json.loads(payload)
             entry["upload"] = {"seconds": elapsed / 1000.0, **loaded}
             check("upload features", loaded.get("features") == row["features"], f"{loaded.get('features')} != {row['features']}")
             check("upload cells", loaded.get("cells", 0) > 0)
-            check("single geometry type", row.get("types") == 1, f"{row.get('types')} geometry types")
+            geometry_type = row.get("geometry_type") or ""
+            check("single geometry type", geometry_type not in ("", "None", "Unknown (any)"), geometry_type)
 
             sanity = json.loads(http_call(items({"limit": 1}), timeout=args.timeout)[1])
             check("collection readable", sanity.get("numberReturned") == 1)
@@ -401,7 +474,7 @@ def main():
             _, parquet_payload, _ = http_call(items({"bbox": bbox_text, "limit": args.parquet_limit, "f": "geoparquet"}), timeout=args.timeout)
             parquet_path.write_bytes(parquet_payload)
             parquet_rows = len(json.loads(http_call(items({"bbox": bbox_text, "limit": args.parquet_limit}), timeout=args.timeout)[1]).get("features") or [])
-            entry["parquet_verify"] = verify_parquet(parquet_path, parquet_rows, None if args.no_verify else args.gdal_image)
+            entry["parquet_verify"] = verify_parquet(parquet_path, parquet_rows, None if args.no_verify else args.duckdb_image)
             if args.no_verify:
                 entry["checks"].append({"name": "geoparquet", "ok": True, "detail": "verification skipped"})
             else:
@@ -429,7 +502,7 @@ def main():
                 json.loads(http_call(items({"bbox": bbox_text, "overview": 6, "limit": args.parquet_limit}), timeout=args.timeout)[1]).get("features") or []
             )
             entry["overview_parquet_verify"] = verify_parquet(
-                overview_parquet_path, overview_parquet_rows, None if args.no_verify else args.gdal_image
+                overview_parquet_path, overview_parquet_rows, None if args.no_verify else args.duckdb_image
             )
             if args.no_verify:
                 entry["checks"].append({"name": "overview geoparquet", "ok": True, "detail": "verification skipped"})
@@ -473,23 +546,20 @@ def render_markdown(report):
     lines.append("")
     lines.append(f"- Generated: {report['generated_at']}")
     lines.append(f"- Test worker: `{report['base_url']}`")
-    lines.append(f"- DuckDB source: `{report['duckdb_file']}` ({report['duckdb_bytes'] / 1024 / 1024:.1f} MiB)")
+    lines.append(f"- GeoParquet source: `{report['parquet_dir']}` ({report['extract']})")
     lines.append(f"- Reps: {report['reps']}; JSON limit: {report['limit']}; GeoParquet limit: {report['parquet_limit']}")
     lines.append(f"- BBox: central {report['bbox_fraction']:.0%} of each layer's robust 5-95% centroid extent")
     lines.append("")
     limits = report["resource_limits"]
-    lines.append("Resource caps: GDAL `{}` / {} CPU, DuckDB `{}` / {} thread, server `GOMEMLIMIT={}`; requests are sequential.".format(
-        limits["gdal_memory"], limits["gdal_cpus"], limits["duckdb_memory"], limits["duckdb_threads"], limits["go_memory"]
+    lines.append("Resource caps: DuckDB `{}` / {} CPU, server `GOMEMLIMIT={}`; requests are sequential.".format(
+        f"{limits.get('duckdb_image', 'duckdb')} ({limits.get('duckdb_memory', '')})",
+        limits.get("duckdb_cpus", "1"), limits["go_memory"]
     ))
     if report.get("stages"):
         stages = report["stages"]
         parts = []
         if "prepare_seconds" in stages:
             parts.append(f"prepare {stages['prepare_seconds']:.2f} s")
-        if "build_seconds" in stages:
-            parts.append(f"build {stages['build_seconds']:.2f} s")
-        if "build_rss_kb" in stages:
-            parts.append(f"build peak {stages['build_rss_kb'] / 1024:.0f} MiB")
         if parts:
             lines.append("")
             lines.append("Stages: " + ", ".join(parts) + ".")

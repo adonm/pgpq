@@ -8,6 +8,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
 
+	"github.com/adonm/pgpq/internal/cql"
 	"github.com/adonm/pgpq/internal/spatial"
 )
 
@@ -23,8 +24,9 @@ func Open(reader io.ReaderAt, size int64) (*File, error) {
 		return nil, errors.New("geopq: cell file unreadable")
 	}
 	fields := file.Schema().Fields()
-	f := &File{reader: reader, file: file, fields: fields, geometry: -1, key: -1}
+	f := &File{reader: reader, file: file, fields: fields, geometry: -1, key: -1, types: make([]cql.Type, len(fields))}
 	for i, field := range fields {
+		f.types[i] = columnType(field)
 		switch field.Name() {
 		case "__pgpq_key":
 			f.key = i
@@ -34,7 +36,7 @@ func Open(reader io.ReaderAt, size int64) (*File, error) {
 			f.geometry = i
 			continue
 		}
-		f.attrs = append(f.attrs, Column{Name: field.Name(), Type: columnType(field)})
+		f.attrs = append(f.attrs, Column{Name: field.Name(), Type: f.types[i]})
 	}
 	if f.geometry < 0 || f.key < 0 {
 		return nil, errors.New("geopq: cell file lacks geometry or key")
@@ -54,24 +56,12 @@ func isGeometry(field parquet.Field) bool {
 	return false
 }
 
-func (f *File) NumRows() int {
-	return int(f.file.NumRows())
-}
-
-func (f *File) Attributes() []Column {
-	return f.attrs
-}
-
-func (f *File) Geometry() string {
-	return f.fields[f.geometry].Name()
+func (f *File) Size() int64 {
+	return f.file.Size()
 }
 
 func (f *File) GroupCount() int {
 	return len(f.file.RowGroups())
-}
-
-func (f *File) GroupRows(group int) int {
-	return int(f.file.RowGroups()[group].NumRows())
 }
 
 func (f *File) GroupBBox(group int) ([4]float64, bool) {
@@ -136,32 +126,17 @@ func (f *File) KeyRange(group int) (int64, int64, bool) {
 }
 
 func (f *File) RowGroups(groups []int, idColumn string) ([]Feature, error) {
-	var out []Feature
+	rows := 0
 	for _, group := range groups {
-		reader := parquet.NewRowGroupReader(f.file.RowGroups()[group], &parquet.ReaderConfig{Schema: f.file.Schema()})
-		buf := make([]parquet.Row, 256)
-		for {
-			n, err := reader.ReadRows(buf)
-			for i := 0; i < n; i++ {
-				feature, err := f.fromRow(buf[i], idColumn)
-				if err != nil {
-					reader.Close()
-					return nil, err
-				}
-				out = append(out, feature)
-			}
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				reader.Close()
-				return nil, err
-			}
-			if n == 0 {
-				break
-			}
-		}
-		reader.Close()
+		rows += int(f.file.RowGroups()[group].NumRows())
+	}
+	out := make([]Feature, 0, rows)
+	err := f.Scan(groups, idColumn, func(feature Feature) bool {
+		out = append(out, feature)
+		return true
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -180,29 +155,29 @@ func (f *File) FeatureAt(row int, idColumn string) (Feature, error) {
 	if n == 0 {
 		return Feature{}, errors.New("geopq: row not found")
 	}
-	return f.fromRow(buf[0], idColumn)
+	return f.fromRow(buf[0], idColumn, nil)
 }
 
-func (f *File) fromRow(row parquet.Row, idColumn string) (Feature, error) {
+func (f *File) fromRow(row parquet.Row, idColumn string, props map[string]any) (Feature, error) {
 	var feature Feature
 	for _, value := range row {
-		column := value.Column()
+		column := int(value.Column())
 		if column < 0 || column >= len(f.fields) || value.IsNull() {
 			continue
 		}
-		field := f.fields[column]
 		switch column {
 		case f.geometry:
 			feature.Geometry = append([]byte(nil), value.ByteArray()...)
 		case f.key:
 			feature.Key = spatial.FromOrdered(value.Int64())
 		default:
-			if feature.Props == nil {
-				feature.Props = make(map[string]any)
+			if props == nil {
+				props = make(map[string]any, len(f.attrs))
 			}
-			feature.Props[field.Name()] = valueAny(columnType(field), value)
+			props[f.fields[column].Name()] = valueAny(f.types[column], value)
 		}
 	}
+	feature.Props = props
 	bounds, ok := Bounds(feature.Geometry)
 	if !ok {
 		return Feature{}, errors.New("geopq: stored feature has no geometry")
@@ -231,18 +206,49 @@ func float64Value(b []byte) (float64, bool) {
 }
 
 func (f *File) Scan(groups []int, idColumn string, yield func(Feature) bool) error {
+	var decodeErr error
+	err := f.readGroups(groups, func(row parquet.Row) bool {
+		feature, err := f.fromRow(row, idColumn, nil)
+		if err != nil {
+			decodeErr = err
+			return false
+		}
+		return yield(feature)
+	})
+	if decodeErr != nil {
+		return decodeErr
+	}
+	return err
+}
+
+func (f *File) Count(groups []int, match func(map[string]any) bool) (int, error) {
+	props := make(map[string]any, len(f.attrs))
+	total := 0
+	err := f.readGroups(groups, func(row parquet.Row) bool {
+		clear(props)
+		for _, value := range row {
+			column := int(value.Column())
+			if column < 0 || column >= len(f.fields) || column == f.geometry || column == f.key || value.IsNull() {
+				continue
+			}
+			props[f.fields[column].Name()] = valueAny(f.types[column], value)
+		}
+		if match(props) {
+			total++
+		}
+		return true
+	})
+	return total, err
+}
+
+func (f *File) readGroups(groups []int, yield func(parquet.Row) bool) error {
+	buf := make([]parquet.Row, 256)
 	for _, group := range groups {
 		reader := parquet.NewRowGroupReader(f.file.RowGroups()[group], &parquet.ReaderConfig{Schema: f.file.Schema()})
-		buf := make([]parquet.Row, 256)
 		for {
 			n, err := reader.ReadRows(buf)
 			for i := 0; i < n; i++ {
-				feature, err := f.fromRow(buf[i], idColumn)
-				if err != nil {
-					reader.Close()
-					return err
-				}
-				if !yield(feature) {
+				if !yield(buf[i]) {
 					reader.Close()
 					return nil
 				}

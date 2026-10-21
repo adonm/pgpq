@@ -14,6 +14,13 @@ import (
 
 const rowGroupRows = 2048
 
+type cellLayout struct {
+	fields   []parquet.Field
+	key      int
+	geometry int
+	types    []cql.Type
+}
+
 func EncodeCell(ds Dataset, features []Feature) ([]byte, error) {
 	if len(features) == 0 {
 		return nil, invalid("no features to encode")
@@ -25,52 +32,84 @@ func EncodeCell(ds Dataset, features []Feature) ([]byte, error) {
 		nodes[col.Name] = parquet.Optional(nodeOf(col.Type))
 	}
 	schema := parquet.NewSchema("geoparquet", nodes)
-	fields := schema.Fields()
-	rows := make([]parquet.Row, len(features))
-	bbox := features[0].Bounds
-	for i, feature := range features {
-		row := make(parquet.Row, 0, len(fields))
-		for c, field := range fields {
-			switch field.Name() {
-			case "__pgpq_key":
-				row = append(row, parquet.Int64Value(spatial.ToOrdered(feature.Key)).Level(0, 1, c))
-			case ds.Geometry:
-				row = append(row, parquet.ByteArrayValue(feature.Geometry).Level(0, 1, c))
-			default:
-				value, ok := valueOf(field.Name(), ds.Columns, feature.Props)
-				if !ok {
-					row = append(row, parquet.NullValue().Level(0, 0, c))
-				} else {
-					row = append(row, value.Level(0, 1, c))
-				}
-			}
-		}
-		rows[i] = row
-		if i > 0 {
-			bbox[0] = min(bbox[0], feature.Bounds[0])
-			bbox[1] = min(bbox[1], feature.Bounds[1])
-			bbox[2] = max(bbox[2], feature.Bounds[2])
-			bbox[3] = max(bbox[3], feature.Bounds[3])
-		}
-	}
-	var buf bytes.Buffer
-	metadata, err := geoMetadata(ds, bbox)
+	layout := layoutOf(ds, schema)
+	metadata, err := geoMetadata(ds, FeatureBounds(features))
 	if err != nil {
 		return nil, err
 	}
+	var buf bytes.Buffer
 	writer := parquet.NewWriter(&buf, &parquet.WriterConfig{
 		Schema:             schema,
 		MaxRowsPerRowGroup: rowGroupRows,
 		Compression:        &zstd.Codec{Level: zstd.SpeedBetterCompression},
 		KeyValueMetadata:   map[string]string{"geo": metadata},
 	})
-	if _, err := writer.WriteRows(rows); err != nil {
-		return nil, err
+	rows := make([]parquet.Row, 0, rowGroupRows)
+	for _, feature := range features {
+		rows = append(rows, layout.row(feature))
+		if len(rows) == rowGroupRows {
+			if _, err := writer.WriteRows(rows); err != nil {
+				return nil, err
+			}
+			rows = rows[:0]
+		}
+	}
+	if len(rows) > 0 {
+		if _, err := writer.WriteRows(rows); err != nil {
+			return nil, err
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func layoutOf(ds Dataset, schema *parquet.Schema) cellLayout {
+	fields := schema.Fields()
+	layout := cellLayout{fields: fields, key: -1, geometry: -1, types: make([]cql.Type, len(fields))}
+	for i, field := range fields {
+		switch field.Name() {
+		case "__pgpq_key":
+			layout.key = i
+		case ds.Geometry:
+			layout.geometry = i
+		default:
+			layout.types[i] = typeOf(ds.Columns, field.Name())
+		}
+	}
+	return layout
+}
+
+func (l cellLayout) row(feature Feature) parquet.Row {
+	row := make(parquet.Row, len(l.fields))
+	for column := range l.fields {
+		switch column {
+		case l.key:
+			row[column] = parquet.Int64Value(spatial.ToOrdered(feature.Key)).Level(0, 1, column)
+		case l.geometry:
+			row[column] = parquet.ByteArrayValue(feature.Geometry).Level(0, 1, column)
+		default:
+			value, ok := valueOf(l.types[column], feature.Props[l.fields[column].Name()])
+			if !ok {
+				row[column] = parquet.NullValue().Level(0, 0, column)
+				continue
+			}
+			row[column] = value.Level(0, 1, column)
+		}
+	}
+	return row
+}
+
+func FeatureBounds(features []Feature) [4]float64 {
+	bounds := features[0].Bounds
+	for _, feature := range features[1:] {
+		bounds[0] = min(bounds[0], feature.Bounds[0])
+		bounds[1] = min(bounds[1], feature.Bounds[1])
+		bounds[2] = max(bounds[2], feature.Bounds[2])
+		bounds[3] = max(bounds[3], feature.Bounds[3])
+	}
+	return bounds
 }
 
 func nodeOf(typ cql.Type) parquet.Node {
@@ -87,20 +126,17 @@ func nodeOf(typ cql.Type) parquet.Node {
 	return parquet.String()
 }
 
-func valueOf(name string, cols []Column, props map[string]any) (parquet.Value, bool) {
-	var typ cql.Type
-	found := false
+func typeOf(cols []Column, name string) cql.Type {
 	for _, col := range cols {
 		if col.Name == name {
-			typ, found = col.Type, true
-			break
+			return col.Type
 		}
 	}
-	if !found {
-		return parquet.Value{}, false
-	}
-	value, ok := props[name]
-	if !ok || value == nil {
+	return cql.String
+}
+
+func valueOf(typ cql.Type, value any) (parquet.Value, bool) {
+	if value == nil {
 		return parquet.Value{}, false
 	}
 	switch typ {

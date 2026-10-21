@@ -9,15 +9,15 @@ usage() {
 	cat >&2 <<'EOF'
 usage: prepare.sh --pbf FILE --work DIR [--layers a,b] [--force]
 
-Converts one small OSM PBF into one GeoParquet 2.0 file per layer with the
-GDAL Docker image. Layers are converted sequentially in a memory-capped
-container. The output is an intermediate; build.sh turns it into the DuckDB
-upload file.
+Converts one small OSM PBF into one native GeoParquet 2.0 file per layer with
+a memory-capped DuckDB container. The spatial extension supplies the GDAL OSM
+reader and the Parquet 2.0 writer; no separate GDAL container is used. Each
+file is sorted by ST_Hilbert before COPY so row groups are spatially ordered.
 
 environment:
-  PGPQ_OSM_GDAL_IMAGE  default ghcr.io/osgeo/gdal:ubuntu-full-latest
-  PGPQ_OSM_GDAL_MEM    default 768m
-  PGPQ_OSM_GDAL_CPUS   default 1
+  PGPQ_OSM_DUCKDB_IMAGE  default duckdb/duckdb:1.5.6 (writes GEOPARQUET_VERSION V2)
+  PGPQ_OSM_DUCKDB_MEM    default 768m
+  PGPQ_OSM_DUCKDB_CPUS   default 1
 EOF
 	exit 2
 }
@@ -41,42 +41,52 @@ done
 pbf=$(realpath "$pbf")
 work=$(realpath -m "$work")
 
-image=${PGPQ_OSM_GDAL_IMAGE:-ghcr.io/osgeo/gdal:ubuntu-full-latest}
-memory=${PGPQ_OSM_GDAL_MEM:-768m}
-cpus=${PGPQ_OSM_GDAL_CPUS:-1}
-command -v docker >/dev/null 2>&1 || die "docker is required for the GDAL step"
+image=${PGPQ_OSM_DUCKDB_IMAGE:-duckdb/duckdb:1.5.6}
+memory=${PGPQ_OSM_DUCKDB_MEM:-768m}
+cpus=${PGPQ_OSM_DUCKDB_CPUS:-1}
+command -v docker >/dev/null 2>&1 || die "docker is required for the DuckDB step"
 
 out=$work/parquet
 mkdir -p "$out"
 pbf_dir=$(dirname "$pbf")
 pbf_base=$(basename "$pbf")
 extract=$(extract_name "$pbf")
+selected=()
 
-while IFS='|' read -r name osm_layer where select filter id_sql assert_field; do
+while IFS='|' read -r name osm_layer where select filter id_column id_sql assert_field; do
 	case "$name" in ''|'#'*) continue ;; esac
 	layer_wanted "$name" "$layers" || continue
 	dest=$out/${extract}_${name}.parquet
 	if [ -s "$dest" ] && [ "$force" -eq 0 ]; then
 		note "keep existing $dest"
+		selected+=("$name")
 		continue
 	fi
 	rm -f "$dest" "$dest.tmp"
-	note "gdaling $extract/$name ($osm_layer)"
-	args=(-q -f Parquet "/out/${extract}_${name}.parquet" "/in/$pbf_base" "$osm_layer")
+	note "duckdb $extract/$name ($osm_layer)"
+	cols=${select:+, $select}
+	sql="COPY (SELECT $id_sql AS \"$id_column\"$cols, ST_SetCRS(geom, 'OGC:CRS84') AS geometry FROM ST_Read('/in/$pbf_base', layer='$osm_layer', open_options=['CONFIG_FILE=/config/osmconf.ini'])"
 	if [ -n "$where" ]; then
-		args+=(-where "$where")
+		sql+=" WHERE $where"
 	fi
-	args+=(-select "$select"
-		-lco GEOPARQUET_VERSION=2.0
-		-lco COMPRESSION=ZSTD
-		-lco GEOMETRY_ENCODING=WKB
-		-lco WRITE_COVERING_BBOX=NO
-		-lco ROW_GROUP_SIZE=16384)
+	sql+=" ORDER BY ST_Hilbert(geom), OGC_FID) TO '/out/${extract}_${name}.parquet' (FORMAT parquet, GEOPARQUET_VERSION 'V2', ROW_GROUP_SIZE 2048, COMPRESSION 'zstd', COMPRESSION_LEVEL 15);"
 	docker run --rm --memory "$memory" --cpus "$cpus" \
-		-v "$pbf_dir:/in:ro" -v "$out:/out" "$image" \
-		ogr2ogr "${args[@]}"
-	[ -s "$dest" ] || die "GDAL produced no output for $name"
+		-v "$pbf_dir:/in:ro" -v "$here:/config:ro" -v "$out:/out" "$image" \
+		duckdb -c "INSTALL spatial; LOAD spatial; $sql"
+	[ -s "$dest" ] || die "DuckDB produced no output for $name"
+	selected+=("$name")
 done <"$here/layers.tsv"
+
+[ ${#selected[@]} -gt 0 ] || die "no layers selected"
+meta_sql=
+for name in "${selected[@]}"; do
+	if [ -n "$meta_sql" ]; then meta_sql+=" UNION ALL "; fi
+	meta_sql+="SELECT '$name' AS layer, count(*) AS features, ST_XMin(ST_Extent_Agg(geometry)) AS xmin, ST_YMin(ST_Extent_Agg(geometry)) AS ymin, ST_XMax(ST_Extent_Agg(geometry)) AS xmax, ST_YMax(ST_Extent_Agg(geometry)) AS ymax, quantile_cont(ST_X(ST_Centroid(geometry)), 0.05) AS qxmin, quantile_cont(ST_Y(ST_Centroid(geometry)), 0.05) AS qymin, quantile_cont(ST_X(ST_Centroid(geometry)), 0.95) AS qxmax, quantile_cont(ST_Y(ST_Centroid(geometry)), 0.95) AS qymax, any_value(ST_GeometryType(geometry)) AS geometry_type FROM read_parquet('/out/${extract}_${name}.parquet')"
+done
+docker run --rm --memory "$memory" --cpus "$cpus" \
+	-v "$out:/out" "$image" \
+	duckdb -json -c "INSTALL spatial; LOAD spatial; $meta_sql" >"$work/meta.json"
 
 note "parquet files in $out"
 ls -lh "$out"/*.parquet
+note "metadata $work/meta.json"

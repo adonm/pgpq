@@ -3,15 +3,21 @@ package layer
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 
 	"github.com/adonm/pgpq/internal/spatial"
 )
 
 func idHash(id string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte(id))
-	return h.Sum64()
+	const (
+		offset = 14695981039346656037
+		prime  = 1099511628211
+	)
+	hash := uint64(offset)
+	for i := 0; i < len(id); i++ {
+		hash ^= uint64(id[i])
+		hash *= prime
+	}
+	return hash
 }
 
 func (l *Layer) Lookup(ctx context.Context, name, id string) (Hit, error) {
@@ -31,8 +37,16 @@ func (l *Layer) Lookup(ctx context.Context, name, id string) (Hit, error) {
 			rows.Close()
 			return Hit{}, err
 		}
-		meta := cellMeta{cell: spatial.FromOrdered(cell), level: 0}
-		file, err := l.cellFile(ctx, coll, meta)
+		metas, err := l.catalogFor(ctx, coll, 0, []uint64{spatial.FromOrdered(cell)})
+		if err != nil {
+			rows.Close()
+			return Hit{}, err
+		}
+		if len(metas) == 0 {
+			rows.Close()
+			return Hit{}, ErrStale
+		}
+		file, err := l.cellFile(ctx, coll, metas[0])
 		if err != nil {
 			rows.Close()
 			return Hit{}, err

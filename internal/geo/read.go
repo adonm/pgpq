@@ -15,6 +15,8 @@ import (
 	"github.com/adonm/pgpq/internal/cql"
 )
 
+const preallocateRows = 1 << 20
+
 type Options struct {
 	IDColumn string
 }
@@ -29,18 +31,30 @@ func ReadDataset(r io.Reader, opts Options) (Dataset, error) {
 		return Dataset{}, invalid("GeoParquet file unreadable")
 	}
 	fields := file.Schema().Fields()
-	geometry, name, err := geometryField(fields, file.Metadata())
+	geometry, name, err := geometryField(fields)
 	if err != nil {
 		return Dataset{}, err
 	}
+	off := make([]int, len(fields))
+	for i := range off {
+		off[i] = -1
+	}
+	types := make([]cql.Type, len(fields))
 	attrs := make([]Column, 0, len(fields)-1)
-	attrIndex := make([]int, 0, len(fields)-1)
+	key := -1
 	for i, field := range fields {
-		if i == geometry || field.Name() == "__pgpq_key" || field.Type().PhysicalType() == nil {
+		switch {
+		case i == geometry:
+			continue
+		case field.Name() == "__pgpq_key":
+			key = i
+			continue
+		case field.Type().PhysicalType() == nil:
 			continue
 		}
-		attrs = append(attrs, Column{Name: field.Name(), Type: columnType(field)})
-		attrIndex = append(attrIndex, i)
+		off[i] = len(attrs)
+		types[i] = columnType(field)
+		attrs = append(attrs, Column{Name: field.Name(), Type: types[i]})
 	}
 	idColumn := opts.IDColumn
 	if idColumn == "" {
@@ -51,7 +65,7 @@ func ReadDataset(r io.Reader, opts Options) (Dataset, error) {
 	}
 	reader := parquet.NewReader(bytes.NewReader(data))
 	defer reader.Close()
-	var features []Feature
+	features := make([]Feature, 0, max(0, min(file.NumRows(), preallocateRows)))
 	buf := make([]parquet.Row, 256)
 	for {
 		n, err := reader.ReadRows(buf)
@@ -59,25 +73,16 @@ func ReadDataset(r io.Reader, opts Options) (Dataset, error) {
 			props := make(map[string]any, len(attrs))
 			var geometryBytes []byte
 			for _, value := range buf[i] {
-				column := value.Column()
-				if value.IsNull() {
+				column := int(value.Column())
+				if column < 0 || column >= len(fields) || column == key || value.IsNull() {
 					continue
 				}
 				if column == geometry {
 					geometryBytes = append([]byte(nil), value.ByteArray()...)
 					continue
 				}
-				if column < 0 {
-					continue
-				}
-				for j, field := range fields {
-					if field.Name() == "__pgpq_key" {
-						continue
-					}
-					if j == column {
-						props[field.Name()] = valueAny(columnType(field), value)
-						break
-					}
+				if attr := off[column]; attr >= 0 {
+					props[attrs[attr].Name] = valueAny(types[column], value)
 				}
 			}
 			if len(geometryBytes) == 0 {
@@ -110,7 +115,7 @@ func ReadDataset(r io.Reader, opts Options) (Dataset, error) {
 	return Dataset{Columns: attrs, Geometry: name, IDColumn: idColumn, Features: features}, nil
 }
 
-func geometryField(fields []parquet.Field, md *format.FileMetaData) (int, string, error) {
+func geometryField(fields []parquet.Field) (int, string, error) {
 	for i, field := range fields {
 		logical := field.Type().LogicalType()
 		if logical == nil {
@@ -129,30 +134,30 @@ func geometryField(fields []parquet.Field, md *format.FileMetaData) (int, string
 			return i, field.Name(), nil
 		}
 	}
-	var metadata struct {
-		PrimaryColumn string `json:"primary_column"`
-		Columns       map[string]struct {
-			Encoding string `json:"encoding"`
-		} `json:"columns"`
-	}
-	if md != nil {
-		for _, kv := range md.KeyValueMetadata {
-			if kv.Key == "geo" && json.Unmarshal([]byte(kv.Value), &metadata) == nil && metadata.PrimaryColumn != "" {
-				for i, field := range fields {
-					if field.Name() == metadata.PrimaryColumn && field.Type().PhysicalType() != nil && field.Type().Kind() == parquet.ByteArray {
-						return i, field.Name(), nil
-					}
-				}
-			}
-		}
-	}
 	return 0, "", invalid("a native Parquet GEOMETRY column is required")
 }
 
 func checkCRS(crs string) error {
-	switch strings.TrimSpace(crs) {
+	crs = strings.TrimSpace(crs)
+	switch crs {
 	case "", "OGC:CRS84", "EPSG:4326", "urn:ogc:def:crs:OGC:1.3:CRS84":
 		return nil
+	}
+	if strings.HasPrefix(crs, "{") {
+		var proj struct {
+			Name string `json:"name"`
+			ID   struct {
+				Authority string          `json:"authority"`
+				Code      json.RawMessage `json:"code"`
+			} `json:"id"`
+		}
+		if json.Unmarshal([]byte(crs), &proj) == nil {
+			authority := strings.ToUpper(proj.ID.Authority)
+			code := strings.Trim(string(proj.ID.Code), `"`)
+			if (authority == "OGC" && code == "CRS84") || (authority == "EPSG" && code == "4326") {
+				return nil
+			}
+		}
 	}
 	return invalid("only OGC:CRS84/EPSG:4326 geometries are accepted")
 }

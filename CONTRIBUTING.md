@@ -13,13 +13,13 @@
 | `just serve` | writable server on :8080 |
 | `just test-integration` | integration tests against `PGPQ_TEST_DSN` |
 
-DuckDB ingest needs the external `duckdb` binary; set `PGPQ_DUCKDB` when it is not on `PATH`.
+The server accepts native GeoParquet 2.0 only. The OSM benchmark uses a pinned DuckDB container to produce those files outside the server.
 
 ## Rules
 
 - GeoParquet geometry is native `GEOMETRY`/`GEOGRAPHY` with WKB and OGC:CRS84. Do not add a sidecar spatial index.
 - Parquet compression is internal zstd. Do not wrap the cell file in a second zstd frame.
-- Verify `f=geoparquet` output with GDAL: save the response and run `ogrinfo` on it.
+- Verify `f=geoparquet` output with GDAL or DuckDB: save the response and open it with `ogrinfo` or `read_parquet`.
 - Migrations are append-only; never edit an applied migration.
 - Behavior changes and design-page changes ship in the same commit.
 
