@@ -1,332 +1,335 @@
 <!doctype html>
 <html lang="en" data-bs-theme="dark">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>pgpq v2 · design</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-B/GM4XqrwHnWXNOWMbloTmrYXZg10cakYGmpfsR/bbzQ6JAJI4ihuyADKLnBgrCe" crossorigin="anonymous">
-  <style>
-    :root { color-scheme: dark; --pgpq-ink: #d9dee7; --pgpq-muted: #8f9aa8; --pgpq-line: #303a47; --pgpq-accent: #e9a23b; --pgpq-good: #66d19e; --pgpq-panel: #151a21; }
-    body { background: #0d1117; color: var(--pgpq-ink); }
-    .navbar, .card, .table, .alert { --bs-body-bg: var(--pgpq-panel); --bs-body-color: var(--pgpq-ink); }
-    .card { border-color: var(--pgpq-line); background: var(--pgpq-panel); }
-    .text-secondary, .text-body-secondary { color: var(--pgpq-muted) !important; }
-    .border-secondary-subtle { border-color: var(--pgpq-line) !important; }
-    .hero { background: radial-gradient(circle at 80% 20%, #273241 0, transparent 40%), #0d1117; }
-    .eyebrow { color: var(--pgpq-accent); letter-spacing: .16em; text-transform: uppercase; font-size: .72rem; }
-    .code, code { color: #d8e6ff; background: #0a0e14; border: 1px solid var(--pgpq-line); border-radius: .3rem; padding: .08rem .3rem; }
-    pre { color: #d8e6ff; background: #0a0e14; border: 1px solid var(--pgpq-line); border-radius: .5rem; padding: 1rem; overflow: auto; }
-    .figure { background: var(--pgpq-panel); border: 1px solid var(--pgpq-line); border-radius: .75rem; padding: 1rem; }
-    .figure svg { width: 100%; height: auto; display: block; }
-    .figure figcaption { color: var(--pgpq-muted); font-size: .82rem; margin-top: .5rem; }
-    .flow-line { fill: none; stroke: #4c5c70; stroke-width: 2; stroke-dasharray: 7 11; }
-    .flow-line.hot { stroke: var(--pgpq-accent); }
-    .flow-label { fill: var(--pgpq-ink); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .flow-sub { fill: var(--pgpq-muted); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .node { fill: #1a222d; stroke: #4c5c70; }
-    .node.hot { stroke: var(--pgpq-accent); }
-    .cell { fill: #18212c; stroke: #405064; }
-    .cell.hot { fill: #30281d; stroke: var(--pgpq-accent); }
-    .chunk { fill: #1a222d; stroke: #405064; }
-    .chunk.hot { fill: #3c2d19; stroke: var(--pgpq-accent); }
-    .packet { fill: var(--pgpq-accent); }
-    .pulse { animation: pulse 2.8s ease-in-out infinite; }
-    @keyframes pulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
-    @media (prefers-reduced-motion: no-preference) {
-      .flow-line { animation: dash 2.8s linear infinite; }
-      .packet { animation: packet 4.2s linear infinite; }
-      .chunk.hot { animation: chunk 2.4s ease-in-out infinite; }
-      @keyframes dash { to { stroke-dashoffset: -72; } }
-      @keyframes packet { 0% { transform: translateX(0); opacity: 0; } 10% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateX(720px); opacity: 0; } }
-      @keyframes chunk { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
-    }
-    @media (prefers-reduced-motion: reduce) { .flow-line, .packet, .chunk.hot, .pulse { animation: none; } }
-    footer { color: var(--pgpq-muted); }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>pgpq v2 · design</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-B/GM4XqrwHnWXNOWMbloTmrYXZg10cakYGmpfsR/bbzQ6JAJI4ihuyADKLnBgrCe" crossorigin="anonymous">
+<style>
+:root{color-scheme:dark;--ink:#d9dfe8;--muted:#8e9aa8;--line:#303b48;--panel:#151b23;--accent:#e7a33a;--ok:#66d19e;--code:#0a0f15}
+body{background:#0d1117;color:var(--ink)}
+.navbar,.card,.table,.alert,.list-group-item{--bs-body-bg:var(--panel);--bs-body-color:var(--ink)}
+.card,.figure{border-color:var(--line);background:var(--panel)}
+.text-secondary,.text-body-secondary,.figure figcaption{color:var(--muted)!important}
+.hero{background:radial-gradient(circle at 82% 10%,#283443 0,transparent 38%),#0d1117}
+.eyebrow{color:var(--accent);letter-spacing:.16em;text-transform:uppercase;font-size:.7rem}
+code,.code{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-radius:.3rem;padding:.06rem .3rem}
+pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-radius:.5rem;padding:1rem;overflow:auto}
+.figure{border:1px solid var(--line);border-radius:.8rem;padding:1rem;margin:0}
+.figure svg{width:100%;height:auto;display:block}
+.figure figcaption{font-size:.8rem;margin-top:.6rem}
+.node{fill:#1a2330;stroke:#4c5d72;stroke-width:1.2}
+.node.hot{stroke:var(--accent)}
+.node.ok{stroke:var(--ok)}
+.node-label{fill:var(--ink);font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.node-sub{fill:var(--muted);font:10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.edge{fill:none;stroke:#4c5d72;stroke-width:1.7;marker-end:url(#arrow)}
+.edge.dashed{stroke-dasharray:7 10}
+.edge.hot{stroke:var(--accent)}
+.badge-soft{border:1px solid var(--line);color:var(--muted);font-weight:500}
+.section-kicker{font-size:.72rem;color:var(--accent);letter-spacing:.12em;text-transform:uppercase}
+.c4{font-size:.68rem;border:1px solid var(--line);border-radius:99px;padding:.05rem .45rem;color:var(--muted)}
+.diagram-note{fill:var(--muted);font:10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.pulse{animation:pulse 2.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+@media (prefers-reduced-motion:no-preference){
+ .dash{animation:dash 3s linear infinite}
+ @keyframes dash{to{stroke-dashoffset:-70}}
+ .packet{animation:packet 4.8s linear infinite}
+ @keyframes packet{0%{opacity:0}8%{opacity:1}88%{opacity:1}100%{opacity:0}}
+}
+@media (prefers-reduced-motion:reduce){.dash,.packet,.pulse{animation:none}}
+</style>
 </head>
 <body>
 <header class="sticky-top border-bottom border-secondary-subtle bg-body">
-  <nav class="navbar container py-3" aria-label="Page">
-    <a class="navbar-brand fw-semibold" href="#top">pgpq <span class="badge text-bg-warning align-middle">v2</span></a>
-    <ul class="nav nav-pills gap-2">
-      <li class="nav-item"><a class="nav-link" href="#flow">Flow</a></li>
-      <li class="nav-item"><a class="nav-link" href="#writes">Writes</a></li>
-      <li class="nav-item"><a class="nav-link" href="#storage">Storage</a></li>
-      <li class="nav-item"><a class="nav-link" href="#reads">Reads</a></li>
-      <li class="nav-item"><a class="nav-link" href="#heavy">Heavy</a></li>
-      <li class="nav-item"><a class="nav-link" href="#measured">Measured</a></li>
-    </ul>
-  </nav>
+<nav class="navbar container py-3" aria-label="Design page">
+<a class="navbar-brand fw-semibold" href="#top">pgpq <span class="badge text-bg-warning align-middle">v2</span></a>
+<ul class="nav nav-pills gap-2 flex-wrap">
+<li class="nav-item"><a class="nav-link" href="#context">Context</a></li>
+<li class="nav-item"><a class="nav-link" href="#containers">Containers</a></li>
+<li class="nav-item"><a class="nav-link" href="#components">Components</a></li>
+<li class="nav-item"><a class="nav-link" href="#ingest">Ingest flow</a></li>
+<li class="nav-item"><a class="nav-link" href="#read">Read flow</a></li>
+<li class="nav-item"><a class="nav-link" href="#reference">Reference</a></li>
+<li class="nav-item"><a class="nav-link" href="#measured">Measured</a></li>
+</ul>
+</nav>
 </header>
 
 <main id="top">
-  <section class="hero border-bottom border-secondary-subtle py-5">
-    <div class="container py-lg-4">
-      <p class="eyebrow mb-2">Design contract · Oct 2026</p>
-      <h1 class="display-5 fw-semibold">GeoParquet 2.0 inside PostgreSQL.</h1>
-      <p class="lead text-body-secondary col-lg-9">One logical GeoParquet file per S2 cell, stored as 8,120-byte inline <code>bytea</code> chunks. Native Parquet geometry and statistics do the spatial work; no sidecar index and no tile pyramid.</p>
-      <div class="d-flex flex-wrap gap-2 mt-4">
-        <span class="badge text-bg-success">DuckDB upload</span>
-        <span class="badge text-bg-success">GeoParquet 2.0</span>
-        <span class="badge text-bg-success">inline 8,120 B chunks</span>
-        <span class="badge text-bg-success">append-compacted L8 cells</span>
-        <span class="badge text-bg-secondary">no build step</span>
-        <span class="badge text-bg-secondary">cgo-free core</span>
-      </div>
-    </div>
-  </section>
+<section class="hero border-bottom border-secondary-subtle py-5">
+<div class="container py-lg-4">
+<p class="eyebrow mb-2">Design contract · C4 + Diátaxis</p>
+<h1 class="display-5 fw-semibold">GeoParquet 2.0 inside PostgreSQL.</h1>
+<p class="lead text-body-secondary col-xl-9">One logical GeoParquet file per S2 L8 cell, stored as 8,120-byte inline <code>bytea</code> chunks. Native Parquet geometry and row-group statistics do spatial pruning; no tile pyramid and no sidecar index.</p>
+<div class="d-flex flex-wrap gap-2 mt-4">
+<span class="badge text-bg-success">DuckDB upload</span>
+<span class="badge text-bg-success">GeoParquet 2.0</span>
+<span class="badge text-bg-success">2,048-row groups</span>
+<span class="badge text-bg-success">L8 compaction</span>
+<span class="badge badge-soft">hourly batches</span>
+<span class="badge badge-soft">no build HTML</span>
+</div>
+</div>
+</section>
 
-  <div class="container py-5">
-    <section id="flow" class="mb-5" aria-labelledby="flow-title">
-      <h2 id="flow-title" class="h3 mb-3">Data flow</h2>
-      <div class="row g-4 align-items-stretch">
-        <div class="col-lg-7">
-          <figure class="figure h-100 m-0">
-            <svg viewBox="0 0 900 260" role="img" aria-labelledby="flow-svg-title">
-              <title id="flow-svg-title">DuckDB file is exported to GeoParquet, split into 8,120-byte chunks, stored in PostgreSQL, and served as JSON or filtered GeoParquet.</title>
-              <defs>
-                <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5c70"/></marker>
-              </defs>
-              <g>
-                <rect class="node" x="20" y="70" width="130" height="70" rx="8"/>
-                <text class="flow-label" x="85" y="98" text-anchor="middle">DuckDB</text>
-                <text class="flow-sub" x="85" y="116" text-anchor="middle">one view</text>
-                <rect class="node" x="210" y="70" width="130" height="70" rx="8"/>
-                <text class="flow-label" x="275" y="98" text-anchor="middle">GeoParquet 2.0</text>
-                <text class="flow-sub" x="275" y="116" text-anchor="middle">native GEOMETRY</text>
-                <rect class="node" x="400" y="70" width="150" height="70" rx="8"/>
-                <text class="flow-label" x="475" y="98" text-anchor="middle">8,120 B chunks</text>
-                <text class="flow-sub" x="475" y="116" text-anchor="middle">inline, no TOAST</text>
-                <rect class="node" x="610" y="70" width="130" height="70" rx="8"/>
-                <text class="flow-label" x="675" y="98" text-anchor="middle">PostgreSQL</text>
-                <text class="flow-sub" x="675" y="116" text-anchor="middle">cell_chunks</text>
-                <rect class="node hot" x="790" y="70" width="90" height="70" rx="8"/>
-                <text class="flow-label" x="835" y="98" text-anchor="middle">JSON /</text>
-                <text class="flow-label" x="835" y="114" text-anchor="middle">GeoParquet</text>
-                <path id="flowpath" class="flow-line" d="M150 105 H210 M340 105 H400 M550 105 H610 M740 105 H790"/>
-                <circle class="packet" cx="0" cy="0" r="5"><animateMotion dur="5s" repeatCount="indefinite"><mpath href="#flowpath"/></animateMotion></circle>
-                <text class="flow-sub" x="85" y="180" text-anchor="middle">export</text>
-                <text class="flow-sub" x="275" y="180" text-anchor="middle">split by S2</text>
-                <text class="flow-sub" x="475" y="180" text-anchor="middle">append-only cell</text>
-                <text class="flow-sub" x="675" y="180" text-anchor="middle">primary-key range</text>
-                <text class="flow-sub" x="835" y="180" text-anchor="middle">filtered page</text>
-              </g>
-            </svg>
-            <figcaption>Upload is a DuckDB file. The writable worker exports one view, assigns features to L8 cells, writes one GeoParquet file per cell, and stores the file in PostgreSQL as inline chunks.</figcaption>
-          </figure>
-        </div>
-        <div class="col-lg-5">
-          <div class="card h-100">
-            <div class="card-body">
-              <h3 class="h6 text-uppercase text-secondary">One view = one collection</h3>
-              <p>An optional <code>layer_catalog</code> supplies the view, id column and geometry column. Otherwise the collection name is the view and <code>id_column</code> is required.</p>
-              <h3 class="h6 text-uppercase text-secondary mt-4">Pure PostgreSQL</h3>
-              <p class="mb-0">No extensions, no object store, no sidecar files. Readers need only <code>SELECT</code>; writes are ordinary transactions.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+<div class="container py-5">
+<div class="alert alert-secondary" role="note">
+<strong>Reading guide.</strong> C4 separates structure from behaviour: <a href="#context">Context</a> and <a href="#containers">Containers</a> are for orientation, <a href="#components">Components</a> and <a href="#reference">Reference</a> are exhaustive topology, and the <a href="#ingest">ingest</a>/<a href="#read">read</a> dynamic diagrams show one runtime story each. Measurements and tradeoffs are separated from the topology.
+</div>
 
-    <section id="writes" class="mb-5" aria-labelledby="writes-title">
-      <h2 id="writes-title" class="h3 mb-3">Writes and compaction</h2>
-      <div class="row g-4 align-items-stretch">
-        <div class="col-lg-7">
-          <div class="card h-100">
-            <div class="card-body">
-              <table class="table table-dark table-sm align-middle mb-3">
-                <thead><tr><th scope="col">Method</th><th scope="col">Semantics</th></tr></thead>
-                <tbody>
-                  <tr><td><code>PUT</code></td><td>replace the collection or the listed cells; full compaction</td></tr>
-                  <tr><td><code>POST</code></td><td>merge into affected L8 cells; rewrite only those cells and parent samples</td></tr>
-                </tbody>
-              </table>
-              <p class="mb-0">A cell is always one GeoParquet file with 2,048-row groups, sorted by <code>(Hilbert key, id)</code>. An append is a synchronous compaction: read the old cell, merge by id, sort, write a new cell file and new chunk rows, replace the catalog pointer, and delete the old chunks in the same transaction. There is no small-file backlog.</p>
-            </div>
-          </div>
-        </div>
-        <div class="col-lg-5">
-          <figure class="figure h-100 m-0">
-            <svg viewBox="0 0 520 240" role="img" aria-labelledby="write-svg-title">
-              <title id="write-svg-title">An append merges incoming rows with one existing L8 cell, sorts the complete cell, and replaces its file and parent samples.</title>
-              <rect class="node" x="16" y="34" width="130" height="62" rx="7"/><text class="flow-label" x="81" y="60" text-anchor="middle">new rows</text><text class="flow-sub" x="81" y="78" text-anchor="middle">DuckDB / GeoParquet</text>
-              <rect class="node" x="16" y="140" width="130" height="62" rx="7"/><text class="flow-label" x="81" y="166" text-anchor="middle">L8 cell</text><text class="flow-sub" x="81" y="184" text-anchor="middle">old GeoParquet</text>
-              <rect class="node hot pulse" x="214" y="84" width="130" height="66" rx="7"/><text class="flow-label" x="279" y="108" text-anchor="middle">merge + sort</text><text class="flow-sub" x="279" y="126" text-anchor="middle">(key, id)</text>
-              <rect class="node" x="410" y="34" width="94" height="62" rx="7"/><text class="flow-label" x="457" y="60" text-anchor="middle">new cell</text><text class="flow-sub" x="457" y="78" text-anchor="middle">8,120 chunks</text>
-              <rect class="node" x="410" y="140" width="94" height="62" rx="7"/><text class="flow-label" x="457" y="166" text-anchor="middle">parents</text><text class="flow-sub" x="457" y="184" text-anchor="middle">L6/L4/L2</text>
-              <path class="flow-line" d="M146 65 H214 M146 171 H214 M344 108 H410 M457 108 V140"/>
-            </svg>
-            <figcaption>Only touched L8 cells and their parent samples are rewritten. Untouched cells stay in place.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
+<section id="context" class="mb-5" aria-labelledby="context-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="context-title" class="h3 mb-3">System context</h2><span class="c4">C4 L1</span></div>
+<p class="text-body-secondary">Who uses pgpq and what sits outside it. No internal components or timing.</p>
+<div class="row g-4">
+<div class="col-lg-8">
+<figure class="figure">
+<svg viewBox="0 0 900 330" role="img" aria-labelledby="context-svg-title">
+<title id="context-svg-title">Operators and data loaders supply DuckDB files. API clients receive JSON or GeoParquet through an adjacent auth proxy. pgpq stores cells and catalog in PostgreSQL.</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="node" x="30" y="42" width="180" height="72" rx="8"/><text class="node-label" x="120" y="70" text-anchor="middle">Data loader</text><text class="node-sub" x="120" y="89" text-anchor="middle">DuckDB feature views</text>
+<rect class="node" x="30" y="216" width="180" height="72" rx="8"/><text class="node-label" x="120" y="244" text-anchor="middle">API client</text><text class="node-sub" x="120" y="263" text-anchor="middle">maps · dashboards · tools</text>
+<rect class="node hot" x="360" y="118" width="180" height="92" rx="10"/><text class="node-label" x="450" y="151" text-anchor="middle">pgpq</text><text class="node-sub" x="450" y="170" text-anchor="middle">GeoParquet cell service</text><text class="node-sub" x="450" y="185" text-anchor="middle">JSON / GeoParquet</text>
+<rect class="node" x="690" y="42" width="180" height="72" rx="8"/><text class="node-label" x="780" y="70" text-anchor="middle">PostgreSQL 18</text><text class="node-sub" x="780" y="89" text-anchor="middle">catalog + inline chunks</text>
+<rect class="node" x="690" y="216" width="180" height="72" rx="8"/><text class="node-label" x="780" y="244" text-anchor="middle">Auth proxy</text><text class="node-sub" x="780" y="263" text-anchor="middle">external · readonly workers</text>
+<path class="edge" d="M210 78 C300 78 300 128 360 145"/>
+<path class="edge" d="M210 252 C300 252 300 195 360 183"/>
+<path class="edge" d="M540 145 C620 120 620 90 690 78"/>
+<path class="edge" d="M540 184 C620 205 620 238 690 252"/>
+<path class="edge dashed" d="M780 114 V216"/>
+<text class="diagram-note" x="250" y="102">upload</text>
+<text class="diagram-note" x="250" y="275">read</text>
+<text class="diagram-note" x="610" y="120">SQL</text>
+<text class="diagram-note" x="610" y="220">route</text>
+</svg>
+<figcaption>Data loaders and API clients are outside the trust boundary. The app runs behind an adjacent auth layer; only readonly workers are public.</figcaption>
+</figure>
+</div>
+<div class="col-lg-4">
+<div class="card h-100"><div class="card-body">
+<h3 class="h6 text-warning">Assumptions</h3>
+<ul class="mb-0">
+<li>One PostgreSQL holds the catalog and cell payloads.</li>
+<li>DuckDB is the loader format; the server shells out to the CLI.</li>
+<li>Updates are batched, typically hourly.</li>
+<li>No auth or TLS inside pgpq.</li>
+</ul>
+</div></div>
+</div>
+</div>
+</section>
 
-    <section id="heavy" class="mb-5" aria-labelledby="heavy-title">
-      <h2 id="heavy-title" class="h3 mb-3">Heavy cell result</h2>
-      <div class="alert alert-warning" role="alert"><strong>Hourly batch model.</strong> A one-row append to a 1M-row cell rewrites the whole 10 MB cell in 20.9 s and uses 1.39 GB RSS. That is acceptable for one batch per cell per hour, not for per-row updates.</div>
-      <div class="row g-4">
-        <div class="col-lg-6">
-          <table class="table table-dark table-sm">
-            <caption class="text-secondary">1M points in one L8 cell</caption>
-            <tbody>
-              <tr><th scope="row">DuckDB ingest</th><td class="text-end">19.9 s · 1.39 GB peak</td></tr>
-              <tr><th scope="row">detail file</th><td class="text-end">10.0 MB · 489 row groups</td></tr>
-              <tr><th scope="row">bbox 100 / 1,000</th><td class="text-end">4.3 / 11.8 ms</td></tr>
-              <tr><th scope="row">filter / id</th><td class="text-end">11.8 / 10.5 ms</td></tr>
-              <tr><th scope="row">numberMatched</th><td class="text-end">1.9 s</td></tr>
-              <tr><th scope="row">L2 / GeoParquet 100</th><td class="text-end">8.5 / 11.1 ms</td></tr>
-              <tr><th scope="row">one-row append</th><td class="text-end text-danger">20.9 s · 1.39 GB</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="col-lg-6">
-          <div class="card h-100"><div class="card-body">
-            <h3 class="h6 text-warning">Batch writes</h3>
-            <p>Send one <code>POST</code> per hourly batch. Each touched cell is read, merged, sorted and rewritten once; untouched cells are not rewritten. The catalog stays one row per cell and there are no small-file fragments to compact.</p>
-            <p class="mb-0">Size the writable worker for the largest cell in the batch: a 1M-row cell needs about 1.4 GB peak. Fragment compaction is deferred until the update cadence or cell size makes a 21 s rewrite too expensive.</p>
-          </div></div>
-        </div>
-      </div>
-    </section>
+<section id="containers" class="mb-5" aria-labelledby="containers-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="containers-title" class="h3 mb-3">Containers</h2><span class="c4">C4 L2</span></div>
+<p class="text-body-secondary">Separately deployable units and the static data paths between them. Runtime ordering is in the dynamic views below.</p>
+<figure class="figure">
+<svg viewBox="0 0 1000 300" role="img" aria-labelledby="container-svg-title">
+<title id="container-svg-title">Clients reach a writable or readonly pgpq worker through an auth proxy. The writable worker runs the DuckDB CLI and writes PostgreSQL. Both workers read PostgreSQL.</title>
+<rect class="node" x="20" y="106" width="150" height="76" rx="8"/><text class="node-label" x="95" y="136" text-anchor="middle">Clients</text><text class="node-sub" x="95" y="154" text-anchor="middle">JSON / GeoParquet</text>
+<rect class="node" x="220" y="106" width="160" height="76" rx="8"/><text class="node-label" x="300" y="136" text-anchor="middle">Auth proxy</text><text class="node-sub" x="300" y="154" text-anchor="middle">public / internal</text>
+<rect class="node hot" x="440" y="30" width="190" height="86" rx="8"/><text class="node-label" x="535" y="60" text-anchor="middle">writable worker</text><text class="node-sub" x="535" y="79" text-anchor="middle">ingest + query</text><text class="node-sub" x="535" y="94" text-anchor="middle">:8080</text>
+<rect class="node ok" x="440" y="182" width="190" height="86" rx="8"/><text class="node-label" x="535" y="212" text-anchor="middle">readonly workers</text><text class="node-sub" x="535" y="231" text-anchor="middle">query only</text><text class="node-sub" x="535" y="246" text-anchor="middle">:8081</text>
+<rect class="node" x="700" y="30" width="150" height="86" rx="8"/><text class="node-label" x="775" y="60" text-anchor="middle">DuckDB CLI</text><text class="node-sub" x="775" y="79" text-anchor="middle">external process</text><text class="node-sub" x="775" y="94" text-anchor="middle">PGPQ_DUCKDB</text>
+<rect class="node" x="700" y="182" width="280" height="86" rx="8"/><text class="node-label" x="840" y="212" text-anchor="middle">PostgreSQL 18</text><text class="node-sub" x="840" y="231" text-anchor="middle">pgpq.collections · cells · cell_chunks · ids</text><text class="node-sub" x="840" y="246" text-anchor="middle">inline 8,120-byte chunks</text>
+<path class="edge" d="M170 144 H220 M380 144 C410 144 410 73 440 73 M380 144 C410 144 410 225 440 225"/>
+<path class="edge" d="M630 73 H700 M630 225 H700"/>
+<path class="edge" d="M850 73 C880 73 880 182 850 182"/>
+<text class="diagram-note" x="400" y="160">route</text>
+<text class="diagram-note" x="645" y="58">export</text>
+<text class="diagram-note" x="645" y="242">SELECT</text>
+</svg>
+<figcaption>Only the writable worker needs the DuckDB CLI and write privileges. Readonly workers need only <code>SELECT</code> and no DDL.</figcaption>
+</figure>
+</section>
 
-    <section id="storage" class="mb-5" aria-labelledby="storage-title">
-      <h2 id="storage-title" class="h3 mb-3">Cell and chunk layout</h2>
-      <div class="row g-4">
-        <div class="col-lg-7">
-          <figure class="figure m-0">
-            <svg viewBox="0 0 900 250" role="img" aria-labelledby="chunk-svg-title">
-              <title id="chunk-svg-title">A cell is one GeoParquet file split into 8,120-byte chunks. Each chunk is one inline 8 KB heap row; Parquet pages use zstd internally.</title>
-              <text class="flow-label" x="24" y="30">cell_id 42 · L8 cell 47e67 · one logical GeoParquet file</text>
-              <g>
-                <rect class="cell hot pulse" x="24" y="52" width="120" height="86" rx="7"/>
-                <text class="flow-label" x="84" y="87" text-anchor="middle">GeoParquet</text>
-                <text class="flow-sub" x="84" y="105" text-anchor="middle">native geometry</text>
-                <text class="flow-sub" x="84" y="120" text-anchor="middle">internal zstd</text>
-                <text class="flow-sub" x="160" y="98">split →</text>
-              </g>
-              <g transform="translate(230 58)">
-                <rect class="chunk hot" x="0" y="0" width="92" height="58" rx="5"/><text class="flow-sub" x="46" y="26" text-anchor="middle">0</text><text class="flow-sub" x="46" y="43" text-anchor="middle">8,120 B</text>
-                <rect class="chunk" x="102" y="0" width="92" height="58" rx="5"/><text class="flow-sub" x="148" y="26" text-anchor="middle">1</text><text class="flow-sub" x="148" y="43" text-anchor="middle">8,120 B</text>
-                <rect class="chunk" x="204" y="0" width="92" height="58" rx="5"/><text class="flow-sub" x="250" y="26" text-anchor="middle">2</text><text class="flow-sub" x="250" y="43" text-anchor="middle">8,120 B</text>
-                <rect class="chunk" x="306" y="0" width="92" height="58" rx="5"/><text class="flow-sub" x="352" y="26" text-anchor="middle">3</text><text class="flow-sub" x="352" y="43" text-anchor="middle">8,120 B</text>
-                <rect class="chunk" x="408" y="0" width="92" height="58" rx="5"/><text class="flow-sub" x="454" y="26" text-anchor="middle">4</text><text class="flow-sub" x="454" y="43" text-anchor="middle">8,120 B</text>
-                <rect class="chunk" x="510" y="0" width="92" height="58" rx="5"/><text class="flow-sub" x="556" y="26" text-anchor="middle">5</text><text class="flow-sub" x="556" y="43" text-anchor="middle">…</text>
-              </g>
-              <text class="flow-sub" x="230" y="164">primary key (cell_id, no) · range query</text>
-              <rect x="24" y="192" width="852" height="34" rx="6" fill="#10151c" stroke="#303a47"/>
-              <text class="flow-sub" x="38" y="213">PostgreSQL heap page · tuple header + 8,120 B data · toast_tuple_target 8160 · STORAGE EXTERNAL</text>
-            </svg>
-            <figcaption>Each chunk occupies one heap page. No TOAST indirection, no recompression of the Parquet payload.</figcaption>
-          </figure>
-        </div>
-        <div class="col-lg-5">
-          <table class="table table-dark table-sm align-middle">
-            <caption class="text-secondary">Physical model</caption>
-            <tbody>
-              <tr><th scope="row">collections</th><td>uid, name, schema, version</td></tr>
-              <tr><th scope="row">cells</th><td>collection, level, cell, cell_id, bytes, bounds, zone</td></tr>
-              <tr><th scope="row">cell_chunks</th><td>cell_id, no, data (8,120 B inline)</td></tr>
-              <tr><th scope="row">ids</th><td>hash → (cell, row)</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
+<section id="components" class="mb-5" aria-labelledby="components-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="components-title" class="h3 mb-3">Components</h2><span class="c4">C4 L3 · reference topology</span></div>
+<p class="text-body-secondary">The inside of one pgpq worker. Static responsibilities only; no request ordering.</p>
+<div class="row g-4">
+<div class="col-lg-7">
+<figure class="figure">
+<svg viewBox="0 0 900 340" role="img" aria-labelledby="component-svg-title">
+<title id="component-svg-title">HTTP API separates load and query. Load uses DuckDB export, S2 split, GeoParquet writer and chunk writer. Query uses catalog, chunk reader, Parquet reader, CQL and output encoding.</title>
+<rect class="node" x="20" y="130" width="130" height="76" rx="8"/><text class="node-label" x="85" y="160" text-anchor="middle">HTTP API</text><text class="node-sub" x="85" y="178" text-anchor="middle">PUT · POST · GET</text>
+<rect class="node" x="200" y="30" width="170" height="86" rx="8"/><text class="node-label" x="285" y="60" text-anchor="middle">loader</text><text class="node-sub" x="285" y="79" text-anchor="middle">DuckDB export + S2</text><text class="node-sub" x="285" y="94" text-anchor="middle">GeoParquet writer</text>
+<rect class="node" x="200" y="220" width="170" height="86" rx="8"/><text class="node-label" x="285" y="250" text-anchor="middle">query</text><text class="node-sub" x="285" y="269" text-anchor="middle">catalog + row groups</text><text class="node-sub" x="285" y="284" text-anchor="middle">CQL + paging</text>
+<rect class="node" x="430" y="30" width="160" height="86" rx="8"/><text class="node-label" x="510" y="60" text-anchor="middle">GeoParquet 2.0</text><text class="node-sub" x="510" y="79" text-anchor="middle">native GEOMETRY/WKB</text><text class="node-sub" x="510" y="94" text-anchor="middle">2,048-row groups</text>
+<rect class="node" x="430" y="220" width="160" height="86" rx="8"/><text class="node-label" x="510" y="250" text-anchor="middle">chunk reader</text><text class="node-sub" x="510" y="269" text-anchor="middle">(cell_id, no)</text><text class="node-sub" x="510" y="284" text-anchor="middle">8,120 B inline</text>
+<rect class="node" x="650" y="30" width="220" height="86" rx="8"/><text class="node-label" x="760" y="60" text-anchor="middle">catalog + ids</text><text class="node-sub" x="760" y="79" text-anchor="middle">collections · cells · ids</text><text class="node-sub" x="760" y="94" text-anchor="middle">bounds · key range · zone</text>
+<rect class="node" x="650" y="220" width="220" height="86" rx="8"/><text class="node-label" x="760" y="250" text-anchor="middle">output</text><text class="node-sub" x="760" y="269" text-anchor="middle">GeoJSON</text><text class="node-sub" x="760" y="284" text-anchor="middle">filtered GeoParquet</text>
+<path class="edge" d="M150 150 C175 150 175 73 200 73 M150 186 C175 186 175 263 200 263"/>
+<path class="edge" d="M370 73 H430 M370 263 H430 M590 73 H650 M590 263 H650 M540 250 C540 190 540 190 540 120"/>
+</svg>
+<figcaption>The loader and query engines are independent. Both use the same GeoParquet cell layout; the catalog is shared state.</figcaption>
+</figure>
+</div>
+<div class="col-lg-5">
+<div class="card h-100"><div class="card-body">
+<h3 class="h6 text-warning">Responsibilities</h3>
+<dl class="row mb-0 small">
+<dt class="col-4">loader</dt><dd class="col-8">DuckDB export, S2 assignment, sort, GeoParquet encode, 8,120-byte chunking, overview samples.</dd>
+<dt class="col-4">catalog</dt><dd class="col-8">one row per collection/level/cell; bounds, key range, feature count, zone, <code>cell_id</code>.</dd>
+<dt class="col-4">chunk reader</dt><dd class="col-8">primary-key range reads over <code>(cell_id,no)</code>; small per-file cache.</dd>
+<dt class="col-4">query</dt><dd class="col-8">cell pruning, Parquet row-group stats, exact CQL/bbox, cursor paging, output encoding.</dd>
+</dl>
+</div></div>
+</div>
+</div>
+</section>
 
-    <section id="reads" class="mb-5" aria-labelledby="reads-title">
-      <h2 id="reads-title" class="h3 mb-3">Read path</h2>
-      <div class="row g-4">
-        <div class="col-lg-7">
-          <figure class="figure m-0">
-            <svg viewBox="0 0 900 210" role="img" aria-labelledby="read-svg-title">
-              <title id="read-svg-title">A request prunes cells, reads Parquet chunks and row-group statistics, evaluates exact filters, and returns JSON or GeoParquet.</title>
-              <g>
-                <rect class="node" x="20" y="40" width="140" height="64" rx="7"/><text class="flow-label" x="90" y="66" text-anchor="middle">request</text><text class="flow-sub" x="90" y="84" text-anchor="middle">bbox · filter · cursor</text>
-                <rect class="node" x="210" y="40" width="140" height="64" rx="7"/><text class="flow-label" x="280" y="66" text-anchor="middle">catalog</text><text class="flow-sub" x="280" y="84" text-anchor="middle">bounds · zone</text>
-                <rect class="node hot" x="400" y="40" width="150" height="64" rx="7"/><text class="flow-label" x="475" y="66" text-anchor="middle">chunk range</text><text class="flow-sub" x="475" y="84" text-anchor="middle">footer · row groups</text>
-                <rect class="node" x="600" y="40" width="130" height="64" rx="7"/><text class="flow-label" x="665" y="66" text-anchor="middle">exact check</text><text class="flow-sub" x="665" y="84" text-anchor="middle">bbox · CQL</text>
-                <rect class="node" x="780" y="40" width="100" height="64" rx="7"/><text class="flow-label" x="830" y="66" text-anchor="middle">output</text><text class="flow-sub" x="830" y="84" text-anchor="middle">JSON · PQ</text>
-                <path id="readpath" class="flow-line" d="M160 72 H210 M350 72 H400 M550 72 H600 M730 72 H780"/>
-                <circle class="packet" cx="0" cy="0" r="5"><animateMotion dur="4.4s" repeatCount="indefinite"><mpath href="#readpath"/></animateMotion></circle>
-                <text class="flow-sub" x="90" y="150" text-anchor="middle">page limit</text>
-                <text class="flow-sub" x="280" y="150" text-anchor="middle">skip cells</text>
-                <text class="flow-sub" x="475" y="150" text-anchor="middle">geospatial stats</text>
-                <text class="flow-sub" x="665" y="150" text-anchor="middle">stop early</text>
-                <text class="flow-sub" x="830" y="150" text-anchor="middle">filtered</text>
-              </g>
-            </svg>
-            <figcaption>Parquet row-group geospatial statistics prune large cells before geometry is decoded. Filters evaluate exactly in Go; pages stop at the limit.</figcaption>
-          </figure>
-        </div>
-        <div class="col-lg-5">
-          <div class="card h-100">
-            <div class="card-body">
-              <p class="mb-2"><strong class="text-warning">Vector-tile replacement:</strong> <code>items?bbox=…&amp;overview=6&amp;f=geoparquet</code></p>
-              <p>Returns one filtered GeoParquet 2.0 file for the view. Clients can stream or map it; no tile pyramid and no per-tile endpoint.</p>
-              <p class="mb-0">IDs use a hash → <code>(cell,row)</code> pointer and Parquet <code>SeekToRow</code>. Cursors resume by <code>(key,id)</code>.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+<section id="ingest" class="mb-5" aria-labelledby="ingest-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="ingest-title" class="h3 mb-3">Dynamic view · ingest</h2><span class="c4">C4 dynamic</span></div>
+<p class="text-body-secondary">One upload story. Structural components are static above; this diagram shows only order.</p>
+<figure class="figure">
+<svg viewBox="0 0 1000 250" role="img" aria-labelledby="ingest-svg-title">
+<title id="ingest-svg-title">An upload is exported by DuckDB, split by S2 L8 cell, sorted, encoded as GeoParquet, split into chunks, and committed with parent samples.</title>
+<defs><marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="node" x="18" y="62" width="130" height="70" rx="8"/><text class="node-label" x="83" y="90" text-anchor="middle">1 · upload</text><text class="node-sub" x="83" y="108" text-anchor="middle">DuckDB file</text>
+<rect class="node" x="184" y="62" width="150" height="70" rx="8"/><text class="node-label" x="259" y="90" text-anchor="middle">2 · export</text><text class="node-sub" x="259" y="108" text-anchor="middle">DuckDB CLI → PQ</text>
+<rect class="node hot" x="370" y="62" width="150" height="70" rx="8"/><text class="node-label" x="445" y="90" text-anchor="middle">3 · partition</text><text class="node-sub" x="445" y="108" text-anchor="middle">S2 L8 + sort</text>
+<rect class="node" x="556" y="62" width="150" height="70" rx="8"/><text class="node-label" x="631" y="90" text-anchor="middle">4 · encode</text><text class="node-sub" x="631" y="108" text-anchor="middle">GeoParquet 2.0</text>
+<rect class="node" x="742" y="62" width="130" height="70" rx="8"/><text class="node-label" x="807" y="90" text-anchor="middle">5 · chunk</text><text class="node-sub" x="807" y="108" text-anchor="middle">8,120 B inline</text>
+<rect class="node ok" x="908" y="62" width="76" height="70" rx="8"/><text class="node-label" x="946" y="90" text-anchor="middle">6 · commit</text><text class="node-sub" x="946" y="108" text-anchor="middle">+ parents</text>
+<path id="inpath" class="edge dashed" d="M148 97 H184 M334 97 H370 M520 97 H556 M706 97 H742 M872 97 H908"/>
+<circle class="packet" cx="0" cy="0" r="5" fill="var(--accent)"><animateMotion dur="5s" repeatCount="indefinite"><mpath href="#inpath"/></animateMotion></circle>
+<text class="diagram-note" x="83" y="175" text-anchor="middle">one view</text>
+<text class="diagram-note" x="259" y="175" text-anchor="middle">external process</text>
+<text class="diagram-note" x="445" y="175" text-anchor="middle">L8 = partition</text>
+<text class="diagram-note" x="631" y="175" text-anchor="middle">native GEOMETRY</text>
+<text class="diagram-note" x="807" y="175" text-anchor="middle">no TOAST</text>
+<text class="diagram-note" x="946" y="175" text-anchor="middle">one transaction</text>
+</svg>
+<figcaption>Every feature is assigned to an L8 cell, then sorted by <code>(Hilbert key, id)</code>. A <code>POST</code> merges a batch into affected cells; <code>PUT</code> replaces the collection.</figcaption>
+</figure>
+</section>
 
-    <section id="measured" class="mb-5" aria-labelledby="measured-title">
-      <h2 id="measured-title" class="h3 mb-3">Measured</h2>
-      <p class="text-body-secondary">Local PostgreSQL 18.6, 6 vCPU, warm cache, localhost HTTP; median of 30 requests after warmup.</p>
-      <div class="table-responsive">
-        <table class="table table-dark table-striped table-sm align-middle">
-          <caption class="text-secondary">Warm read and ingest measurements</caption>
-          <thead><tr><th scope="col">Request</th><th scope="col" class="text-end">Median</th><th scope="col" class="text-end">p95</th><th scope="col" class="text-end">Response</th></tr></thead>
-          <tbody>
-            <tr><td>warm100k bbox → JSON</td><td class="text-end">4.3 ms</td><td class="text-end">6.1 ms</td><td class="text-end">1.1 kB</td></tr>
-            <tr><td>warm100k filter (32k matches) → JSON</td><td class="text-end">43.6 ms</td><td class="text-end">50.6 ms</td><td class="text-end">32 kB</td></tr>
-            <tr><td>warm100k id → JSON</td><td class="text-end">1.6 ms</td><td class="text-end">2.2 ms</td><td class="text-end">407 B</td></tr>
-            <tr><td>Luxembourg bbox → JSON</td><td class="text-end">10.5 ms</td><td class="text-end">15.0 ms</td><td class="text-end">33 kB</td></tr>
-            <tr><td>Monaco enriched bbox → JSON</td><td class="text-end">20.8 ms</td><td class="text-end">28.4 ms</td><td class="text-end">434 kB</td></tr>
-            <tr><td>Monaco enriched filter → JSON</td><td class="text-end">20.2 ms</td><td class="text-end">28.5 ms</td><td class="text-end">434 kB</td></tr>
-            <tr><td>L2 overview → JSON</td><td class="text-end">15.3 ms</td><td class="text-end">18.6 ms</td><td class="text-end">325 kB</td></tr>
-            <tr><td>Luxembourg bbox → GeoParquet</td><td class="text-end">53.5 ms</td><td class="text-end">63.1 ms</td><td class="text-end">101 kB</td></tr>
-            <tr><td>Monaco, 1,000 rows → GeoParquet</td><td class="text-end">143.1 ms</td><td class="text-end">163.7 ms</td><td class="text-end">770 kB</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="row g-3 mt-1">
-        <div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">1.26 s</div><div class="text-body-secondary">Monaco DuckDB ingest · 4,628 features · 12.6 MB</div></div></div></div>
-        <div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">8.18 s</div><div class="text-body-secondary">Luxembourg DuckDB ingest · 228,273 features · 48.2 MB</div></div></div></div>
-        <div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">~217 MB</div><div class="text-body-secondary">database · 13,343 inline chunks · ~107 MB chunk table</div></div></div></div>
-      </div>
-    </section>
+<section id="read" class="mb-5" aria-labelledby="read-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="read-title" class="h3 mb-3">Dynamic view · read</h2><span class="c4">C4 dynamic</span></div>
+<p class="text-body-secondary">One query story. Exact bbox/CQL evaluation is deliberately separate from the structural index view.</p>
+<figure class="figure">
+<svg viewBox="0 0 1000 250" role="img" aria-labelledby="read-svg-title">
+<title id="read-svg-title">A request prunes cells, reads chunk ranges, skips Parquet row groups with statistics, evaluates exact predicates, and returns JSON or GeoParquet.</title>
+<rect class="node" x="18" y="62" width="140" height="70" rx="8"/><text class="node-label" x="88" y="90" text-anchor="middle">1 · request</text><text class="node-sub" x="88" y="108" text-anchor="middle">bbox · filter · cursor</text>
+<rect class="node" x="194" y="62" width="140" height="70" rx="8"/><text class="node-label" x="264" y="90" text-anchor="middle">2 · catalog</text><text class="node-sub" x="264" y="108" text-anchor="middle">cells · bounds · zone</text>
+<rect class="node hot" x="370" y="62" width="160" height="70" rx="8"/><text class="node-label" x="450" y="90" text-anchor="middle">3 · chunks</text><text class="node-sub" x="450" y="108" text-anchor="middle">footer + row groups</text>
+<rect class="node" x="566" y="62" width="150" height="70" rx="8"/><text class="node-label" x="641" y="90" text-anchor="middle">4 · exact</text><text class="node-sub" x="641" y="108" text-anchor="middle">bbox · CQL</text>
+<rect class="node ok" x="752" y="62" width="130" height="70" rx="8"/><text class="node-label" x="817" y="90" text-anchor="middle">5 · output</text><text class="node-sub" x="817" y="108" text-anchor="middle">JSON / GeoParquet</text>
+<path id="readpath" class="edge dashed" d="M158 97 H194 M334 97 H370 M530 97 H566 M716 97 H752"/>
+<circle class="packet" cx="0" cy="0" r="5" fill="var(--ok)"><animateMotion dur="4.2s" repeatCount="indefinite"><mpath href="#readpath"/></animateMotion></circle>
+<text class="diagram-note" x="88" y="175" text-anchor="middle">page limit</text>
+<text class="diagram-note" x="264" y="175" text-anchor="middle">skip cells</text>
+<text class="diagram-note" x="450" y="175" text-anchor="middle">geospatial stats</text>
+<text class="diagram-note" x="641" y="175" text-anchor="middle">stop early</text>
+<text class="diagram-note" x="817" y="175" text-anchor="middle">filtered page</text>
+</svg>
+<figcaption>Cell pruning, Parquet row-group statistics and exact evaluation are separate layers. A virtual GeoParquet response replaces a tile pyramid for compatible clients.</figcaption>
+</figure>
+</section>
 
-    <section id="rules" class="mb-5" aria-labelledby="rules-title">
-      <h2 id="rules-title" class="h3 mb-3">Rules</h2>
-      <div class="row g-3">
-        <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">Native geometry</h3><p class="mb-0">Parquet <code>GEOMETRY</code>/WKB, OGC:CRS84. One root geometry column.</p></div></div></div>
-        <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">One zstd layer</h3><p class="mb-0">Parquet pages compress internally. Chunks are raw bytes, never compressed again.</p></div></div></div></div>
-        <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">Chunked cell</h3><p class="mb-0">8,120 bytes per chunk, one 8 KB page inline, primary-key range reads.</p></div></div></div></div>
-        <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">S2 L8 compaction</h3><p class="mb-0">L8 is the partition; 2,048-row groups sorted by spatial key. Appends rewrite only touched cells.</p></div></div></div>
-        <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">No build HTML</h3><p class="mb-0">This page is one static file served directly. Bootstrap is a CDN stylesheet; diagrams are inline SVG/CSS.</p></div></div></div></div>
-      </div>
-    </section>
+<section id="reference" class="mb-5" aria-labelledby="reference-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="reference-title" class="h3 mb-3">Reference</h2><span class="c4">Diátaxis reference</span></div>
+<p class="text-body-secondary">Exhaustive static facts. No request chronology.</p>
+<div class="row g-4">
+<div class="col-lg-7">
+<h3 class="h6 text-warning">HTTP surface</h3>
+<table class="table table-dark table-sm align-middle">
+<thead><tr><th scope="col">Route</th><th scope="col">Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>PUT /v2/collections/{id}</code></td><td>replace collection or listed cells; full compaction</td></tr>
+<tr><td><code>POST /v2/collections/{id}</code></td><td>merge one batch into affected L8 cells and parent samples</td></tr>
+<tr><td><code>GET /items</code></td><td>bbox, filter, cursor, limit, overview, numberMatched</td></tr>
+<tr><td><code>GET /items/{id}</code></td><td>exact id lookup</td></tr>
+<tr><td><code>f=geoparquet</code></td><td>filtered GeoParquet 2.0 response</td></tr>
+<tr><td><code>GET /design</code></td><td>this contract</td></tr>
+</tbody>
+</table>
+<h3 class="h6 text-warning mt-4">Cell file</h3>
+<table class="table table-dark table-sm align-middle">
+<tbody>
+<tr><th scope="row">geometry</th><td>native Parquet <code>GEOMETRY</code> / WKB / OGC:CRS84</td></tr>
+<tr><th scope="row">order</th><td><code>(__pgpq_key, id)</code>; 2,048 rows per group</td></tr>
+<tr><th scope="row">compression</th><td>Parquet zstd pages; chunks not recompressed</td></tr>
+<tr><th scope="row">payload</th><td>8,120-byte chunks; <code>STORAGE EXTERNAL</code>, one page inline</td></tr>
+</tbody>
+</table>
+</div>
+<div class="col-lg-5">
+<h3 class="h6 text-warning">PostgreSQL schema</h3>
+<pre>pgpq.collections
+  uid, name, version, id_column, geometry, columns_json
 
-    <section id="limits" class="mb-5" aria-labelledby="limits-title">
-      <h2 id="limits-title" class="h3 mb-3">Limits and open work</h2>
-      <div class="alert alert-warning" role="status">DuckDB ingest requires the external <code>duckdb</code> binary and spatial extension; the server never links DuckDB. A cell is decompressed logically through Parquet ranges, and dense cells should be sized for the worker memory budget.</div>
-      <ul class="list-group list-group-flush">
-        <li class="list-group-item bg-transparent">One geometry column, root-level attributes, OGC:CRS84/EPSG:4326 only.</li>
-        <li class="list-group-item bg-transparent">One-file-per-cell append is intended for hourly batches; use <code>PUT</code> for a full snapshot and avoid per-row appends.</li>
-        <li class="list-group-item bg-transparent">Filtered <code>numberMatched</code> scans surviving row groups; it is not a posting-list count.</li>
-        <li class="list-group-item bg-transparent">About 4,145 production Go lines. The remaining bulk is CQL and the GeoParquet reader/writer.</li>
-      </ul>
-    </section>
-  </main>
+pgpq.cells
+  collection_uid, level, cell, cell_id,
+  features, bytes, bounds, key range, zone
 
-  <footer class="border-top border-secondary-subtle py-4">
-    <div class="container d-flex flex-wrap justify-content-between gap-2">
-      <span>pgpq · GeoParquet 2.0 over PostgreSQL</span>
-      <span>Static semantic HTML · Bootstrap 6 alpha · inline SVG animations</span>
-    </div>
-  </footer>
+pgpq.cell_chunks
+  cell_id, no, data bytea
+
+pgpq.ids
+  collection_uid, hash, cell, row</pre>
+<p class="small text-body-secondary mb-0">Exactly one <code>cells</code> row per collection/level/cell and one chunk row per 8,120-byte slice.</p>
+</div>
+</div>
+</section>
+
+<section id="measured" class="mb-5" aria-labelledby="measured-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="measured-title" class="h3 mb-3">Measured</h2><span class="c4">evidence</span></div>
+<p class="text-body-secondary">Local PostgreSQL 18.6, 6 vCPU, warm cache, localhost HTTP; median of 30 requests after warmup.</p>
+<div class="table-responsive">
+<table class="table table-dark table-striped table-sm align-middle">
+<caption class="text-secondary">Warm read/ingest measurements</caption>
+<thead><tr><th scope="col">Request</th><th scope="col" class="text-end">Median</th><th scope="col" class="text-end">p95</th><th scope="col" class="text-end">Response</th></tr></thead>
+<tbody>
+<tr><td>warm100k bbox → JSON</td><td class="text-end">4.3 ms</td><td class="text-end">6.1 ms</td><td class="text-end">1.1 kB</td></tr>
+<tr><td>warm100k filter (32k matches) → JSON</td><td class="text-end">43.6 ms</td><td class="text-end">50.6 ms</td><td class="text-end">32 kB</td></tr>
+<tr><td>warm100k id → JSON</td><td class="text-end">1.6 ms</td><td class="text-end">2.2 ms</td><td class="text-end">407 B</td></tr>
+<tr><td>Luxembourg bbox → JSON</td><td class="text-end">10.5 ms</td><td class="text-end">15.0 ms</td><td class="text-end">33 kB</td></tr>
+<tr><td>Monaco enriched bbox → JSON</td><td class="text-end">20.8 ms</td><td class="text-end">28.4 ms</td><td class="text-end">434 kB</td></tr>
+<tr><td>Monaco enriched filter → JSON</td><td class="text-end">20.2 ms</td><td class="text-end">28.5 ms</td><td class="text-end">434 kB</td></tr>
+<tr><td>L2 overview → JSON</td><td class="text-end">15.3 ms</td><td class="text-end">18.6 ms</td><td class="text-end">325 kB</td></tr>
+<tr><td>Luxembourg bbox → GeoParquet</td><td class="text-end">53.5 ms</td><td class="text-end">63.1 ms</td><td class="text-end">101 kB</td></tr>
+<tr><td>Monaco, 1,000 rows → GeoParquet</td><td class="text-end">143.1 ms</td><td class="text-end">163.7 ms</td><td class="text-end">770 kB</td></tr>
+</tbody>
+</table>
+</div>
+<div class="row g-3">
+<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">1.26 s</div><div class="text-body-secondary">Monaco DuckDB ingest · 4,628 features · 12.6 MB</div></div></div></div>
+<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">8.18 s</div><div class="text-body-secondary">Luxembourg DuckDB ingest · 228,273 features · 48.2 MB</div></div></div></div>
+<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">161 MB</div><div class="text-body-secondary">database · 13,343 inline chunks · ~107 MB chunk table</div></div></div></div>
+</div>
+<div class="alert alert-warning mt-4" role="alert"><strong>Heavy cell:</strong> 1,000,000 points, 10.0 MB detail, ingest 19.9 s / 1.39 GB peak; bbox 100 / 1,000: 4.3 / 11.8 ms; filter 11.8 ms; id 10.5 ms; numberMatched 1.9 s; L2 8.5 ms; GeoParquet 11.1 ms. One hourly batch append rewrites the cell in 20.9 s / 1.39 GB.</div>
+</section>
+
+<section id="explanation" class="mb-5" aria-labelledby="explanation-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="explanation-title" class="h3 mb-3">Explanation</h2><span class="c4">Diátaxis explanation</span></div>
+<div class="row g-3">
+<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">L8 partition</h3><p class="mb-0">A cell is small enough for bbox pruning and large enough to avoid catalog noise. L6/L4/L2 are sampled projections of the same data.</p></div></div></div>
+<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">2,048 rows</h3><p class="mb-0">Row-group statistics balance point lookups against wide scans. More groups lower scan cost but add footer/index overhead.</p></div></div></div>
+<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">Hourly batches</h3><p class="mb-0">One <code>POST</code> per batch rewrites each touched cell once. A 1M-row cell costs about 21 s and 10 MB of movement; per-row updates are intentionally not supported.</p></div></div></div>
+<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">No tile pyramid</h3><p class="mb-0">The filtered GeoParquet response is the portability boundary. No FGB index, no vector-tile service, no sidecar partition files.</p></div></div></div>
+</div>
+</section>
+
+<section id="limits" class="mb-5" aria-labelledby="limits-title">
+<h2 id="limits-title" class="h3 mb-3">Limits</h2>
+<ul class="list-group list-group-flush">
+<li class="list-group-item bg-transparent">DuckDB ingest requires the external <code>duckdb</code> binary and spatial extension; the server never links DuckDB.</li>
+<li class="list-group-item bg-transparent">One root geometry column, OGC:CRS84/EPSG:4326 only. Nested schema and multiple geometry columns are deferred.</li>
+<li class="list-group-item bg-transparent">One-file-per-cell append is for hourly batches. Use <code>PUT</code> for a full snapshot; avoid per-row appends.</li>
+<li class="list-group-item bg-transparent">Filtered <code>numberMatched</code> scans surviving row groups; it is not a posting-list count.</li>
+<li class="list-group-item bg-transparent">About 4,145 production Go lines, one migration baseline, no FGB/v1 code.</li>
+</ul>
+</section>
+</div>
+</main>
+
+<footer class="border-top border-secondary-subtle py-4">
+<div class="container d-flex flex-wrap justify-content-between gap-2">
+<span>pgpq · GeoParquet 2.0 over PostgreSQL</span>
+<span>C4 context/container/component · dynamic flows · Diátaxis reference and explanation · static HTML</span>
+</div>
+</footer>
 </body>
 </html>
