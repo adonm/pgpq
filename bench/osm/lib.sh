@@ -9,6 +9,24 @@ die() {
 	exit 1
 }
 
+duckdb_image_default=pgpq-duckdb:2.0.0
+
+ensure_duckdb_image() {
+	local image=${PGPQ_OSM_DUCKDB_IMAGE:-$duckdb_image_default}
+	if docker image inspect "$image" >/dev/null 2>&1; then
+		echo "$image"
+		return
+	fi
+	if [ -n "${PGPQ_OSM_DUCKDB_IMAGE:-}" ]; then
+		die "DuckDB image not found: $image"
+	fi
+	local here
+	here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+	note "building $image"
+	docker build -q -t "$image" -f "$here/Dockerfile.duckdb" "$here"
+	echo "$image"
+}
+
 note() {
 	echo "== $*" >&2
 }

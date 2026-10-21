@@ -15,8 +15,8 @@ reader and the Parquet 2.0 writer; no separate GDAL container is used. Each
 file is sorted by ST_Hilbert before COPY so row groups are spatially ordered.
 
 environment:
-  PGPQ_OSM_DUCKDB_IMAGE  default duckdb/duckdb:1.5.6 (writes GEOPARQUET_VERSION V2)
-  PGPQ_OSM_DUCKDB_MEM    default 768m
+  PGPQ_OSM_DUCKDB_IMAGE  default pgpq-duckdb:2.0.0 (writes GEOPARQUET_VERSION V2)
+  PGPQ_OSM_DUCKDB_MEM    default 1g
   PGPQ_OSM_DUCKDB_CPUS   default 1
 EOF
 	exit 2
@@ -41,10 +41,10 @@ done
 pbf=$(realpath "$pbf")
 work=$(realpath -m "$work")
 
-image=${PGPQ_OSM_DUCKDB_IMAGE:-duckdb/duckdb:1.5.6}
-memory=${PGPQ_OSM_DUCKDB_MEM:-768m}
-cpus=${PGPQ_OSM_DUCKDB_CPUS:-1}
 command -v docker >/dev/null 2>&1 || die "docker is required for the DuckDB step"
+image=$(ensure_duckdb_image)
+memory=${PGPQ_OSM_DUCKDB_MEM:-1g}
+cpus=${PGPQ_OSM_DUCKDB_CPUS:-1}
 
 out=$work/parquet
 mkdir -p "$out"
@@ -81,7 +81,7 @@ done <"$here/layers.tsv"
 meta_sql=
 for name in "${selected[@]}"; do
 	if [ -n "$meta_sql" ]; then meta_sql+=" UNION ALL "; fi
-	meta_sql+="SELECT '$name' AS layer, count(*) AS features, ST_XMin(ST_Extent_Agg(geometry)) AS xmin, ST_YMin(ST_Extent_Agg(geometry)) AS ymin, ST_XMax(ST_Extent_Agg(geometry)) AS xmax, ST_YMax(ST_Extent_Agg(geometry)) AS ymax, quantile_cont(ST_X(ST_Centroid(geometry)), 0.05) AS qxmin, quantile_cont(ST_Y(ST_Centroid(geometry)), 0.05) AS qymin, quantile_cont(ST_X(ST_Centroid(geometry)), 0.95) AS qxmax, quantile_cont(ST_Y(ST_Centroid(geometry)), 0.95) AS qymax, any_value(ST_GeometryType(geometry)) AS geometry_type FROM read_parquet('/out/${extract}_${name}.parquet')"
+	meta_sql+="SELECT '$name' AS layer, count(*) AS features, quantile_cont(ST_X(ST_Centroid(geometry)), 0.05) AS qxmin, quantile_cont(ST_Y(ST_Centroid(geometry)), 0.05) AS qymin, quantile_cont(ST_X(ST_Centroid(geometry)), 0.95) AS qxmax, quantile_cont(ST_Y(ST_Centroid(geometry)), 0.95) AS qymax, any_value(ST_GeometryType(geometry)) AS geometry_type FROM read_parquet('/out/${extract}_${name}.parquet')"
 done
 docker run --rm --memory "$memory" --cpus "$cpus" \
 	-v "$out:/out" "$image" \

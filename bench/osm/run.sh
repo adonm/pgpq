@@ -28,8 +28,8 @@ options:
 environment:
   PGPQ_OSM_PSQL          psql command prefix, e.g. "psql postgres://.../pgpq_osm_bench"
                          or "docker exec -i postfgb-postgres-1 psql -U postgres -d pgpq_osm_bench"
-  PGPQ_OSM_DUCKDB_IMAGE  default duckdb/duckdb:1.5.6
-  PGPQ_OSM_DUCKDB_MEM    default 768m
+  PGPQ_OSM_DUCKDB_IMAGE  default pgpq-duckdb:2.0.0
+  PGPQ_OSM_DUCKDB_MEM    default 1g
   PGPQ_OSM_DUCKDB_CPUS   default 1
   GOMEMLIMIT             server cap, default set by serve.sh to 1GiB
 
@@ -85,6 +85,8 @@ http://127.0.0.1*|http://localhost*|http://\[::1\]*) ;;
 *) [ "$allow_remote" -eq 1 ] || die "refusing non-loopback URL without --allow-remote: $url" ;;
 esac
 curl -fsS -o /dev/null "$url/readyz" || die "test worker not ready at $url (start bench/osm/serve.sh)"
+image=$(ensure_duckdb_image)
+export PGPQ_OSM_DUCKDB_IMAGE="$image"
 if [ "$keep" -eq 0 ] && [ -z "$psql_cmd" ]; then
 	psql_cmd=$(find_psql_command) || die "cleanup needs --psql or PGPQ_OSM_PSQL; pass --keep for a disposable server"
 fi
@@ -121,7 +123,7 @@ args=(
 	--extract "$extract"
 	--meta "$work/meta.json"
 	--layers-file "$here/layers.tsv"
-	--duckdb-image "${PGPQ_OSM_DUCKDB_IMAGE:-duckdb/duckdb:1.5.6}"
+	--duckdb-image "$image"
 	--layers "$layers"
 	--prefix "$prefix"
 	--out-dir "$work/report"

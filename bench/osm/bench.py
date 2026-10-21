@@ -170,7 +170,7 @@ def verify_parquet(path, expected, duckdb_image, timeout=180):
         f"(SELECT logical_type FROM parquet_schema('/data/{name}') WHERE name = 'geometry') AS logical_type "
         f"FROM read_parquet('/data/{name}')"
     )
-    command = ["docker", "run", "--rm", "--memory", "512m", "--cpus", "1", "-v", f"{directory}:/data:ro", duckdb_image, "duckdb", "-json", "-c", sql]
+    command = ["docker", "run", "--rm", "--memory", "1g", "--cpus", "1", "-v", f"{directory}:/data:ro", duckdb_image, "duckdb", "-json", "-c", sql]
     try:
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
     except FileNotFoundError:
@@ -199,7 +199,7 @@ def build_parser():
     parser.add_argument("--extract", required=True)
     parser.add_argument("--meta", required=True)
     parser.add_argument("--layers-file", default=str(LAYERS_FILE))
-    parser.add_argument("--duckdb-image", default=os.environ.get("PGPQ_OSM_DUCKDB_IMAGE", "duckdb/duckdb:1.5.6"))
+    parser.add_argument("--duckdb-image", default=os.environ.get("PGPQ_OSM_DUCKDB_IMAGE", "pgpq-duckdb:2.0.0"))
     parser.add_argument("--layers", default="")
     parser.add_argument("--prefix", default=os.environ.get("PGPQ_OSM_PREFIX", "osm_"))
     parser.add_argument("--out-dir", required=True)
@@ -263,7 +263,7 @@ def main():
 
     limits = {
         "duckdb_image": args.duckdb_image,
-        "duckdb_memory": os.environ.get("PGPQ_OSM_DUCKDB_MEM", "768m"),
+        "duckdb_memory": os.environ.get("PGPQ_OSM_DUCKDB_MEM", "1g"),
         "duckdb_cpus": os.environ.get("PGPQ_OSM_DUCKDB_CPUS", "1"),
         "go_memory": os.environ.get("GOMEMLIMIT", "1GiB"),
         "request_mode": "sequential",

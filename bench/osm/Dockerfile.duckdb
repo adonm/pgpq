@@ -1,0 +1,20 @@
+FROM debian:bookworm-slim
+
+ARG TARGETARCH=amd64
+ARG DUCKDB_VERSION=v2.0.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64) url="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz"; sha="c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc" ;; \
+      arm64) url="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb-cli-linux-arm64.tar.gz"; sha="859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe" ;; \
+      *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "$url" -o /tmp/duckdb.tar.gz; \
+    echo "$sha  /tmp/duckdb.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/duckdb.tar.gz -C /usr/local/bin; \
+    rm /tmp/duckdb.tar.gz; \
+    duckdb --version

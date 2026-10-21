@@ -4,7 +4,7 @@ Virtual GeoParquet 2.0 over PostgreSQL.
 
 `pgpq` stores each collection as immutable native GeoParquet 2.0 shards and serves one virtual GeoParquet file per collection. A generated footer makes the shards addressable as a single standard Parquet file over HTTP `Range`; clients fetch only the row groups they need.
 
-The upload format is native GeoParquet 2.0 only. Geometry must be a Parquet `GEOMETRY`/`GEOGRAPHY` with WKB and an OGC:CRS84/EPSG:4326 CRS. The server has no DuckDB, GDAL or other converter at runtime. DuckDB 1.5.6+ with the `spatial` extension can produce the upload files with `GEOPARQUET_VERSION 'V2'` outside the server.
+The upload format is native GeoParquet 2.0 only. Geometry must be a Parquet `GEOMETRY`/`GEOGRAPHY` with WKB and an OGC:CRS84/EPSG:4326 CRS. The server has no DuckDB, GDAL or other converter at runtime. DuckDB 2.0+ with the `spatial` extension can produce the upload files with `GEOPARQUET_VERSION 'V2'` outside the server.
 
 ## Current surface
 
@@ -46,9 +46,9 @@ Monaco city layers against a local writable worker on `:8094`, 2–3 measured re
 
 | Layer | Rows | Shards | Upload | Virtual bytes | Footer | HEAD | Full GET | First range | Footer range |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| buildings | 4,628 | 1 | 0.19 s | 522,785 | 8,384 B | 2.2 ms | 6.1 ms | 2.1 ms | 2.5 ms |
-| places | 4,928 | 1 | 0.17 s | 223,140 | ~8 KB | 1.9 ms | 6.1 ms | 2.1 ms | 2.0 ms |
-| roads | 4,270 | 1 | 0.15 s | 382,937 | 8,459 B | 1.8 ms | 4.7 ms | 2.1 ms | 1.7 ms |
+| buildings | 4,628 | 1 | 0.20 s | 522,785 | 8,384 B | 2.1 ms | 8.4 ms | 3.9 ms | 2.5 ms |
+| places | 4,928 | 1 | 0.18 s | 223,154 | ~8 KB | 2.1 ms | 10.8 ms | 2.3 ms | 1.8 ms |
+| roads | 4,270 | 1 | 0.14 s | 382,937 | 8,459 B | 2.1 ms | 7.2 ms | 2.2 ms | 2.4 ms |
 
 A test override of `PGPQ_SHARD_BYTES=150000` split the 4,628 buildings into 5 shards; the resulting 533,113-byte virtual file was read correctly by DuckDB and GDAL, and cross-shard Range responses matched the full file.
 

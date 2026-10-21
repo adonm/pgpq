@@ -100,7 +100,7 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <defs><marker id="arrContext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
 <rect class="node external" x="30" y="42" width="200" height="86" rx="8"/>
 <text class="node-label" x="130" y="68" text-anchor="middle">Producer</text>
-<text class="node-sub" x="130" y="87" text-anchor="middle">DuckDB 1.5.6+ spatial</text>
+<text class="node-sub" x="130" y="87" text-anchor="middle">DuckDB 2.0+ spatial</text>
 <text class="node-sub" x="130" y="102" text-anchor="middle">GEOPARQUET_VERSION 'V2'</text>
 <rect class="node external" x="30" y="232" width="200" height="86" rx="8"/>
 <text class="node-label" x="130" y="258" text-anchor="middle">Clients</text>
@@ -421,7 +421,7 @@ COPY (
   (FORMAT parquet,
    GEOPARQUET_VERSION 'V2',
    COMPRESSION zstd);</pre>
-<p class="small text-body-secondary">Use DuckDB 1.5.6 or newer with the <code>spatial</code> extension. <code>geom</code> must already be a geometry in OGC:CRS84 or EPSG:4326. There is no GDAL container and no server-side conversion.</p>
+<p class="small text-body-secondary">Use DuckDB 2.0 or newer with the <code>spatial</code> extension. <code>geom</code> must already be a geometry in OGC:CRS84 or EPSG:4326. There is no GDAL container and no server-side conversion.</p>
 
 <h3 class="h6 text-warning mt-4">2 · PUT a replacement</h3>
 <pre>curl -X PUT -T /tmp/buildings-v2.parquet \
@@ -539,7 +539,7 @@ pgpq.ids                collection, hash, id, shard_id</pre>
 <tr><th scope="row">compression</th><td>zstd Parquet pages; stored shard bytes are not compressed again.</td></tr>
 <tr><th scope="row">row order</th><td>Spatial key, then id.</td></tr>
 <tr><th scope="row">shard target</th><td>Complete shards, targeting at most 512 MiB each.</td></tr>
-<tr><th scope="row">producer</th><td>External DuckDB 1.5.6+ with <code>spatial</code>, writing <code>GEOPARQUET_VERSION 'V2'</code>. No GDAL container.</td></tr>
+<tr><th scope="row">producer</th><td>External DuckDB 2.0+ with <code>spatial</code>, writing <code>GEOPARQUET_VERSION 'V2'</code>. No GDAL container.</td></tr>
 </tbody>
 </table>
 </section>
@@ -563,9 +563,9 @@ pgpq.ids                collection, hash, id, shard_id</pre>
 <caption class="text-secondary">Monaco virtual-file measurements</caption>
 <thead><tr><th scope="col">Layer</th><th scope="col" class="text-end">Rows</th><th scope="col" class="text-end">Virtual bytes</th><th scope="col" class="text-end">Footer bytes</th><th scope="col" class="text-end">HEAD</th><th scope="col" class="text-end">Full GET</th><th scope="col" class="text-end">First range</th><th scope="col" class="text-end">Footer range</th></tr></thead>
 <tbody>
-<tr><td>buildings</td><td class="text-end">4,628</td><td class="text-end">522,785</td><td class="text-end">8,384</td><td class="text-end">2.2 ms</td><td class="text-end">6.1 ms</td><td class="text-end">2.1 ms</td><td class="text-end">2.5 ms</td></tr>
-<tr><td>places</td><td class="text-end">4,928</td><td class="text-end">223,140</td><td class="text-end">~8 KB</td><td class="text-end">1.9 ms</td><td class="text-end">6.1 ms</td><td class="text-end">2.1 ms</td><td class="text-end">2.0 ms</td></tr>
-<tr><td>roads</td><td class="text-end">4,270</td><td class="text-end">382,937</td><td class="text-end">8,459</td><td class="text-end">1.8 ms</td><td class="text-end">4.7 ms</td><td class="text-end">2.1 ms</td><td class="text-end">1.7 ms</td></tr>
+<tr><td>buildings</td><td class="text-end">4,628</td><td class="text-end">522,785</td><td class="text-end">8,384</td><td class="text-end">2.1 ms</td><td class="text-end">8.4 ms</td><td class="text-end">3.9 ms</td><td class="text-end">2.5 ms</td></tr>
+<tr><td>places</td><td class="text-end">4,928</td><td class="text-end">223,154</td><td class="text-end">~8 KB</td><td class="text-end">2.1 ms</td><td class="text-end">10.8 ms</td><td class="text-end">2.3 ms</td><td class="text-end">1.8 ms</td></tr>
+<tr><td>roads</td><td class="text-end">4,270</td><td class="text-end">382,937</td><td class="text-end">8,459</td><td class="text-end">2.1 ms</td><td class="text-end">7.2 ms</td><td class="text-end">2.2 ms</td><td class="text-end">2.4 ms</td></tr>
 </tbody>
 </table>
 </div>

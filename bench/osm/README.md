@@ -39,7 +39,7 @@ Layers are defined in `layers.tsv`. `OGC_FID` is unique within a DuckDB
 
 ## Prerequisites
 
-- Docker, with `duckdb/duckdb:1.5.6` available (the harness pulls it).
+- Docker; the harness builds the local `pgpq-duckdb:2.0.0` image from the released v2.0.0 CLI on first use.
 - Python 3 with only the standard library, and `curl` for the readiness probe.
 - A PostgreSQL test database and a writable pgpq worker. The examples use the
   local Docker PostgreSQL created by `just pg-up`.
@@ -54,10 +54,12 @@ reader; `osmconf.ini` is mounted into the container. If a bbox clip is needed,
 `osmium extract` before `prepare.sh` is the cheapest option; keep one small
 filtered PBF.
 
-DuckDB 1.5.6 is the pinned stable container. There is no official
-`duckdb/duckdb:nightly` tag on Docker Hub; 1.5.6 already supports the
-`GEOPARQUET_VERSION 'V2'` writer. Set `PGPQ_OSM_DUCKDB_IMAGE` to test another
-image.
+The harness uses a local `pgpq-duckdb:2.0.0` image built by `Dockerfile.duckdb`
+from the official v2.0.0 Linux CLI release and its published SHA-256. The
+official Docker Hub repository still reports 1.5.6 as `latest`; the local image
+pins the released 2.0.0 binary. `prepare.sh` builds the image automatically on
+first use. Set `PGPQ_OSM_DUCKDB_IMAGE` to use another image; it must already
+exist.
 
 ## Quick start
 
@@ -129,8 +131,8 @@ is not already set. Override everything with `PGPQ_OSM_DSN`, `PGPQ_OSM_DB`,
 
 | Stage | Cap | Notes |
 | --- | --- | --- |
-| DuckDB prepare | `--memory 768m --cpus 1` | one layer per container |
-| DuckDB verification | `--memory 512m --cpus 1` | one virtual file read |
+| DuckDB prepare | `--memory 1g --cpus 1` | one layer per container |
+| DuckDB verification | `--memory 1g --cpus 1` | one virtual file read |
 | Server | `GOMEMLIMIT=1GiB`, `--max-conns 2` | Go soft heap limit |
 | Benchmark | sequential | one layer, one request at a time |
 | Cleanup | SQL delete | cascades collections, shards and chunks |
@@ -144,17 +146,17 @@ requests per endpoint after one warmup. Times are median / p95 in milliseconds.
 
 | Layer | Features | Shards | Upload s | Virtual bytes | HEAD | Full GET | First range | Footer range |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| buildings | 4,628 | 1 | 0.19 | 522,785 | 2.2 | 6.1 / 6.1 | 2.1 / 2.1 | 2.5 / 2.7 |
-| places | 4,928 | 1 | 0.17 | 223,140 | 1.9 | 6.1 / 6.1 | 2.1 / 2.1 | 2.0 / 2.0 |
-| roads | 4,270 | 1 | 0.15 | 382,937 | 1.8 | 4.7 / 4.7 | 2.1 / 2.2 | 1.7 / 1.9 |
+| buildings | 4,628 | 1 | 0.20 | 522,785 | 2.1 | 8.4 / 8.4 | 3.9 / 4.7 | 2.5 / 3.1 |
+| places | 4,928 | 1 | 0.18 | 223,154 | 2.1 | 10.8 / 10.8 | 2.3 / 2.4 | 1.8 / 1.9 |
+| roads | 4,270 | 1 | 0.14 | 382,937 | 2.1 | 7.2 / 7.2 | 2.2 / 2.3 | 2.4 / 2.9 |
 
 ### Andorra (3.8 MB PBF)
 
 | Layer | Features | Shards | Upload s | Virtual bytes | HEAD | Full GET | First range | Footer range |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| buildings | 7,638 | 1 | 0.25 | 838,041 | 1.4 | 8.9 / 8.9 | 2.0 / 2.3 | 2.1 / 2.1 |
-| places | 8,961 | 1 | 0.30 | 382,001 | 2.3 | 5.6 / 5.6 | 1.8 / 2.1 | 2.0 / 2.0 |
-| roads | 8,833 | 1 | 0.34 | 2,569,617 | 1.7 | 27.4 / 27.4 | 2.1 / 2.3 | 1.6 / 1.8 |
+| buildings | 7,638 | 1 | 0.26 | 838,041 | 1.8 | 10.8 / 10.8 | 2.5 / 2.6 | 2.0 / 2.0 |
+| places | 8,961 | 1 | 0.27 | 382,004 | 1.7 | 4.9 / 4.9 | 2.1 / 2.3 | 2.2 / 2.4 |
+| roads | 8,833 | 1 | 0.37 | 2,569,617 | 1.9 | 31.2 / 31.2 | 2.0 / 3.1 | 1.6 / 1.7 |
 
 All checks passed: upload counts, version advancement, `HEAD` length,
 `Accept-Ranges`, ETag consistency, full-download length, DuckDB reading of the
