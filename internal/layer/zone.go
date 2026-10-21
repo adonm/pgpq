@@ -3,7 +3,8 @@ package layer
 import (
 	"encoding/json"
 
-	"github.com/adonm/postfgb/internal/cql"
+	"github.com/adonm/pgpq/internal/cql"
+	"github.com/adonm/pgpq/internal/geo"
 )
 
 type zoneColumn struct {
@@ -13,10 +14,37 @@ type zoneColumn struct {
 	Max   *float64 `json:"max,omitempty"`
 }
 
-func encodeZoneSummaries(summaries []columnSummary) (string, error) {
-	zone := make([]zoneColumn, len(summaries))
-	for i, summary := range summaries {
-		zone[i] = zoneColumn{Name: summary.Name, Nulls: summary.Nulls, Min: summary.Min, Max: summary.Max}
+func encodeZone(cols []geo.Column, features []geo.Feature) (string, error) {
+	zone := make([]zoneColumn, len(cols))
+	for i, col := range cols {
+		zone[i].Name = col.Name
+		for _, feature := range features {
+			value, ok := feature.Props[col.Name]
+			if !ok || value == nil {
+				zone[i].Nulls++
+				continue
+			}
+			if col.Type != cql.Int && col.Type != cql.Double {
+				continue
+			}
+			var f float64
+			switch n := value.(type) {
+			case int64:
+				f = float64(n)
+			case float64:
+				f = n
+			default:
+				continue
+			}
+			if zone[i].Min == nil || f < *zone[i].Min {
+				v := f
+				zone[i].Min = &v
+			}
+			if zone[i].Max == nil || f > *zone[i].Max {
+				v := f
+				zone[i].Max = &v
+			}
+		}
 	}
 	out, err := json.Marshal(zone)
 	return string(out), err

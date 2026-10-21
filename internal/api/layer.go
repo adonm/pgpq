@@ -4,16 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/adonm/postfgb/internal/chunk"
-	"github.com/adonm/postfgb/internal/ingest"
-	"github.com/adonm/postfgb/internal/layer"
-	"github.com/adonm/postfgb/internal/spatial"
-	"github.com/adonm/postfgb/internal/store"
+	"github.com/adonm/pgpq/internal/duck"
+	"github.com/adonm/pgpq/internal/geo"
+	"github.com/adonm/pgpq/internal/layer"
+	"github.com/adonm/pgpq/internal/spatial"
+	"github.com/adonm/pgpq/internal/store"
 )
 
 func (s *Server) putLayer(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +32,17 @@ func (s *Server) putLayer(w http.ResponseWriter, r *http.Request) {
 		}
 		cells = parsed
 	}
-	ds, err := ingest.ReadDataset(r.Body, ingest.Options{IDColumn: r.URL.Query().Get("id_column")})
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var ds geo.Dataset
+	if len(body) >= 12 && string(body[8:12]) == "DUCK" {
+		ds, err = duck.Read(r.Context(), body, name, r.URL.Query().Get("id_column"), r.URL.Query().Get("view"))
+	} else {
+		ds, err = geo.ReadDataset(bytes.NewReader(body), geo.Options{IDColumn: r.URL.Query().Get("id_column")})
+	}
 	if err != nil {
 		layerError(w, err)
 		return
@@ -85,9 +96,13 @@ func (s *Server) layerItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := layerNextLink(r, page.Next)
-	wantFGB := r.URL.Query().Get("f") == "flatgeobuf" || strings.Contains(r.Header.Get("Accept"), "application/flatgeobuf")
-	if wantFGB && len(page.Hits) > 0 {
-		writeLayerFGB(w, r, page, next)
+	wantParquet := r.URL.Query().Get("f") == "geoparquet" || strings.Contains(r.Header.Get("Accept"), "application/vnd.apache.parquet")
+	if r.URL.Query().Get("f") == "flatgeobuf" {
+		http.Error(w, "FlatGeobuf output is no longer served; use f=geoparquet", http.StatusBadRequest)
+		return
+	}
+	if wantParquet {
+		writeLayerParquet(w, r, page, next)
 		return
 	}
 	var matched *int64
@@ -103,11 +118,11 @@ func (s *Server) layerItems(w http.ResponseWriter, r *http.Request) {
 }
 
 type layerFeatureCollection struct {
-	Type           string          `json:"type"`
-	NumberMatched  *int64          `json:"numberMatched,omitempty"`
-	NumberReturned int             `json:"numberReturned"`
-	Features       []chunk.Feature `json:"features"`
-	Links          []link          `json:"links,omitempty"`
+	Type           string           `json:"type"`
+	NumberMatched  *int64           `json:"numberMatched,omitempty"`
+	NumberReturned int              `json:"numberReturned"`
+	Features       []map[string]any `json:"features"`
+	Links          []link           `json:"links,omitempty"`
 }
 
 func writeLayerGeoJSON(w http.ResponseWriter, page layer.Page, next string, matched *int64) {
@@ -115,12 +130,15 @@ func writeLayerGeoJSON(w http.ResponseWriter, page layer.Page, next string, matc
 		Type:           "FeatureCollection",
 		NumberMatched:  matched,
 		NumberReturned: len(page.Hits),
-		Features:       make([]chunk.Feature, 0, len(page.Hits)),
+		Features:       make([]map[string]any, 0, len(page.Hits)),
 	}
 	for _, hit := range page.Hits {
-		feature := chunk.GeoJSONFeature(hit.Header, hit.Feature)
-		feature.ID = hit.ID
-		out.Features = append(out.Features, *feature)
+		feature, err := geo.GeoJSON(hit.Feature)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out.Features = append(out.Features, feature)
 	}
 	if next != "" {
 		out.Links = []link{{Href: next, Rel: "next", Type: "application/geo+json"}}
@@ -129,12 +147,12 @@ func writeLayerGeoJSON(w http.ResponseWriter, page layer.Page, next string, matc
 	json.NewEncoder(w).Encode(out)
 }
 
-func writeLayerFGB(w http.ResponseWriter, r *http.Request, page layer.Page, next string) {
-	features := make([]chunk.InputFeature, len(page.Hits))
+func writeLayerParquet(w http.ResponseWriter, r *http.Request, page layer.Page, next string) {
+	features := make([]geo.Feature, len(page.Hits))
 	for i, hit := range page.Hits {
-		features[i] = chunk.InputFeature{Raw: hit.Raw}
+		features[i] = hit.Feature
 	}
-	data, err := chunk.EncodePage(page.Collection, page.Hits[0].Header, features)
+	data, err := geo.EncodeCell(geo.Dataset{Columns: page.Columns, Geometry: page.Geometry, IDColumn: page.IDColumn}, features)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -142,7 +160,7 @@ func writeLayerFGB(w http.ResponseWriter, r *http.Request, page layer.Page, next
 	if next != "" {
 		w.Header().Set("Link", "<"+next+">; rel=\"next\"")
 	}
-	w.Header().Set("Content-Type", "application/flatgeobuf")
+	w.Header().Set("Content-Type", "application/vnd.apache.parquet")
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 }
 
@@ -184,8 +202,11 @@ func (s *Server) layerItem(w http.ResponseWriter, r *http.Request) {
 		layerError(w, err)
 		return
 	}
-	feature := chunk.GeoJSONFeature(hit.Header, hit.Feature)
-	feature.ID = hit.ID
+	feature, err := geo.GeoJSON(hit.Feature)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/geo+json")
 	json.NewEncoder(w).Encode(feature)
 }

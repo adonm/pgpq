@@ -12,13 +12,15 @@ The design page (`internal/api/design.html`, served at `/design`) is the contrac
 ## Environment
 
 - mise provides Go, just, hk and ko. Docker provides PostgreSQL and GDAL for verification.
-- Verify FlatGeobuf output with GDAL before calling any read-path work done: save `/v2/collections/{id}/items?f=flatgeobuf` and read it with `ogrinfo`. No OAPIF collection listing is served in the v2-only surface.
+- DuckDB ingest uses the external `duckdb` binary; set `PGPQ_DUCKDB` when it is not on `PATH`.
+- Verify GeoParquet output with GDAL before calling read-path work done: save `/v2/collections/{id}/items?f=geoparquet` and read it with `ogrinfo`.
 
 ## Rules
 
 - No comments in Go; names and small functions carry meaning.
 - Smallest reasonable implementation; stdlib first; a dependency must justify itself.
-- No cgo; the core path requires no PostgreSQL extensions.
+- No cgo; DuckDB is an external command, never linked.
+- Geometry is native Parquet GEOMETRY/GEOGRAPHY with WKB. Parquet pages use zstd; the cell `bytea` is not compressed again.
 - Filters are enforced server-side, always; writes are served in writable mode only. No auth in the app: it runs behind an adjacent auth layer, with readonly workers for public traffic.
 - Migrations are append-only; never edit an applied migration.
 - Behavior changes and design page changes ship in the same commit.

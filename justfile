@@ -1,5 +1,5 @@
-dsn := env("POSTFGB_DSN", "postgres://postgres:postgres@localhost:5432/postfgb?sslmode=disable")
-url := env("POSTFGB_URL", "http://localhost:8080")
+dsn := env("PGPQ_DSN", "postgres://postgres:postgres@localhost:5432/pgpq?sslmode=disable")
+url := env("PGPQ_URL", "http://localhost:8080")
 
 default:
     @just --list
@@ -8,10 +8,10 @@ build:
     go build ./...
 
 image repo:
-    KO_DOCKER_REPO="{{repo}}" ko build ./cmd/postfgb
+    KO_DOCKER_REPO="{{repo}}" ko build ./cmd/pgpq
 
 image-tar:
-    ko build --push=false --tarball=postfgb-image.tar ./cmd/postfgb
+    ko build --push=false --tarball=pgpq-image.tar ./cmd/pgpq
 
 fmt:
     gofmt -w .
@@ -26,10 +26,7 @@ test:
     go test -timeout 120s ./...
 
 test-integration:
-    POSTFGB_TEST_DSN="{{dsn}}" go test -count=1 -timeout 300s ./...
-
-bench-osm region="luxembourg":
-    bench/run.sh "{{region}}"
+    PGPQ_TEST_DSN="{{dsn}}" go test -count=1 -timeout 300s ./...
 
 ci: fmt-check vet test
 
@@ -40,21 +37,21 @@ pg-down:
     docker compose down -v
 
 serve:
-    go run ./cmd/postfgb serve --dsn "{{dsn}}"
+    go run ./cmd/pgpq serve --dsn "{{dsn}}"
 
 serve-readonly:
-    go run ./cmd/postfgb serve --dsn "{{dsn}}" --readonly
+    go run ./cmd/pgpq serve --dsn "{{dsn}}" --readonly
 
 restart:
     #!/usr/bin/env bash
     set -euo pipefail
-    go build -o bin/postfgb ./cmd/postfgb
+    go build -o bin/pgpq ./cmd/pgpq
     for port in 8080 8081; do
       pid=$(ss -tlnp | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
       if [ -n "$pid" ]; then kill "$pid"; fi
     done
     sleep 1
-    setsid nohup bin/postfgb serve >/tmp/opencode/postfgb.log 2>&1 &
-    setsid nohup bin/postfgb serve --addr 127.0.0.1:8081 --readonly >/tmp/opencode/postfgb-ro.log 2>&1 &
+    setsid nohup bin/pgpq serve >/tmp/opencode/pgpq.log 2>&1 &
+    setsid nohup bin/pgpq serve --addr 127.0.0.1:8081 --readonly >/tmp/opencode/pgpq-ro.log 2>&1 &
     sleep 2
     echo "writable $(curl -sfS -o /dev/null -w '%{http_code}' "{{url}}/readyz") readonly $(curl -sfS -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/readyz)"

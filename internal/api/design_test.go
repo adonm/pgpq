@@ -14,10 +14,7 @@ func TestDesignPageIsServedAsHTML(t *testing.T) {
 		t.Fatalf("status %d, type %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "postfgb v2 · design") {
+	if !strings.Contains(body, "pgpq v2") || !strings.Contains(body, "GeoParquet 2.0") {
 		t.Fatal("design page body missing")
-	}
-	if !strings.Contains(body, "<symbol id=\"i-db\"") {
-		t.Fatal("design page is missing the inline icon sprite")
 	}
 }

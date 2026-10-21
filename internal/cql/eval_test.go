@@ -3,11 +3,9 @@ package cql
 import (
 	"math"
 	"testing"
-
-	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 )
 
-func evalText(t *testing.T, text string, columns map[string]flattypes.ColumnType, props map[string]any) bool {
+func evalText(t *testing.T, text string, columns map[string]Type, props map[string]any) bool {
 	t.Helper()
 	expr, err := Parse(text)
 	if err != nil {
@@ -17,10 +15,10 @@ func evalText(t *testing.T, text string, columns map[string]flattypes.ColumnType
 }
 
 func TestEvalEquality(t *testing.T) {
-	numeric := map[string]flattypes.ColumnType{"id": flattypes.ColumnTypeLong}
+	numeric := map[string]Type{"id": Int}
 	cases := []struct {
 		text    string
-		columns map[string]flattypes.ColumnType
+		columns map[string]Type
 		props   map[string]any
 		want    bool
 	}{
@@ -28,9 +26,9 @@ func TestEvalEquality(t *testing.T) {
 		{"id = 5", numeric, map[string]any{"id": int64(6)}, false},
 		{"id = '5'", numeric, map[string]any{"id": int64(5)}, true},
 		{"id = '5'", numeric, map[string]any{"id": "5"}, true},
-		{"name = 5", map[string]flattypes.ColumnType{"name": flattypes.ColumnTypeString}, map[string]any{"name": "5"}, true},
-		{"name = 'cat_07'", map[string]flattypes.ColumnType{"name": flattypes.ColumnTypeString}, map[string]any{"name": "cat_07"}, true},
-		{"name = 'cat_07'", map[string]flattypes.ColumnType{"name": flattypes.ColumnTypeString}, map[string]any{"name": "cat_08"}, false},
+		{"name = 5", map[string]Type{"name": String}, map[string]any{"name": "5"}, true},
+		{"name = 'cat_07'", map[string]Type{"name": String}, map[string]any{"name": "cat_07"}, true},
+		{"name = 'cat_07'", map[string]Type{"name": String}, map[string]any{"name": "cat_08"}, false},
 		{"tags = 'r3'", nil, map[string]any{"tags": []any{"u1", "r3"}}, true},
 		{"tags = 'r3'", nil, map[string]any{"tags": []any{"u1", "u2"}}, false},
 		{"id = 5", numeric, map[string]any{}, false},
@@ -44,7 +42,7 @@ func TestEvalEquality(t *testing.T) {
 }
 
 func TestEvalBooleans(t *testing.T) {
-	columns := map[string]flattypes.ColumnType{"flag": flattypes.ColumnTypeBool}
+	columns := map[string]Type{"flag": Bool}
 	for _, tc := range []struct {
 		text  string
 		props map[string]any
@@ -64,10 +62,10 @@ func TestEvalBooleans(t *testing.T) {
 }
 
 func TestEvalOrdered(t *testing.T) {
-	numeric := map[string]flattypes.ColumnType{"n": flattypes.ColumnTypeLong}
+	numeric := map[string]Type{"n": Int}
 	for _, tc := range []struct {
 		text    string
-		columns map[string]flattypes.ColumnType
+		columns map[string]Type
 		props   map[string]any
 		want    bool
 	}{
@@ -80,12 +78,12 @@ func TestEvalOrdered(t *testing.T) {
 		{"n > 3", numeric, map[string]any{}, false},
 		{"n > 3", numeric, map[string]any{"n": nil}, false},
 		{"n > 3", numeric, map[string]any{"n": math.NaN()}, false},
-		{"s > 'B'", map[string]flattypes.ColumnType{"s": flattypes.ColumnTypeString}, map[string]any{"s": "a"}, true},
-		{"s > 'B'", map[string]flattypes.ColumnType{"s": flattypes.ColumnTypeString}, map[string]any{"s": "A"}, false},
-		{"s <> 'cat_00'", map[string]flattypes.ColumnType{"s": flattypes.ColumnTypeString}, map[string]any{"s": "cat_01"}, true},
-		{"s <> 'cat_00'", map[string]flattypes.ColumnType{"s": flattypes.ColumnTypeString}, map[string]any{"s": "cat_00"}, false},
-		{"s <> 'cat_00'", map[string]flattypes.ColumnType{"s": flattypes.ColumnTypeString}, map[string]any{}, false},
-		{"s > 'a'", map[string]flattypes.ColumnType{"s": flattypes.ColumnTypeString}, map[string]any{"s": []any{"b", "a"}}, false},
+		{"s > 'B'", map[string]Type{"s": String}, map[string]any{"s": "a"}, true},
+		{"s > 'B'", map[string]Type{"s": String}, map[string]any{"s": "A"}, false},
+		{"s <> 'cat_00'", map[string]Type{"s": String}, map[string]any{"s": "cat_01"}, true},
+		{"s <> 'cat_00'", map[string]Type{"s": String}, map[string]any{"s": "cat_00"}, false},
+		{"s <> 'cat_00'", map[string]Type{"s": String}, map[string]any{}, false},
+		{"s > 'a'", map[string]Type{"s": String}, map[string]any{"s": []any{"b", "a"}}, false},
 	} {
 		if got := evalText(t, tc.text, tc.columns, tc.props); got != tc.want {
 			t.Errorf("%s over %v = %v, want %v", tc.text, tc.props, got, tc.want)
@@ -94,10 +92,10 @@ func TestEvalOrdered(t *testing.T) {
 }
 
 func TestEvalBetweenAndIn(t *testing.T) {
-	numeric := map[string]flattypes.ColumnType{"n": flattypes.ColumnTypeLong}
+	numeric := map[string]Type{"n": Int}
 	for _, tc := range []struct {
 		text    string
-		columns map[string]flattypes.ColumnType
+		columns map[string]Type
 		props   map[string]any
 		want    bool
 	}{
@@ -108,7 +106,7 @@ func TestEvalBetweenAndIn(t *testing.T) {
 		{"n IN (1, 2, 3)", numeric, map[string]any{"n": int64(2)}, true},
 		{"n IN ('1', '2')", numeric, map[string]any{"n": int64(1)}, true},
 		{"n IN (1, 2, 3)", numeric, map[string]any{"n": int64(4)}, false},
-		{"s IN ('a', 'b')", map[string]flattypes.ColumnType{"s": flattypes.ColumnTypeString}, map[string]any{"s": "b"}, true},
+		{"s IN ('a', 'b')", map[string]Type{"s": String}, map[string]any{"s": "b"}, true},
 	} {
 		if got := evalText(t, tc.text, tc.columns, tc.props); got != tc.want {
 			t.Errorf("%s over %v = %v, want %v", tc.text, tc.props, got, tc.want)
@@ -117,7 +115,7 @@ func TestEvalBetweenAndIn(t *testing.T) {
 }
 
 func TestEvalLikeAndNull(t *testing.T) {
-	columns := map[string]flattypes.ColumnType{"s": flattypes.ColumnTypeString}
+	columns := map[string]Type{"s": String}
 	for _, tc := range []struct {
 		text  string
 		props map[string]any
@@ -145,7 +143,7 @@ func TestEvalLikeAndNull(t *testing.T) {
 }
 
 func TestEvalLogic(t *testing.T) {
-	numeric := map[string]flattypes.ColumnType{"n": flattypes.ColumnTypeLong}
+	numeric := map[string]Type{"n": Int}
 	for _, tc := range []struct {
 		text  string
 		props map[string]any
@@ -167,13 +165,13 @@ func TestEvalLogic(t *testing.T) {
 }
 
 func TestEvalNumericEqualityAcrossForms(t *testing.T) {
-	if !evalText(t, "n = 2", map[string]flattypes.ColumnType{"n": flattypes.ColumnTypeLong}, map[string]any{"n": float64(2)}) {
+	if !evalText(t, "n = 2", map[string]Type{"n": Int}, map[string]any{"n": float64(2)}) {
 		t.Error("2 should equal 2.0")
 	}
-	if !evalText(t, "n = 2.0", map[string]flattypes.ColumnType{"n": flattypes.ColumnTypeLong}, map[string]any{"n": int64(2)}) {
+	if !evalText(t, "n = 2.0", map[string]Type{"n": Int}, map[string]any{"n": int64(2)}) {
 		t.Error("2.0 should equal 2")
 	}
-	if !evalText(t, "n = 5", map[string]flattypes.ColumnType{"n": flattypes.ColumnTypeString}, map[string]any{"n": "5"}) {
+	if !evalText(t, "n = 5", map[string]Type{"n": String}, map[string]any{"n": "5"}) {
 		t.Error("numeric literal should match its string form")
 	}
 }

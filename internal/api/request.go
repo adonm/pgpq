@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/adonm/postfgb/internal/cql"
+	"github.com/adonm/pgpq/internal/cql"
 )
 
 var reservedParams = map[string]bool{

@@ -9,12 +9,8 @@ github.com/andybalholm/brotli v1.1.1/go.mod h1:05ib4cKhjx3OQYUY22hTVd34Bc8upXjOL
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/flatgeobuf/flatgeobuf/src/go v0.0.0-20261010111732-d8b6d6afcfe2 h1:TabXZpATX46nQV6H1PkJTngXb2SID6MaF/fXiA0uKAo=
-github.com/flatgeobuf/flatgeobuf/src/go v0.0.0-20261010111732-d8b6d6afcfe2/go.mod h1:hnbA71/j1dXZFG/m0oCO6LdNMaiaX+SgZl+MjN/EQE4=
 github.com/golang/geo v0.0.0-20260928092222-7d12f68cfadb h1:z//sB+BhCYNvUrk19E8aWqNx+BBom8p/uD/nh95N/5U=
 github.com/golang/geo v0.0.0-20260928092222-7d12f68cfadb/go.mod h1:Mymr9kRGDc64JPr03TSZmuIBODZ3KyswLzm1xL0HFA8=
-github.com/google/flatbuffers v25.12.19+incompatible h1:haMV2JRRJCe1998HeW/p0X9UaMTK6SDo0ffLn2+DbLs=
-github.com/google/flatbuffers v25.12.19+incompatible/go.mod h1:1AeVuKshWv4vARoZatz6mlQ0JxURH0Kv5+zNeJKJCa8=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=

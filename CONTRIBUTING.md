@@ -1,57 +1,28 @@
 # Contributing
 
-## Goal
+## Shape
 
-The smallest Go package that provides performant 1000x scaling of the spatial records a PostgreSQL database can hold, query, and return — by chunking records into FlatGeobuf and pruning reads with per-chunk statistics.
+`pgpq` is a small Go server for GeoParquet 2.0 over PostgreSQL. Keep the core cgo-free, prefer the standard library, and keep storage to one `bytea` GeoParquet file per cell.
 
-Design decisions live in the design page (`internal/api/design.html`, served at `/design`); the agent guide is [AGENTS.md](AGENTS.md).
+## Checks
 
-## Development setup
-
-Requirements: [mise](https://mise.jdx.dev) (installs Go, just, hk and ko per `mise.toml`) and Docker.
-
-```sh
-mise install
-hk install --mise   # wire the pre-commit hook
-just pg-up
-just ci
-```
-
-No mise? Go 1.27+ and [just](https://github.com/casey/just) work the same.
-
-## Recipes
-
-Run `just` for the full list. The common ones:
-
-| Recipe | Purpose |
+| Command | Purpose |
 | --- | --- |
-| `just ci` | gofmt check, vet, unit tests |
-| `just pg-up` / `just pg-down` | PostgreSQL 18 via docker compose |
-| `just serve` | run the server on `:8080` |
-| `just serve-readonly` | run the read-only worker on `:8080` |
-| `just test-integration` | integration tests against `POSTFGB_TEST_DSN` |
-| `just image-tar` | build the container image with ko |
+| `just ci` | gofmt, vet and unit tests |
+| `just pg-up` / `just pg-down` | local PostgreSQL 18 |
+| `just serve` | writable server on :8080 |
+| `just test-integration` | integration tests against `PGPQ_TEST_DSN` |
 
-## Code style
+DuckDB ingest needs the external `duckdb` binary; set `PGPQ_DUCKDB` when it is not on `PATH`.
 
-- No comments. Names and small functions carry the meaning.
-- Smallest reasonable implementation; stdlib first, one dependency must justify itself.
-- The core path uses no PostgreSQL extensions. Do not add optional extension accelerators (`pg_roaringbitmap`, `hll`, `pg_trgm`, ...): nothing probes for them, and the core path must never need one.
-- Chunk sizing, property encoding, and the FlatGeobuf wire format must stay interoperable with GDAL, QGIS, and the reference implementations. When in doubt, verify with `ogrinfo`.
+## Rules
 
-## Testing
-
-- Unit: `go test ./...` covers FlatGeobuf chunk round-trips, attribute encoding, CQL evaluation, spatial indexing and ingest flattening.
-- Integration: `just pg-up && just test-integration` runs the database-backed layers and API tests against the migrations in `internal/store/migrations/`.
-- The v2 routes are `PUT /v2/collections/{id}` and `GET /v2/collections/{id}/items...`; there is no OAPIF collection listing yet, so GDAL verification is limited to FlatGeobuf pages.
-
-## Pull requests
-
-- `just ci` must pass.
-- One logical change per PR.
-- Performance-affecting changes include benchmark output.
-- Schema changes only in `internal/store/migrations/` as a new numbered file; migrations are append-only.
+- GeoParquet geometry is native `GEOMETRY`/`GEOGRAPHY` with WKB and OGC:CRS84. Do not reintroduce FlatGeobuf or a hand-written spatial index.
+- Parquet compression is internal zstd. Do not wrap the cell file in a second zstd frame.
+- Verify `f=geoparquet` output with GDAL: save the response and run `ogrinfo` on it.
+- Migrations are append-only; never edit an applied migration.
+- Behavior changes and design-page changes ship in the same commit.
 
 ## License
 
-Apache-2.0. Contributions are accepted under the same license. `testdata/poly_landmarks.fgb` is copied from the [FlatGeobuf repository](https://github.com/flatgeobuf/flatgeobuf) and licensed BSD-2-Clause.
+Apache-2.0.

@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/adonm/postfgb/internal/api"
-	"github.com/adonm/postfgb/internal/layer"
-	"github.com/adonm/postfgb/internal/store"
+	"github.com/adonm/pgpq/internal/api"
+	"github.com/adonm/pgpq/internal/layer"
+	"github.com/adonm/pgpq/internal/store"
 )
 
 func main() {
@@ -30,7 +30,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: postfgb serve [flags]")
+	fmt.Fprintln(os.Stderr, "usage: pgpq serve [flags]")
 	os.Exit(2)
 }
 
@@ -42,10 +42,10 @@ func fatal(err error) {
 func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
-	dsn := fs.String("dsn", os.Getenv("POSTFGB_DSN"), "postgres dsn")
+	dsn := fs.String("dsn", os.Getenv("PGPQ_DSN"), "postgres dsn")
 	maxConns := fs.Int("max-conns", 0, "maximum PostgreSQL pool connections (0 keeps the driver default)")
 	minConns := fs.Int("min-conns", 0, "minimum idle PostgreSQL pool connections (0 keeps the driver default)")
-	readonly := fs.Bool("readonly", envBool("POSTFGB_READONLY"), "serve the read-only surface: no ingest and no delete")
+	readonly := fs.Bool("readonly", envBool("PGPQ_READONLY"), "serve the read-only surface: no ingest and no delete")
 	migrate := fs.Bool("migrate", true, "run migrations at startup (skipped by default in --readonly)")
 	fs.Parse(args)
 	ctx := context.Background()

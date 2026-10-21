@@ -3,8 +3,8 @@ package api
 import (
 	"net/http"
 
-	"github.com/adonm/postfgb/internal/layer"
-	"github.com/adonm/postfgb/internal/store"
+	"github.com/adonm/pgpq/internal/layer"
+	"github.com/adonm/pgpq/internal/store"
 )
 
 type Server struct {

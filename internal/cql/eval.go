@@ -5,8 +5,6 @@ import (
 	"math"
 	"math/big"
 	"strings"
-
-	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
 )
 
 type truth int
@@ -17,11 +15,11 @@ const (
 	triTrue
 )
 
-func Match(e Expr, props map[string]any, columns map[string]flattypes.ColumnType) bool {
+func Match(e Expr, props map[string]any, columns map[string]Type) bool {
 	return eval(e, props, columns) == triTrue
 }
 
-func eval(e Expr, props map[string]any, columns map[string]flattypes.ColumnType) truth {
+func eval(e Expr, props map[string]any, columns map[string]Type) truth {
 	switch x := e.(type) {
 	case *Compare:
 		return evalCompare(x, props, columns)
@@ -43,7 +41,7 @@ func eval(e Expr, props map[string]any, columns map[string]flattypes.ColumnType)
 	return triUnknown
 }
 
-func evalCompare(c *Compare, props map[string]any, columns map[string]flattypes.ColumnType) truth {
+func evalCompare(c *Compare, props map[string]any, columns map[string]Type) truth {
 	value := columnValue(c.Value, columns[c.Prop])
 	if c.Op == "=" {
 		if matchEquality(c.Prop, value, props) {
@@ -54,7 +52,7 @@ func evalCompare(c *Compare, props map[string]any, columns map[string]flattypes.
 	return matchOrdered(c.Prop, c.Op, value, props)
 }
 
-func evalBetween(e *Between, props map[string]any, columns map[string]flattypes.ColumnType) truth {
+func evalBetween(e *Between, props map[string]any, columns map[string]Type) truth {
 	lo := columnValue(e.Lo, columns[e.Prop])
 	hi := columnValue(e.Hi, columns[e.Prop])
 	r := triAnd(matchOrdered(e.Prop, ">=", lo, props), matchOrdered(e.Prop, "<=", hi, props))
@@ -64,7 +62,7 @@ func evalBetween(e *Between, props map[string]any, columns map[string]flattypes.
 	return r
 }
 
-func evalIn(e *In, props map[string]any, columns map[string]flattypes.ColumnType) truth {
+func evalIn(e *In, props map[string]any, columns map[string]Type) truth {
 	r := triFalse
 	for _, v := range e.Values {
 		if matchEquality(e.Prop, columnValue(v, columns[e.Prop]), props) {
@@ -78,7 +76,7 @@ func evalIn(e *In, props map[string]any, columns map[string]flattypes.ColumnType
 	return r
 }
 
-func evalLike(e *Like, props map[string]any, _ map[string]flattypes.ColumnType) truth {
+func evalLike(e *Like, props map[string]any, _ map[string]Type) truth {
 	value, ok := props[e.Prop]
 	if !ok || value == nil {
 		return triUnknown
@@ -109,7 +107,7 @@ func evalIsNull(e *IsNull, props map[string]any) truth {
 	return triFalse
 }
 
-func columnValue(value any, column flattypes.ColumnType) any {
+func columnValue(value any, column Type) any {
 	text, ok := value.(string)
 	if !ok {
 		return value
@@ -119,7 +117,7 @@ func columnValue(value any, column flattypes.ColumnType) any {
 			return n
 		}
 	}
-	if column == flattypes.ColumnTypeBool {
+	if column == Bool {
 		switch text {
 		case "true":
 			return true
@@ -130,16 +128,8 @@ func columnValue(value any, column flattypes.ColumnType) any {
 	return value
 }
 
-func numericColumnType(column flattypes.ColumnType) bool {
-	switch column {
-	case flattypes.ColumnTypeByte, flattypes.ColumnTypeUByte,
-		flattypes.ColumnTypeShort, flattypes.ColumnTypeUShort,
-		flattypes.ColumnTypeInt, flattypes.ColumnTypeUInt,
-		flattypes.ColumnTypeLong, flattypes.ColumnTypeULong,
-		flattypes.ColumnTypeFloat, flattypes.ColumnTypeDouble:
-		return true
-	}
-	return false
+func numericColumnType(column Type) bool {
+	return column == Int || column == Double
 }
 
 func matchEquality(prop string, value any, props map[string]any) bool {

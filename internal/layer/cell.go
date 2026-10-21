@@ -4,52 +4,64 @@ import (
 	"context"
 	"errors"
 
-	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
+	"github.com/jackc/pgx/v5"
 
-	"github.com/adonm/postfgb/internal/chunk"
-	"github.com/adonm/postfgb/internal/fgb"
+	"github.com/adonm/pgpq/internal/geo"
+	"github.com/adonm/pgpq/internal/spatial"
 )
 
-type cellFile struct {
-	header *flattypes.Header
-	layout *fgb.Layout
-	fence  *fgb.Fence
-	cols   []chunk.Column
+type cellKey struct {
+	uid     int64
+	version int64
+	level   int
+	cell    uint64
 }
 
-func cellFileSize(c *cellFile) int64 {
-	return int64(c.layout.Count())*64 + int64(c.fence.Len())*16 + 4096
+type cellMeta struct {
+	cell     uint64
+	level    int
+	features int
+	bounds   [4]float64
+	firstKey uint64
+	firstID  string
+	lastKey  uint64
+	lastID   string
+	zone     string
 }
 
-func (l *Layer) cellFile(ctx context.Context, fileID, fenceFile int64) (*cellFile, error) {
-	if c, ok := l.files.Get(fileID); ok {
-		return c, nil
+type catalogKey struct {
+	uid     int64
+	version int64
+	level   int
+	cell    uint64
+}
+
+func (l *Layer) cellFile(ctx context.Context, coll Collection, meta cellMeta) (*geo.File, error) {
+	key := cellKey{uid: coll.UID, version: coll.Version, level: meta.level, cell: meta.cell}
+	if file, ok := l.cells.Get(key); ok {
+		return file, nil
 	}
-	reader, err := l.blocks.Open(ctx, fileID)
-	if err != nil {
-		return nil, stale(err)
+	var data []byte
+	err := l.pool.QueryRow(ctx, `select data from pgpq.cells where collection_uid = $1 and level = $2 and cell = $3`,
+		coll.UID, meta.level, spatial.ToOrdered(meta.cell)).Scan(&data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrStale
 	}
-	layout, err := fgb.ReadLayout(reader, reader.Size())
 	if err != nil {
 		return nil, err
 	}
-	if fenceFile == 0 {
-		return nil, errors.New("layer: cell has no key fence; reload the collection")
-	}
-	fenceReader, err := l.blocks.Open(ctx, fenceFile)
-	if err != nil {
-		return nil, stale(err)
-	}
-	fence, err := fgb.ReadFence(fenceReader, fenceReader.Size())
+	file, err := geo.Open(data)
 	if err != nil {
 		return nil, err
 	}
-	c := &cellFile{
-		header: layout.Header(),
-		layout: layout,
-		fence:  fence,
-		cols:   chunk.HeaderColumns(layout.Header()),
+	l.cells.Add(key, file)
+	return file, nil
+}
+
+func catalogSize(metas []cellMeta) int64 {
+	var n int64
+	for _, meta := range metas {
+		n += int64(192 + len(meta.zone) + len(meta.lastID))
 	}
-	l.files.Add(fileID, c)
-	return c, nil
+	return n
 }

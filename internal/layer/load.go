@@ -1,76 +1,27 @@
 package layer
 
 import (
-	"bytes"
+	"cmp"
 	"context"
-	"encoding/json"
-	"errors"
 	"math"
+	"runtime"
 	"slices"
-	"strings"
 	"sync"
 
-	"github.com/flatgeobuf/flatgeobuf/src/go/flattypes"
-
-	"github.com/adonm/postfgb/internal/blocks"
-	"github.com/adonm/postfgb/internal/chunk"
-	"github.com/adonm/postfgb/internal/fgb"
-	"github.com/adonm/postfgb/internal/ingest"
-	"github.com/adonm/postfgb/internal/spatial"
-	"github.com/adonm/postfgb/internal/stats"
+	"github.com/adonm/pgpq/internal/geo"
+	"github.com/adonm/pgpq/internal/spatial"
 )
 
 const (
-	detailLevel       = 0
 	overviewSampleCap = 2048
-	sampleLatitude    = 48.0
-	metersPerDegree   = 111320.0
+	nodeSize          = 16
 	loadWorkers       = 2
 )
 
-func samplePixelMeters(level int) float64 {
-	var zoom float64
-	switch level {
-	case 2:
-		zoom = 6
-	case 4:
-		zoom = 8
-	case 6:
-		zoom = 10
-	default:
-		return 0
-	}
-	return 2 * math.Pi * 6378137 * math.Cos(sampleLatitude*math.Pi/180) / (256 * math.Exp2(zoom))
-}
-
-func sampleTooSmall(bounds [4]float64, level int) bool {
-	limit := samplePixelMeters(level)
-	if limit == 0 {
-		return false
-	}
-	lat := (bounds[1] + bounds[3]) / 2 * math.Pi / 180
-	width := (bounds[2] - bounds[0]) * metersPerDegree * math.Cos(lat)
-	height := (bounds[3] - bounds[1]) * metersPerDegree
-	size := math.Max(width, height)
-	return size > 0 && size < limit
-}
-
-// coarseStep rebuilds one overview level from the level below it.
-type coarseStep struct {
+var coarseSteps = []struct {
 	level int
 	from  int
-}
-
-var (
-	coarseSteps  = []coarseStep{{level: 6, from: detailLevel}, {level: 4, from: 6}, {level: 2, from: 4}}
-	servedLevels = []int{2, 4, 6}
-)
-
-type blobPut func(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error)
-
-func (l *Layer) putBlob(ctx context.Context, collection, kind, encoding string, data []byte) (int64, error) {
-	return l.blocks.PutEncoded(ctx, collection, kind, encoding, data)
-}
+}{{6, 0}, {4, 6}, {2, 4}}
 
 type entry struct {
 	key    uint64
@@ -81,46 +32,51 @@ type entry struct {
 	bounds [4]float64
 }
 
-type chunkRow struct {
-	cell      uint64
-	level     int
-	first     entry
-	last      entry
-	bounds    [4]float64
-	rows      int
-	fileID    int64
-	colFile   int64
-	fenceFile int64
-	zone      string
+type cellRow struct {
+	cell     uint64
+	level    int
+	features int
+	bounds   [4]float64
+	firstKey uint64
+	firstID  string
+	lastKey  uint64
+	lastID   string
+	zone     string
+	data     []byte
 }
 
 type LoadResult struct {
 	Collection string `json:"collection"`
 	Features   int    `json:"features"`
-	Chunks     int    `json:"chunks"`
+	Cells      int    `json:"cells"`
 	Partitions int    `json:"partitions"`
 }
 
-func (l *Layer) Load(ctx context.Context, name string, ds ingest.Dataset, cells []uint64) (LoadResult, error) {
-	if ds.IDColumn == "" {
-		return LoadResult{}, invalidf("the collection needs an id column")
-	}
-	if cells == nil && len(ds.Features) == 0 {
-		return LoadResult{}, invalidf("a whole-collection load needs features")
+func (l *Layer) Load(ctx context.Context, name string, ds geo.Dataset, cells []uint64) (LoadResult, error) {
+	if ds.IDColumn == "" || ds.Geometry == "" {
+		return LoadResult{}, invalidf("the collection needs an id and geometry column")
 	}
 	entries, err := indexFeatures(ds, cells)
 	if err != nil {
 		return LoadResult{}, err
 	}
 	groups := groupByCell(entries)
-	chunks, err := l.writeCells(ctx, l.putBlob, name, ds, groups, detailLevel)
+	rows, err := l.writeCells(ctx, name, ds, groups, 0)
 	if err != nil {
 		return LoadResult{}, err
 	}
-	return l.commit(ctx, name, ds, cells, chunks, entries)
+	for _, step := range coarseSteps {
+		sampled := sampleOverview(ds, entries, step.level)
+		overview, err := l.writeCells(ctx, name, ds, groupByCell(sampled), step.level)
+		if err != nil {
+			return LoadResult{}, err
+		}
+		rows = append(rows, overview...)
+	}
+	return l.commit(ctx, name, ds, cells, rows, groups)
 }
 
-func indexFeatures(ds ingest.Dataset, cells []uint64) ([]entry, error) {
+func indexFeatures(ds geo.Dataset, cells []uint64) ([]entry, error) {
 	listed := make(map[uint64]bool, len(cells))
 	for _, cell := range cells {
 		listed[cell] = true
@@ -137,44 +93,22 @@ func indexFeatures(ds ingest.Dataset, cells []uint64) ([]entry, error) {
 		if cells != nil && !listed[cell] {
 			return nil, invalidf("feature %d lies outside the listed cells", i)
 		}
-		id, err := canonicalID(ds.Features[i], ds.IDColumn)
-		if err != nil {
-			return nil, invalidf("feature %d: %v", i, err)
+		if _, dup := seen[ds.Features[i].ID]; dup {
+			return nil, invalidf("duplicate id %q", ds.Features[i].ID)
 		}
-		if _, dup := seen[id]; dup {
-			return nil, invalidf("duplicate id %q", id)
-		}
-		seen[id] = struct{}{}
-		out = append(out, entry{key: key, id: id, cell: cell, index: i, bounds: bounds})
+		seen[ds.Features[i].ID] = struct{}{}
+		out = append(out, entry{key: key, id: ds.Features[i].ID, hash: idHash(ds.Features[i].ID), cell: cell, index: i, bounds: bounds})
 	}
 	return out, nil
 }
 
 func finite(bounds [4]float64) bool {
-	for _, v := range bounds {
-		if math.IsNaN(v) || math.IsInf(v, 0) {
+	for _, value := range bounds {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return false
 		}
 	}
 	return true
-}
-
-func canonicalID(f chunk.InputFeature, column string) (string, error) {
-	raw, ok := f.Properties[column]
-	if !ok || len(raw) == 0 || string(raw) == "null" {
-		return "", errors.New("missing id")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return "", err
-	}
-	text, ok := stats.CanonicalText(value)
-	if !ok || text == "" {
-		return "", errors.New("unusable id value")
-	}
-	return text, nil
 }
 
 func groupByCell(entries []entry) map[uint64][]entry {
@@ -190,7 +124,7 @@ func groupByCell(entries []entry) map[uint64][]entry {
 	return groups
 }
 
-func (l *Layer) writeCells(ctx context.Context, put blobPut, name string, ds ingest.Dataset, groups map[uint64][]entry, level int) ([]chunkRow, error) {
+func (l *Layer) writeCells(ctx context.Context, name string, ds geo.Dataset, groups map[uint64][]entry, level int) ([]cellRow, error) {
 	cells := make([]uint64, 0, len(groups))
 	for cell := range groups {
 		cells = append(cells, cell)
@@ -201,17 +135,17 @@ func (l *Layer) writeCells(ctx context.Context, put blobPut, name string, ds ing
 	var (
 		mu    sync.Mutex
 		wg    sync.WaitGroup
-		out   []chunkRow
+		out   []cellRow
 		first error
 	)
-	sem := make(chan struct{}, loadWorkers)
+	sem := make(chan struct{}, min(loadWorkers, runtime.NumCPU()))
 	for _, cell := range cells {
 		sem <- struct{}{}
 		wg.Add(1)
 		go func(cell uint64) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			rows, err := l.writeCell(ctx, put, name, ds, cell, groups[cell], level)
+			row, err := l.writeCell(ctx, name, ds, cell, groups[cell], level)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -221,7 +155,7 @@ func (l *Layer) writeCells(ctx context.Context, put blobPut, name string, ds ing
 				}
 				return
 			}
-			out = append(out, rows...)
+			out = append(out, row)
 		}(cell)
 	}
 	wg.Wait()
@@ -231,89 +165,95 @@ func (l *Layer) writeCells(ctx context.Context, put blobPut, name string, ds ing
 	return out, nil
 }
 
-func (l *Layer) writeCell(ctx context.Context, put blobPut, name string, ds ingest.Dataset, cell uint64, entries []entry, level int) ([]chunkRow, error) {
-	row, err := l.writeRange(ctx, put, name, ds, cell, entries, level)
-	if err != nil {
-		return nil, err
-	}
-	return []chunkRow{row}, nil
-}
-
-func (l *Layer) writeRange(ctx context.Context, put blobPut, name string, ds ingest.Dataset, cell uint64, entries []entry, level int) (chunkRow, error) {
-	batch := make([]chunk.InputFeature, len(entries))
-	keys := make([]uint64, len(entries))
-	ids := make([]string, len(entries))
+func (l *Layer) writeCell(ctx context.Context, name string, ds geo.Dataset, cell uint64, entries []entry, level int) (cellRow, error) {
+	features := make([]geo.Feature, len(entries))
+	bounds := entries[0].bounds
 	for i, e := range entries {
-		batch[i] = ds.Features[e.index]
-		keys[i] = e.key
-		ids[i] = e.id
+		features[i] = ds.Features[e.index]
+		features[i].Key = e.key
+		features[i].ID = e.id
+		if i > 0 {
+			bounds[0] = min(bounds[0], e.bounds[0])
+			bounds[1] = min(bounds[1], e.bounds[1])
+			bounds[2] = max(bounds[2], e.bounds[2])
+			bounds[3] = max(bounds[3], e.bounds[3])
+		}
 	}
-	encoded, err := encodeCell(name, ds.Header, batch, keys, ids)
+	raw, err := geo.EncodeCell(ds, features)
 	if err != nil {
-		return chunkRow{}, err
+		return cellRow{}, err
 	}
-	fileID, err := put(ctx, name, "fgb", blocks.EncodingZstdBlock, encoded.fgb)
+	zone, err := encodeZone(ds.Columns, features)
 	if err != nil {
-		return chunkRow{}, err
+		return cellRow{}, err
 	}
-	colFile, err := put(ctx, name, "cols", "", encoded.columns)
-	if err != nil {
-		return chunkRow{}, err
-	}
-	fenceFile, err := put(ctx, name, "fence", "", fgb.EncodeFence(encoded.fence))
-	if err != nil {
-		return chunkRow{}, err
-	}
-	return chunkRow{
-		cell:      cell,
-		level:     level,
-		first:     entries[0],
-		last:      entries[len(entries)-1],
-		bounds:    unionBounds(entries),
-		rows:      len(entries),
-		fileID:    fileID,
-		colFile:   colFile,
-		fenceFile: fenceFile,
-		zone:      encoded.zone,
+	last := entries[len(entries)-1]
+	return cellRow{
+		cell:     cell,
+		level:    level,
+		features: len(entries),
+		bounds:   bounds,
+		firstKey: entries[0].key,
+		firstID:  entries[0].id,
+		lastKey:  last.key,
+		lastID:   last.id,
+		zone:     zone,
+		data:     raw,
 	}, nil
 }
 
-type cellEncoding struct {
-	fgb     []byte
-	fence   []fgb.FenceEntry
-	columns []byte
-	zone    string
+func sampleOverview(ds geo.Dataset, entries []entry, level int) []entry {
+	groups := map[uint64][]entry{}
+	for _, e := range entries {
+		if sampleTooSmall(e.bounds, level) {
+			continue
+		}
+		cell := spatial.Level(e.key, level)
+		e.cell = cell
+		groups[cell] = append(groups[cell], e)
+	}
+	var out []entry
+	for _, group := range groups {
+		slices.SortFunc(group, func(a, b entry) int {
+			if c := cmp.Compare(a.hash, b.hash); c != 0 {
+				return c
+			}
+			return compareKeyID(a.key, a.id, b.key, b.id)
+		})
+		group = group[:min(len(group), overviewSampleCap)]
+		slices.SortFunc(group, func(a, b entry) int {
+			return compareKeyID(a.key, a.id, b.key, b.id)
+		})
+		out = append(out, group...)
+	}
+	return out
 }
 
-func encodeCell(name string, header *flattypes.Header, batch []chunk.InputFeature, keys []uint64, ids []string) (cellEncoding, error) {
-	data, fence, err := chunk.EncodeCell(name, header, batch, keys, ids)
-	if err != nil {
-		return cellEncoding{}, err
+func samplePixelMeters(level int) float64 {
+	var zoom float64
+	switch level {
+	case 2:
+		zoom = 6
+	case 4:
+		zoom = 8
+	case 6:
+		zoom = 10
+	default:
+		return 0
 	}
-	props := make([]map[string]json.RawMessage, len(batch))
-	for i := range batch {
-		props[i] = batch[i].Properties
-	}
-	blob, summaries, err := encodeParquetColumns(chunk.HeaderColumns(header), props)
-	if err != nil {
-		return cellEncoding{}, err
-	}
-	zone, err := encodeZoneSummaries(summaries)
-	if err != nil {
-		return cellEncoding{}, err
-	}
-	return cellEncoding{fgb: data, fence: fence, columns: blob, zone: zone}, nil
+	return 2 * math.Pi * 6378137 * math.Cos(48*math.Pi/180) / (256 * math.Exp2(zoom))
 }
 
-func unionBounds(entries []entry) [4]float64 {
-	b := entries[0].bounds
-	for _, e := range entries[1:] {
-		b[0] = math.Min(b[0], e.bounds[0])
-		b[1] = math.Min(b[1], e.bounds[1])
-		b[2] = math.Max(b[2], e.bounds[2])
-		b[3] = math.Max(b[3], e.bounds[3])
+func sampleTooSmall(bounds [4]float64, level int) bool {
+	limit := samplePixelMeters(level)
+	if limit == 0 {
+		return false
 	}
-	return b
+	lat := (bounds[1] + bounds[3]) / 2 * math.Pi / 180
+	width := (bounds[2] - bounds[0]) * 111320 * math.Cos(lat)
+	height := (bounds[3] - bounds[1]) * 111320
+	size := math.Max(width, height)
+	return size > 0 && size < limit
 }
 
 func compareKeyID(k1 uint64, id1 string, k2 uint64, id2 string) int {
@@ -322,6 +262,10 @@ func compareKeyID(k1 uint64, id1 string, k2 uint64, id2 string) int {
 		return -1
 	case k1 > k2:
 		return 1
+	case id1 < id2:
+		return -1
+	case id1 > id2:
+		return 1
 	}
-	return strings.Compare(id1, id2)
+	return 0
 }
