@@ -11,8 +11,6 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
-
-	"github.com/adonm/pgpq/internal/cql"
 )
 
 const preallocateRows = 1 << 20
@@ -39,7 +37,7 @@ func ReadDataset(r io.Reader, opts Options) (Dataset, error) {
 	for i := range off {
 		off[i] = -1
 	}
-	types := make([]cql.Type, len(fields))
+	types := make([]Type, len(fields))
 	attrs := make([]Column, 0, len(fields)-1)
 	key := -1
 	for i, field := range fields {
@@ -162,27 +160,27 @@ func checkCRS(crs string) error {
 	return invalid("only OGC:CRS84/EPSG:4326 geometries are accepted")
 }
 
-func columnType(field parquet.Field) cql.Type {
+func columnType(field parquet.Field) Type {
 	if field.Type().PhysicalType() == nil {
-		return cql.String
+		return String
 	}
 	if logical := field.Type().LogicalType(); logical != nil {
 		if _, ok := logical.Value.(*format.JsonType); ok {
-			return cql.JSON
+			return JSON
 		}
 	}
 	switch field.Type().Kind() {
 	case parquet.Boolean:
-		return cql.Bool
+		return Bool
 	case parquet.Int32, parquet.Int64:
-		return cql.Int
+		return Int
 	case parquet.Float, parquet.Double:
-		return cql.Double
+		return Double
 	}
-	return cql.String
+	return String
 }
 
-func valueAny(typ cql.Type, value parquet.Value) any {
+func valueAny(typ Type, value parquet.Value) any {
 	switch value.Kind() {
 	case parquet.Boolean:
 		return value.Boolean()
@@ -196,7 +194,7 @@ func valueAny(typ cql.Type, value parquet.Value) any {
 		return value.Double()
 	case parquet.ByteArray, parquet.FixedLenByteArray:
 		raw := append([]byte(nil), value.ByteArray()...)
-		if typ == cql.JSON {
+		if typ == JSON {
 			return json.RawMessage(raw)
 		}
 		return string(raw)

@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/parquet-go/parquet-go"
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/wkb"
-
-	"github.com/adonm/pgpq/internal/cql"
 )
 
 func pointAt(t *testing.T, x, y float64) []byte {
@@ -21,46 +20,12 @@ func pointAt(t *testing.T, x, y float64) []byte {
 	return raw
 }
 
-func TestCellRoundTrip(t *testing.T) {
-	point := func(x, y float64) []byte { return pointAt(t, x, y) }
-	cols := []Column{{Name: "id", Type: cql.String}, {Name: "n", Type: cql.Int}}
-	features := []Feature{
-		{Geometry: point(2.35, 48.85), Props: map[string]any{"id": "a", "n": int64(1)}, Key: 10},
-		{Geometry: point(2.36, 48.86), Props: map[string]any{"id": "b", "n": int64(2)}, Key: 20},
-	}
-	for i := range features {
-		features[i].Bounds, _ = Bounds(features[i].Geometry)
-	}
-	data, err := EncodeCell(Dataset{Columns: cols, Geometry: "geometry", IDColumn: "id"}, features)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.HasPrefix(data, []byte("PAR1")) {
-		t.Fatal("cell is not a Parquet file")
-	}
-	file, err := Open(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	box, ok := file.GroupBBox(0)
-	if !ok || box[0] != 2.35 || box[2] != 2.36 {
-		t.Fatalf("group bbox = %v %v", box, ok)
-	}
-	got, err := file.RowGroups([]int{0}, "id")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || got[0].ID != "a" || got[1].Props["n"] != int64(2) {
-		t.Fatalf("rows = %+v", got)
-	}
-}
-
-func TestReadDatasetRoundTrip(t *testing.T) {
+func TestDatasetRoundTrip(t *testing.T) {
 	cols := []Column{
-		{Name: "id", Type: cql.String},
-		{Name: "n", Type: cql.Int},
-		{Name: "score", Type: cql.Double},
-		{Name: "tags", Type: cql.JSON},
+		{Name: "id", Type: String},
+		{Name: "n", Type: Int},
+		{Name: "score", Type: Double},
+		{Name: "tags", Type: JSON},
 	}
 	features := []Feature{
 		{ID: "a", Geometry: pointAt(t, 2.35, 48.85), Props: map[string]any{"id": "a", "n": int64(1), "score": 1.5, "tags": `{"k":1}`}, Key: 10},
@@ -69,7 +34,7 @@ func TestReadDatasetRoundTrip(t *testing.T) {
 	for i := range features {
 		features[i].Bounds, _ = Bounds(features[i].Geometry)
 	}
-	data, err := EncodeCell(Dataset{Columns: cols, Geometry: "geometry", IDColumn: "id"}, features)
+	data, err := EncodeShard(Dataset{Columns: cols, Geometry: "geometry", IDColumn: "id"}, features)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,33 +42,22 @@ func TestReadDatasetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ds.Geometry != "geometry" || ds.IDColumn != "id" {
-		t.Fatalf("dataset = %q %q", ds.Geometry, ds.IDColumn)
+	if ds.Geometry != "geometry" || ds.IDColumn != "id" || len(ds.Features) != 2 {
+		t.Fatalf("dataset = %+v", ds)
 	}
-	if len(ds.Columns) != len(cols) {
-		t.Fatalf("columns = %+v", ds.Columns)
+	if ds.Features[0].ID != "a" || !bytes.Equal(ds.Features[0].Geometry, features[0].Geometry) {
+		t.Fatalf("first feature = %+v", ds.Features[0])
 	}
-	if len(ds.Features) != len(features) {
-		t.Fatalf("features = %d", len(ds.Features))
+	if ds.Features[1].Props["n"] != int64(2) || ds.Features[1].Props["score"] != 2.5 {
+		t.Fatalf("second props = %+v", ds.Features[1].Props)
 	}
-	for i, feature := range ds.Features {
-		if feature.ID != features[i].ID {
-			t.Fatalf("feature %d = %+v", i, feature)
-		}
-		if !bytes.Equal(feature.Geometry, features[i].Geometry) {
-			t.Fatalf("feature %d geometry changed", i)
-		}
-		if feature.Props["n"] != int64(i+1) || feature.Props["score"] != float64(i)+1.5 {
-			t.Fatalf("feature %d props = %+v", i, feature.Props)
-		}
-		if string(feature.Props["tags"].(json.RawMessage)) != fmt.Sprintf(`{"k":%d}`, i+1) {
-			t.Fatalf("feature %d tags = %v", i, feature.Props["tags"])
-		}
+	if string(ds.Features[1].Props["tags"].(json.RawMessage)) != `{"k":2}` {
+		t.Fatalf("tags = %v", ds.Features[1].Props["tags"])
 	}
 }
 
-func TestEncodeCellRowGroups(t *testing.T) {
-	cols := []Column{{Name: "id", Type: cql.String}}
+func TestEncodeShardRowGroups(t *testing.T) {
+	cols := []Column{{Name: "id", Type: String}}
 	features := make([]Feature, rowGroupRows+1)
 	for i := range features {
 		features[i] = Feature{
@@ -113,58 +67,28 @@ func TestEncodeCellRowGroups(t *testing.T) {
 		}
 		features[i].Bounds, _ = Bounds(features[i].Geometry)
 	}
-	data, err := EncodeCell(Dataset{Columns: cols, Geometry: "geometry", IDColumn: "id"}, features)
+	data, err := EncodeShard(Dataset{Columns: cols, Geometry: "geometry", IDColumn: "id"}, features)
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := Open(bytes.NewReader(data), int64(len(data)))
+	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := file.GroupCount(); got != 2 {
+	if got := len(file.RowGroups()); got != 2 {
 		t.Fatalf("row groups = %d, want 2", got)
 	}
-	got, err := file.RowGroups([]int{0, 1}, "id")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != len(features) || got[len(got)-1].ID != "f02048" {
-		t.Fatalf("rows = %d, last = %q", len(got), got[len(got)-1].ID)
+	if file.NumRows() != int64(len(features)) {
+		t.Fatalf("rows = %d", file.NumRows())
 	}
 }
 
-func TestCountAttributes(t *testing.T) {
-	cols := []Column{{Name: "id", Type: cql.String}, {Name: "n", Type: cql.Int}}
-	features := []Feature{
-		{Geometry: pointAt(t, 1, 1), Props: map[string]any{"id": "a", "n": int64(1)}, Key: 1},
-		{Geometry: pointAt(t, 2, 2), Props: map[string]any{"id": "b"}, Key: 2},
-		{Geometry: pointAt(t, 3, 3), Props: map[string]any{"id": "c", "n": int64(3)}, Key: 3},
-	}
-	for i := range features {
-		features[i].Bounds, _ = Bounds(features[i].Geometry)
-	}
-	data, err := EncodeCell(Dataset{Columns: cols, Geometry: "geometry", IDColumn: "id"}, features)
-	if err != nil {
+func TestPROJJSONCRS(t *testing.T) {
+	crs := `{"$schema":"https://proj.org/schemas/v0.5/projjson.schema.json","type":"GeographicCRS","name":"WGS 84 (CRS84)","id":{"authority":"OGC","code":"CRS84"}}`
+	if err := checkCRS(crs); err != nil {
 		t.Fatal(err)
 	}
-	file, err := Open(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := make(map[string]bool, len(features))
-	matched, err := file.Count([]int{0}, func(props map[string]any) bool {
-		id := props["id"].(string)
-		_, hasN := props["n"]
-		if hasN != (id != "b") {
-			t.Fatalf("row %q has n = %v", id, hasN)
-		}
-		seen[id] = true
-		return hasN
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(seen) != len(features) || matched != 2 {
-		t.Fatalf("seen %d features, matched %d", len(seen), matched)
+	if err := checkCRS(`{"id":{"authority":"EPSG","code":3857}}`); err == nil {
+		t.Fatal("Web Mercator accepted")
 	}
 }

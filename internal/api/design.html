@@ -22,11 +22,15 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 .node{fill:#1a2330;stroke:#4c5d72;stroke-width:1.2}
 .node.hot{stroke:var(--accent)}
 .node.ok{stroke:var(--ok)}
+.node.external{fill:#121821;stroke:#3c4858}
 .node-label{fill:var(--ink);font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .node-sub{fill:var(--muted);font:10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.edge{fill:none;stroke:#4c5d72;stroke-width:1.7;marker-end:url(#arrow)}
+.edge{fill:none;stroke:#4c5d72;stroke-width:1.7}
 .edge.dashed{stroke-dasharray:7 10}
 .edge.hot{stroke:var(--accent)}
+.dash{stroke-dasharray:7 10}
+.boundary{fill:none;stroke:#3a4655;stroke-width:1.2;stroke-dasharray:6 8}
+.zone-label{fill:var(--muted);font:10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.08em;text-transform:uppercase}
 .badge-soft{border:1px solid var(--line);color:var(--muted);font-weight:500}
 .section-kicker{font-size:.72rem;color:var(--accent);letter-spacing:.12em;text-transform:uppercase}
 .c4{font-size:.68rem;border:1px solid var(--line);border-radius:99px;padding:.05rem .45rem;color:var(--muted)}
@@ -50,11 +54,14 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <li class="nav-item"><a class="nav-link" href="#context">Context</a></li>
 <li class="nav-item"><a class="nav-link" href="#containers">Containers</a></li>
 <li class="nav-item"><a class="nav-link" href="#components">Components</a></li>
-<li class="nav-item"><a class="nav-link" href="#ingest">Ingest flow</a></li>
-<li class="nav-item"><a class="nav-link" href="#read">Read flow</a></li>
-<li class="nav-item"><a class="nav-link" href="#howto">How to test</a></li>
+<li class="nav-item"><a class="nav-link" href="#put">PUT replace</a></li>
+<li class="nav-item"><a class="nav-link" href="#post">POST upsert</a></li>
+<li class="nav-item"><a class="nav-link" href="#range">Range read</a></li>
+<li class="nav-item"><a class="nav-link" href="#howto">How-to</a></li>
 <li class="nav-item"><a class="nav-link" href="#reference">Reference</a></li>
+<li class="nav-item"><a class="nav-link" href="#explanation">Explanation</a></li>
 <li class="nav-item"><a class="nav-link" href="#measured">Measured</a></li>
+<li class="nav-item"><a class="nav-link" href="#limits">Limits</a></li>
 </ul>
 </nav>
 </header>
@@ -63,59 +70,78 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <section class="hero border-bottom border-secondary-subtle py-5">
 <div class="container py-lg-4">
 <p class="eyebrow mb-2">Design contract · C4 + Diátaxis</p>
-<h1 class="display-5 fw-semibold">GeoParquet 2.0 inside PostgreSQL.</h1>
-<p class="lead text-body-secondary col-xl-9">One logical GeoParquet file per S2 L8 cell, stored as 8,120-byte inline <code>bytea</code> chunks. Native Parquet geometry and row-group statistics do spatial pruning; no tile pyramid and no sidecar index.</p>
+<h1 class="display-5 fw-semibold">One collection. One virtual GeoParquet 2.0 file.</h1>
+<p class="lead text-body-secondary col-xl-9">pgpq v2 keeps complete, immutable native GeoParquet 2.0 shards in PostgreSQL and serves them as one logical file. Producers upload finished files; clients read HTTP ranges and do bbox and filter work locally. The server validates, stores, merges and stitches bytes: it never converts or queries.</p>
 <div class="d-flex flex-wrap gap-2 mt-4">
-<span class="badge text-bg-success">GeoParquet 2.0 upload</span>
-<span class="badge text-bg-success">GeoParquet 2.0</span>
-<span class="badge text-bg-success">2,048-row groups</span>
-<span class="badge text-bg-success">L8 compaction</span>
-<span class="badge badge-soft">hourly batches</span>
-<span class="badge badge-soft">no build HTML</span>
+<span class="badge text-bg-success">native GeoParquet 2.0</span>
+<span class="badge text-bg-success">HTTP Range</span>
+<span class="badge text-bg-success">immutable versions</span>
+<span class="badge badge-soft">512 MiB shard target</span>
+<span class="badge badge-soft">readonly workers</span>
+<span class="badge badge-soft">no converter</span>
+<span class="badge badge-soft">static HTML</span>
 </div>
 </div>
 </section>
 
 <div class="container py-5">
 <div class="alert alert-secondary" role="note">
-<strong>Reading guide.</strong> C4 separates structure from behaviour: <a href="#context">Context</a> and <a href="#containers">Containers</a> are for orientation, <a href="#components">Components</a> and <a href="#reference">Reference</a> are exhaustive topology, and the <a href="#ingest">ingest</a>/<a href="#read">read</a> dynamic diagrams show one runtime story each. Measurements and tradeoffs are separated from the topology.
+<strong>Reading guide.</strong> C4 separates structure from behaviour: <a href="#context">Context</a> and <a href="#containers">Containers</a> are for orientation, <a href="#components">Components</a> and <a href="#reference">Reference</a> are the exhaustive topology, and the three dynamic views show one runtime story each: <a href="#put">PUT replace</a>, <a href="#post">POST upsert</a> and the <a href="#range">virtual Range read</a>. <a href="#howto">How-to</a> is task guidance; <a href="#explanation">Explanation</a>, <a href="#measured">Measured</a> and <a href="#limits">Limits</a> carry tradeoffs and evidence.
 </div>
 
 <section id="context" class="mb-5" aria-labelledby="context-title">
 <div class="d-flex align-items-baseline gap-2"><h2 id="context-title" class="h3 mb-3">System context</h2><span class="c4">C4 L1</span></div>
-<p class="text-body-secondary">Who uses pgpq and what sits outside it. No internal components or timing.</p>
+<p class="text-body-secondary">Who uses pgpq and what sits outside it. No internal components or request ordering.</p>
 <div class="row g-4">
 <div class="col-lg-8">
 <figure class="figure">
-<svg viewBox="0 0 900 330" role="img" aria-labelledby="context-svg-title">
-<title id="context-svg-title">Operators and data loaders supply native GeoParquet 2.0 files. API clients receive JSON or GeoParquet through an adjacent auth proxy. pgpq stores cells and catalog in PostgreSQL.</title>
-<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
-<rect class="node" x="30" y="42" width="180" height="72" rx="8"/><text class="node-label" x="120" y="70" text-anchor="middle">Data loader</text><text class="node-sub" x="120" y="89" text-anchor="middle">GeoParquet 2.0 files</text>
-<rect class="node" x="30" y="216" width="180" height="72" rx="8"/><text class="node-label" x="120" y="244" text-anchor="middle">API client</text><text class="node-sub" x="120" y="263" text-anchor="middle">maps · dashboards · tools</text>
-<rect class="node hot" x="360" y="118" width="180" height="92" rx="10"/><text class="node-label" x="450" y="151" text-anchor="middle">pgpq</text><text class="node-sub" x="450" y="170" text-anchor="middle">GeoParquet cell service</text><text class="node-sub" x="450" y="185" text-anchor="middle">JSON / GeoParquet</text>
-<rect class="node" x="690" y="42" width="180" height="72" rx="8"/><text class="node-label" x="780" y="70" text-anchor="middle">PostgreSQL 18</text><text class="node-sub" x="780" y="89" text-anchor="middle">catalog + inline chunks</text>
-<rect class="node" x="690" y="216" width="180" height="72" rx="8"/><text class="node-label" x="780" y="244" text-anchor="middle">Auth proxy</text><text class="node-sub" x="780" y="263" text-anchor="middle">external · readonly workers</text>
-<path class="edge" d="M210 78 C300 78 300 128 360 145"/>
-<path class="edge" d="M210 252 C300 252 300 195 360 183"/>
-<path class="edge" d="M540 145 C620 120 620 90 690 78"/>
-<path class="edge" d="M540 184 C620 205 620 238 690 252"/>
-<path class="edge dashed" d="M780 114 V216"/>
-<text class="diagram-note" x="250" y="102">upload</text>
-<text class="diagram-note" x="250" y="275">read</text>
-<text class="diagram-note" x="610" y="120">SQL</text>
-<text class="diagram-note" x="610" y="220">route</text>
+<svg viewBox="0 0 1000 360" role="img" aria-labelledby="context-svg-title">
+<title id="context-svg-title">A DuckDB producer uploads native GeoParquet 2.0 through an auth proxy to pgpq. GeoParquet clients read ranges through the same proxy. pgpq stores catalog, shard bytes and footers in PostgreSQL.</title>
+<defs><marker id="arrContext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="node external" x="30" y="42" width="200" height="86" rx="8"/>
+<text class="node-label" x="130" y="68" text-anchor="middle">Producer</text>
+<text class="node-sub" x="130" y="87" text-anchor="middle">DuckDB 1.5.6+ spatial</text>
+<text class="node-sub" x="130" y="102" text-anchor="middle">GEOPARQUET_VERSION 'V2'</text>
+<rect class="node external" x="30" y="232" width="200" height="86" rx="8"/>
+<text class="node-label" x="130" y="258" text-anchor="middle">Clients</text>
+<text class="node-sub" x="130" y="277" text-anchor="middle">DuckDB · GDAL · Arrow</text>
+<text class="node-sub" x="130" y="292" text-anchor="middle">range reads, local filters</text>
+<rect class="node" x="300" y="138" width="180" height="86" rx="8"/>
+<text class="node-label" x="390" y="164" text-anchor="middle">Auth proxy</text>
+<text class="node-sub" x="390" y="183" text-anchor="middle">adjacent · outside pgpq</text>
+<text class="node-sub" x="390" y="198" text-anchor="middle">public / internal</text>
+<rect class="node hot" x="550" y="138" width="190" height="86" rx="10"/>
+<text class="node-label" x="645" y="164" text-anchor="middle">pgpq v2</text>
+<text class="node-sub" x="645" y="183" text-anchor="middle">virtual file service</text>
+<text class="node-sub" x="645" y="198" text-anchor="middle">validate · store · stitch</text>
+<circle class="packet" cx="550" cy="138" r="4" fill="var(--accent)"/>
+<rect class="node" x="800" y="126" width="170" height="110" rx="8"/>
+<text class="node-label" x="885" y="152" text-anchor="middle">PostgreSQL</text>
+<text class="node-sub" x="885" y="171" text-anchor="middle">catalog · shards</text>
+<text class="node-sub" x="885" y="186" text-anchor="middle">footers · ids</text>
+<path class="edge dash" marker-end="url(#arrContext)" d="M230 85 C265 85 265 181 300 181"/>
+<path class="edge dash" marker-end="url(#arrContext)" d="M230 275 C265 275 265 200 300 200"/>
+<path class="edge" marker-end="url(#arrContext)" d="M480 181 H550"/>
+<path class="edge" marker-end="url(#arrContext)" d="M740 164 H800"/>
+<path class="edge" marker-end="url(#arrContext)" d="M800 198 H740"/>
+<text class="diagram-note" x="258" y="112">PUT · POST</text>
+<text class="diagram-note" x="258" y="305">GET · Range</text>
+<text class="diagram-note" x="512" y="171" text-anchor="middle">route</text>
+<text class="diagram-note" x="770" y="156" text-anchor="middle">SQL</text>
+<text class="diagram-note" x="770" y="216" text-anchor="middle">bytes</text>
+<text class="diagram-note" x="500" y="342" text-anchor="middle">The server does not convert, query or re-encode shard payloads.</text>
 </svg>
-<figcaption>Data loaders and API clients are outside the trust boundary. The app runs behind an adjacent auth layer; only readonly workers are public.</figcaption>
+<figcaption>Producers and clients are outside pgpq. The adjacent auth proxy owns public routing and authentication; readonly workers serve public reads.</figcaption>
 </figure>
 </div>
 <div class="col-lg-4">
 <div class="card h-100"><div class="card-body">
 <h3 class="h6 text-warning">Assumptions</h3>
 <ul class="mb-0">
-<li>One PostgreSQL holds the catalog and cell payloads.</li>
-<li>Uploads are native GeoParquet 2.0; the server has no converter at runtime.</li>
-<li>Updates are batched, typically hourly.</li>
-<li>No auth or TLS inside pgpq.</li>
+<li>One PostgreSQL stores the catalog, shard bytes, synthesized footers and the id index.</li>
+<li>The producer is external; pgpq has no converter or query engine.</li>
+<li>Public reads use readonly workers; only the writable worker accepts uploads.</li>
+<li>No auth or TLS inside pgpq; the adjacent proxy owns both.</li>
 </ul>
 </div></div>
 </div>
@@ -126,22 +152,50 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <div class="d-flex align-items-baseline gap-2"><h2 id="containers-title" class="h3 mb-3">Containers</h2><span class="c4">C4 L2</span></div>
 <p class="text-body-secondary">Separately deployable units and the static data paths between them. Runtime ordering is in the dynamic views below.</p>
 <figure class="figure">
-<svg viewBox="0 0 1000 300" role="img" aria-labelledby="container-svg-title">
-<title id="container-svg-title">Clients reach a writable or readonly pgpq worker through an auth proxy. The writable worker ingests GeoParquet 2.0 and writes PostgreSQL. Both workers read PostgreSQL.</title>
-<rect class="node" x="20" y="106" width="150" height="76" rx="8"/><text class="node-label" x="95" y="136" text-anchor="middle">Clients</text><text class="node-sub" x="95" y="154" text-anchor="middle">JSON / GeoParquet</text>
-<rect class="node" x="220" y="106" width="160" height="76" rx="8"/><text class="node-label" x="300" y="136" text-anchor="middle">Auth proxy</text><text class="node-sub" x="300" y="154" text-anchor="middle">public / internal</text>
-<rect class="node hot" x="440" y="30" width="190" height="86" rx="8"/><text class="node-label" x="535" y="60" text-anchor="middle">writable worker</text><text class="node-sub" x="535" y="79" text-anchor="middle">ingest + query</text><text class="node-sub" x="535" y="94" text-anchor="middle">:8080</text>
-<rect class="node ok" x="440" y="182" width="190" height="86" rx="8"/><text class="node-label" x="535" y="212" text-anchor="middle">readonly workers</text><text class="node-sub" x="535" y="231" text-anchor="middle">query only</text><text class="node-sub" x="535" y="246" text-anchor="middle">:8081</text>
-<rect class="node" x="700" y="30" width="150" height="86" rx="8"/><text class="node-label" x="775" y="60" text-anchor="middle">GeoParquet 2.0</text><text class="node-sub" x="775" y="79" text-anchor="middle">native geometry</text><text class="node-sub" x="775" y="94" text-anchor="middle">upload body</text>
-<rect class="node" x="700" y="182" width="280" height="86" rx="8"/><text class="node-label" x="840" y="212" text-anchor="middle">PostgreSQL 18</text><text class="node-sub" x="840" y="231" text-anchor="middle">pgpq.collections · cells · cell_chunks · ids</text><text class="node-sub" x="840" y="246" text-anchor="middle">inline 8,120-byte chunks</text>
-<path class="edge" d="M170 144 H220 M380 144 C410 144 410 73 440 73 M380 144 C410 144 410 225 440 225"/>
-<path class="edge" d="M700 73 H630 M630 225 H700 M630 73 C660 73 660 210 700 225"/>
-<text class="diagram-note" x="400" y="160">route</text>
-<text class="diagram-note" x="665" y="58">upload</text>
-<text class="diagram-note" x="645" y="242">SELECT</text>
-<text class="diagram-note" x="670" y="170">write</text>
+<svg viewBox="0 0 1000 380" role="img" aria-labelledby="container-svg-title">
+<title id="container-svg-title">A producer and clients reach an auth proxy. The proxy routes writes to a writable pgpq worker and reads to readonly workers. Both workers use PostgreSQL, the only shared store.</title>
+<defs><marker id="arrContainer" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="boundary" x="455" y="20" width="250" height="340" rx="14"/>
+<text class="zone-label" x="470" y="37">pgpq workers</text>
+<rect class="node external" x="20" y="42" width="180" height="82" rx="8"/>
+<text class="node-label" x="110" y="68" text-anchor="middle">Producer</text>
+<text class="node-sub" x="110" y="87" text-anchor="middle">DuckDB + spatial</text>
+<text class="node-sub" x="110" y="102" text-anchor="middle">native 2.0 source</text>
+<rect class="node external" x="20" y="256" width="180" height="82" rx="8"/>
+<text class="node-label" x="110" y="282" text-anchor="middle">Clients</text>
+<text class="node-sub" x="110" y="301" text-anchor="middle">DuckDB · GDAL · Arrow</text>
+<text class="node-sub" x="110" y="316" text-anchor="middle">Range reads</text>
+<rect class="node" x="245" y="150" width="170" height="80" rx="8"/>
+<text class="node-label" x="330" y="176" text-anchor="middle">Auth proxy</text>
+<text class="node-sub" x="330" y="195" text-anchor="middle">public reads</text>
+<text class="node-sub" x="330" y="210" text-anchor="middle">writes internal</text>
+<rect class="node hot" x="480" y="42" width="200" height="96" rx="8"/>
+<text class="node-label" x="580" y="68" text-anchor="middle">writable worker</text>
+<text class="node-sub" x="580" y="87" text-anchor="middle">PUT · POST · GET / HEAD</text>
+<text class="node-sub" x="580" y="102" text-anchor="middle">validate · merge · commit</text>
+<rect class="node ok" x="480" y="242" width="200" height="96" rx="8"/>
+<text class="node-label" x="580" y="268" text-anchor="middle">readonly workers</text>
+<text class="node-sub" x="580" y="287" text-anchor="middle">GET · HEAD · Range</text>
+<text class="node-sub" x="580" y="302" text-anchor="middle">no writes · no DDL</text>
+<rect class="node" x="770" y="120" width="210" height="140" rx="8"/>
+<text class="node-label" x="875" y="148" text-anchor="middle">PostgreSQL 18</text>
+<text class="node-sub" x="875" y="168" text-anchor="middle">catalog · shard chunks</text>
+<text class="node-sub" x="875" y="184" text-anchor="middle">virtual_files footer</text>
+<text class="node-sub" x="875" y="200" text-anchor="middle">ids for upsert</text>
+<path class="edge dash" marker-end="url(#arrContainer)" d="M200 83 C225 83 225 170 245 170"/>
+<path class="edge dash" marker-end="url(#arrContainer)" d="M200 297 C225 297 225 210 245 210"/>
+<path class="edge" marker-end="url(#arrContainer)" d="M415 170 C450 170 450 90 480 90"/>
+<path class="edge" marker-end="url(#arrContainer)" d="M415 210 C450 210 450 290 480 290"/>
+<path class="edge" marker-end="url(#arrContainer)" d="M680 90 C730 90 730 160 770 160"/>
+<path class="edge" marker-end="url(#arrContainer)" d="M680 290 C730 290 730 220 770 220"/>
+<text class="diagram-note" x="208" y="112">upload</text>
+<text class="diagram-note" x="208" y="323">read</text>
+<text class="diagram-note" x="430" y="130">write</text>
+<text class="diagram-note" x="430" y="266">read</text>
+<text class="diagram-note" x="692" y="118">SQL · bytes</text>
+<text class="diagram-note" x="692" y="308">SELECT</text>
 </svg>
-<figcaption>Only the writable worker needs write privileges. Readonly workers need only <code>SELECT</code> and no DDL. Both accept native GeoParquet 2.0 uploads only.</figcaption>
+<figcaption>Only PostgreSQL is shared. The writable worker needs write privileges; readonly workers need only <code>SELECT</code> and no DDL. Shard bytes are never rewritten in place.</figcaption>
 </figure>
 </section>
 
@@ -151,111 +205,253 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <div class="row g-4">
 <div class="col-lg-7">
 <figure class="figure">
-<svg viewBox="0 0 900 340" role="img" aria-labelledby="component-svg-title">
-<title id="component-svg-title">HTTP API separates load and query. Load uses a GeoParquet 2.0 reader, S2 split, GeoParquet writer and chunk writer. Query uses catalog, chunk reader, Parquet reader, CQL and output encoding.</title>
-<rect class="node" x="20" y="130" width="130" height="76" rx="8"/><text class="node-label" x="85" y="160" text-anchor="middle">HTTP API</text><text class="node-sub" x="85" y="178" text-anchor="middle">PUT · POST · GET</text>
-<rect class="node" x="200" y="30" width="170" height="86" rx="8"/><text class="node-label" x="285" y="60" text-anchor="middle">loader</text><text class="node-sub" x="285" y="79" text-anchor="middle">GeoParquet 2.0 + S2</text><text class="node-sub" x="285" y="94" text-anchor="middle">GeoParquet writer</text>
-<rect class="node" x="200" y="220" width="170" height="86" rx="8"/><text class="node-label" x="285" y="250" text-anchor="middle">query</text><text class="node-sub" x="285" y="269" text-anchor="middle">catalog + row groups</text><text class="node-sub" x="285" y="284" text-anchor="middle">CQL + paging</text>
-<rect class="node" x="430" y="30" width="160" height="86" rx="8"/><text class="node-label" x="510" y="60" text-anchor="middle">GeoParquet 2.0</text><text class="node-sub" x="510" y="79" text-anchor="middle">native GEOMETRY/WKB</text><text class="node-sub" x="510" y="94" text-anchor="middle">2,048-row groups</text>
-<rect class="node" x="430" y="220" width="160" height="86" rx="8"/><text class="node-label" x="510" y="250" text-anchor="middle">chunk reader</text><text class="node-sub" x="510" y="269" text-anchor="middle">(cell_id, no)</text><text class="node-sub" x="510" y="284" text-anchor="middle">8,120 B inline</text>
-<rect class="node" x="650" y="30" width="220" height="86" rx="8"/><text class="node-label" x="760" y="60" text-anchor="middle">catalog + ids</text><text class="node-sub" x="760" y="79" text-anchor="middle">collections · cells · ids</text><text class="node-sub" x="760" y="94" text-anchor="middle">bounds · key range · zone</text>
-<rect class="node" x="650" y="220" width="220" height="86" rx="8"/><text class="node-label" x="760" y="250" text-anchor="middle">output</text><text class="node-sub" x="760" y="269" text-anchor="middle">GeoJSON</text><text class="node-sub" x="760" y="284" text-anchor="middle">filtered GeoParquet</text>
-<path class="edge" d="M150 150 C175 150 175 73 200 73 M150 186 C175 186 175 263 200 263"/>
-<path class="edge" d="M370 73 H430 M370 263 H430 M590 73 H650 M590 263 H650 M540 250 C540 190 540 190 540 120"/>
+<svg viewBox="0 0 1000 380" role="img" aria-labelledby="component-svg-title">
+<title id="component-svg-title">The HTTP router splits writes into Ingest and reads into the Virtual file service. Ingest validates, sorts, plans and merges shards and consults the id index. Both services use Store, which reads and writes PostgreSQL.</title>
+<defs><marker id="arrComponent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="boundary" x="12" y="24" width="780" height="330" rx="14"/>
+<text class="zone-label" x="28" y="44">one pgpq worker</text>
+<rect class="node" x="30" y="150" width="140" height="80" rx="8"/>
+<text class="node-label" x="100" y="178" text-anchor="middle">HTTP router</text>
+<text class="node-sub" x="100" y="197" text-anchor="middle">GET · HEAD · Range</text>
+<text class="node-sub" x="100" y="212" text-anchor="middle">ETag · 206 / 416</text>
+<rect class="node hot" x="210" y="40" width="170" height="88" rx="8"/>
+<text class="node-label" x="295" y="68" text-anchor="middle">Ingest</text>
+<text class="node-sub" x="295" y="87" text-anchor="middle">validate native 2.0</text>
+<text class="node-sub" x="295" y="102" text-anchor="middle">sort · plan · merge</text>
+<rect class="node" x="210" y="250" width="170" height="88" rx="8"/>
+<text class="node-label" x="295" y="278" text-anchor="middle">Id index</text>
+<text class="node-sub" x="295" y="297" text-anchor="middle">hash id → shard</text>
+<text class="node-sub" x="295" y="312" text-anchor="middle">upsert candidates</text>
+<rect class="node hot" x="420" y="146" width="190" height="88" rx="8"/>
+<text class="node-label" x="515" y="174" text-anchor="middle">Virtual file service</text>
+<text class="node-sub" x="515" y="193" text-anchor="middle">version · byte map</text>
+<text class="node-sub" x="515" y="208" text-anchor="middle">footer · stitch</text>
+<rect class="node" x="640" y="146" width="150" height="88" rx="8"/>
+<text class="node-label" x="715" y="174" text-anchor="middle">Store</text>
+<text class="node-sub" x="715" y="193" text-anchor="middle">catalog queries</text>
+<text class="node-sub" x="715" y="208" text-anchor="middle">chunk reads</text>
+<rect class="node" x="845" y="150" width="140" height="80" rx="8"/>
+<text class="node-label" x="915" y="178" text-anchor="middle">PostgreSQL</text>
+<text class="node-sub" x="915" y="197" text-anchor="middle">catalog</text>
+<text class="node-sub" x="915" y="212" text-anchor="middle">shard bytes</text>
+<path class="edge" marker-end="url(#arrComponent)" d="M170 190 C195 190 195 84 210 84"/>
+<path class="edge" marker-end="url(#arrComponent)" d="M170 190 H420"/>
+<path class="edge" marker-end="url(#arrComponent)" d="M295 128 V250"/>
+<path class="edge" marker-end="url(#arrComponent)" d="M380 84 C400 84 400 146 420 166"/>
+<path class="edge" marker-end="url(#arrComponent)" d="M380 84 H700 V146"/>
+<path class="edge" marker-end="url(#arrComponent)" d="M610 190 H640"/>
+<path class="edge" marker-end="url(#arrComponent)" d="M790 190 H845"/>
+<text class="diagram-note" x="182" y="140">write</text>
+<text class="diagram-note" x="286" y="180">read</text>
+<text class="diagram-note" x="305" y="205">lookup</text>
+<text class="diagram-note" x="388" y="116">stage</text>
+<text class="diagram-note" x="500" y="76">writes shards</text>
+<text class="diagram-note" x="814" y="180">SQL</text>
 </svg>
-<figcaption>The loader and query engines are independent. Both use the same GeoParquet cell layout; the catalog is shared state.</figcaption>
+<figcaption>The router is the only entry point. Ingest handles writes; the Virtual file service handles reads; both use Store and never convert geometry or evaluate a query.</figcaption>
 </figure>
 </div>
 <div class="col-lg-5">
 <div class="card h-100"><div class="card-body">
 <h3 class="h6 text-warning">Responsibilities</h3>
 <dl class="row mb-0 small">
-<dt class="col-4">loader</dt><dd class="col-8">Native GeoParquet 2.0 read, S2 assignment, sort, GeoParquet encode, 8,120-byte chunking, overview samples.</dd>
-<dt class="col-4">catalog</dt><dd class="col-8">one row per collection/level/cell; bounds, key range, feature count, zone, <code>cell_id</code>.</dd>
-<dt class="col-4">chunk reader</dt><dd class="col-8">primary-key range reads over <code>(cell_id,no)</code>; small per-file cache.</dd>
-<dt class="col-4">query</dt><dd class="col-8">cell pruning, Parquet row-group stats, exact CQL/bbox, cursor paging, output encoding.</dd>
+<dt class="col-4">HTTP router</dt><dd class="col-8">Conditional <code>GET</code>, <code>HEAD</code>, byte ranges, version ETag, <code>206</code>/<code>416</code>, Parquet content type.</dd>
+<dt class="col-4">Ingest</dt><dd class="col-8">Native 2.0 validation, spatial sort, shard planning, complete-shard writing, overlap merge, atomic version commit.</dd>
+<dt class="col-4">Id index</dt><dd class="col-8">Hash id → candidate shard; used only to find rows an upsert replaces.</dd>
+<dt class="col-4">Virtual file</dt><dd class="col-8">Current-version resolution, virtual byte map, synthesized footer, cross-shard range stitching.</dd>
+<dt class="col-4">Store</dt><dd class="col-8">Catalog queries and shard chunk reads. No converter and no predicate evaluation.</dd>
 </dl>
 </div></div>
 </div>
 </div>
 </section>
 
-<section id="ingest" class="mb-5" aria-labelledby="ingest-title">
-<div class="d-flex align-items-baseline gap-2"><h2 id="ingest-title" class="h3 mb-3">Dynamic view · ingest</h2><span class="c4">C4 dynamic</span></div>
-<p class="text-body-secondary">One upload story. Structural components are static above; this diagram shows only order.</p>
+<section id="put" class="mb-5" aria-labelledby="put-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="put-title" class="h3 mb-3">Dynamic view · PUT replace</h2><span class="c4">C4 dynamic</span></div>
+<p class="text-body-secondary">One upload replaces the whole collection. The new version becomes visible in one transaction; the old version stays readable while a client or version references it.</p>
 <figure class="figure">
-<svg viewBox="0 0 1000 250" role="img" aria-labelledby="ingest-svg-title">
-<title id="ingest-svg-title">An upload is validated as native GeoParquet 2.0, split by S2 L8 cell, sorted, encoded as GeoParquet, split into chunks, and committed with parent samples.</title>
-<defs><marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
-<rect class="node" x="18" y="62" width="130" height="70" rx="8"/><text class="node-label" x="83" y="90" text-anchor="middle">1 · upload</text><text class="node-sub" x="83" y="108" text-anchor="middle">GeoParquet 2.0</text>
-<rect class="node" x="184" y="62" width="150" height="70" rx="8"/><text class="node-label" x="259" y="90" text-anchor="middle">2 · validate</text><text class="node-sub" x="259" y="108" text-anchor="middle">native GEOMETRY</text>
-<rect class="node hot" x="370" y="62" width="150" height="70" rx="8"/><text class="node-label" x="445" y="90" text-anchor="middle">3 · partition</text><text class="node-sub" x="445" y="108" text-anchor="middle">S2 L8 + sort</text>
-<rect class="node" x="556" y="62" width="150" height="70" rx="8"/><text class="node-label" x="631" y="90" text-anchor="middle">4 · encode</text><text class="node-sub" x="631" y="108" text-anchor="middle">GeoParquet 2.0</text>
-<rect class="node" x="742" y="62" width="130" height="70" rx="8"/><text class="node-label" x="807" y="90" text-anchor="middle">5 · chunk</text><text class="node-sub" x="807" y="108" text-anchor="middle">8,120 B inline</text>
-<rect class="node ok" x="908" y="62" width="76" height="70" rx="8"/><text class="node-label" x="946" y="90" text-anchor="middle">6 · commit</text><text class="node-sub" x="946" y="108" text-anchor="middle">+ parents</text>
-<path id="inpath" class="edge dashed" d="M148 97 H184 M334 97 H370 M520 97 H556 M706 97 H742 M872 97 H908"/>
-<circle class="packet" cx="0" cy="0" r="5" fill="var(--accent)"><animateMotion dur="5s" repeatCount="indefinite"><mpath href="#inpath"/></animateMotion></circle>
-<text class="diagram-note" x="83" y="175" text-anchor="middle">one file</text>
-<text class="diagram-note" x="259" y="175" text-anchor="middle">no converter</text>
-<text class="diagram-note" x="445" y="175" text-anchor="middle">L8 = partition</text>
-<text class="diagram-note" x="631" y="175" text-anchor="middle">native GEOMETRY</text>
-<text class="diagram-note" x="807" y="175" text-anchor="middle">no TOAST</text>
-<text class="diagram-note" x="946" y="175" text-anchor="middle">one transaction</text>
+<svg viewBox="0 0 1000 235" role="img" aria-labelledby="put-svg-title">
+<title id="put-svg-title">PUT validates a native GeoParquet 2.0 file, sorts rows by spatial key and id, writes complete shards targeting 512 mebibytes, stages the version, footer and virtual bases, then commits atomically.</title>
+<defs><marker id="arrPut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="node" x="12" y="60" width="170" height="84" rx="8"/>
+<text class="node-label" x="97" y="88" text-anchor="middle">1 · Validate</text>
+<text class="node-sub" x="97" y="107" text-anchor="middle">native 2.0 · WKB</text>
+<text class="node-sub" x="97" y="122" text-anchor="middle">CRS84 / EPSG:4326</text>
+<rect class="node" x="210" y="60" width="150" height="84" rx="8"/>
+<text class="node-label" x="285" y="88" text-anchor="middle">2 · Sort</text>
+<text class="node-sub" x="285" y="107" text-anchor="middle">spatial key</text>
+<text class="node-sub" x="285" y="122" text-anchor="middle">then id</text>
+<rect class="node" x="388" y="60" width="180" height="84" rx="8"/>
+<text class="node-label" x="478" y="88" text-anchor="middle">3 · Write shards</text>
+<text class="node-sub" x="478" y="107" text-anchor="middle">complete files</text>
+<text class="node-sub" x="478" y="122" text-anchor="middle">≤ 512 MiB target</text>
+<rect class="node" x="596" y="60" width="170" height="84" rx="8"/>
+<text class="node-label" x="681" y="88" text-anchor="middle">4 · Stage version</text>
+<text class="node-sub" x="681" y="107" text-anchor="middle">shard list</text>
+<text class="node-sub" x="681" y="122" text-anchor="middle">footer + bases</text>
+<rect class="node ok" x="794" y="60" width="194" height="84" rx="8"/>
+<text class="node-label" x="891" y="88" text-anchor="middle">5 · Commit</text>
+<text class="node-sub" x="891" y="107" text-anchor="middle">one transaction</text>
+<text class="node-sub" x="891" y="122" text-anchor="middle">old stays readable</text>
+<path class="edge dash" marker-end="url(#arrPut)" d="M182 102 H210"/>
+<path class="edge dash" marker-end="url(#arrPut)" d="M360 102 H388"/>
+<path class="edge dash" marker-end="url(#arrPut)" d="M568 102 H596"/>
+<path class="edge dash" marker-end="url(#arrPut)" d="M766 102 H794"/>
+<text class="diagram-note" x="97" y="174" text-anchor="middle">reject 1.1 / converted</text>
+<text class="diagram-note" x="285" y="174" text-anchor="middle">deterministic order</text>
+<text class="diagram-note" x="478" y="174" text-anchor="middle">no partial files</text>
+<text class="diagram-note" x="681" y="174" text-anchor="middle">synthesized footer</text>
+<text class="diagram-note" x="891" y="174" text-anchor="middle">atomic pointer</text>
+<text class="diagram-note" x="500" y="210" text-anchor="middle">A failed transaction leaves the previous version current; no shard is rewritten in place.</text>
 </svg>
-<figcaption>Every feature is assigned to an L8 cell, then sorted by <code>(Hilbert key, id)</code>. A <code>POST</code> merges a batch into affected cells; <code>PUT</code> replaces the collection.</figcaption>
+<figcaption><code>PUT</code> replaces the collection from one file. The prior version remains readable until no live version references its shards.</figcaption>
 </figure>
 </section>
 
-<section id="read" class="mb-5" aria-labelledby="read-title">
-<div class="d-flex align-items-baseline gap-2"><h2 id="read-title" class="h3 mb-3">Dynamic view · read</h2><span class="c4">C4 dynamic</span></div>
-<p class="text-body-secondary">One query story. Exact bbox/CQL evaluation is deliberately separate from the structural index view.</p>
+<section id="post" class="mb-5" aria-labelledby="post-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="post-title" class="h3 mb-3">Dynamic view · POST upsert / merge</h2><span class="c4">C4 dynamic</span></div>
+<p class="text-body-secondary">One batch upserts by id. Only shards that hold replaced rows or overlap the new key range are rewritten; everything else is referenced unchanged.</p>
 <figure class="figure">
-<svg viewBox="0 0 1000 250" role="img" aria-labelledby="read-svg-title">
-<title id="read-svg-title">A request prunes cells, reads chunk ranges, skips Parquet row groups with statistics, evaluates exact predicates, and returns JSON or GeoParquet.</title>
-<rect class="node" x="18" y="62" width="140" height="70" rx="8"/><text class="node-label" x="88" y="90" text-anchor="middle">1 · request</text><text class="node-sub" x="88" y="108" text-anchor="middle">bbox · filter · cursor</text>
-<rect class="node" x="194" y="62" width="140" height="70" rx="8"/><text class="node-label" x="264" y="90" text-anchor="middle">2 · catalog</text><text class="node-sub" x="264" y="108" text-anchor="middle">cells · bounds · zone</text>
-<rect class="node hot" x="370" y="62" width="160" height="70" rx="8"/><text class="node-label" x="450" y="90" text-anchor="middle">3 · chunks</text><text class="node-sub" x="450" y="108" text-anchor="middle">footer + row groups</text>
-<rect class="node" x="566" y="62" width="150" height="70" rx="8"/><text class="node-label" x="641" y="90" text-anchor="middle">4 · exact</text><text class="node-sub" x="641" y="108" text-anchor="middle">bbox · CQL</text>
-<rect class="node ok" x="752" y="62" width="130" height="70" rx="8"/><text class="node-label" x="817" y="90" text-anchor="middle">5 · output</text><text class="node-sub" x="817" y="108" text-anchor="middle">JSON / GeoParquet</text>
-<path id="readpath" class="edge dashed" d="M158 97 H194 M334 97 H370 M530 97 H566 M716 97 H752"/>
-<circle class="packet" cx="0" cy="0" r="5" fill="var(--ok)"><animateMotion dur="4.2s" repeatCount="indefinite"><mpath href="#readpath"/></animateMotion></circle>
-<text class="diagram-note" x="88" y="175" text-anchor="middle">page limit</text>
-<text class="diagram-note" x="264" y="175" text-anchor="middle">skip cells</text>
-<text class="diagram-note" x="450" y="175" text-anchor="middle">geospatial stats</text>
-<text class="diagram-note" x="641" y="175" text-anchor="middle">stop early</text>
-<text class="diagram-note" x="817" y="175" text-anchor="middle">filtered page</text>
+<svg viewBox="0 0 1000 240" role="img" aria-labelledby="post-svg-title">
+<title id="post-svg-title">POST validates a batch, hashes ids and consults the id index, selects old-row shards plus key-range overlaps, rewrites only those shards with survivors and new rows, references untouched shards, and commits atomically.</title>
+<defs><marker id="arrPost" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="node" x="10" y="60" width="140" height="84" rx="8"/>
+<text class="node-label" x="80" y="88" text-anchor="middle">1 · Validate</text>
+<text class="node-sub" x="80" y="107" text-anchor="middle">native 2.0</text>
+<text class="node-sub" x="80" y="122" text-anchor="middle">batch by id</text>
+<rect class="node" x="172" y="60" width="140" height="84" rx="8"/>
+<text class="node-label" x="242" y="88" text-anchor="middle">2 · Hash ids</text>
+<text class="node-sub" x="242" y="107" text-anchor="middle">id index</text>
+<text class="node-sub" x="242" y="122" text-anchor="middle">lookup</text>
+<rect class="node hot" x="334" y="60" width="160" height="84" rx="8"/>
+<text class="node-label" x="414" y="88" text-anchor="middle">3 · Select shards</text>
+<text class="node-sub" x="414" y="107" text-anchor="middle">id hits +</text>
+<text class="node-sub" x="414" y="122" text-anchor="middle">key overlap</text>
+<rect class="node hot" x="516" y="60" width="160" height="84" rx="8"/>
+<text class="node-label" x="596" y="88" text-anchor="middle">4 · Rewrite</text>
+<text class="node-sub" x="596" y="107" text-anchor="middle">merge survivors</text>
+<text class="node-sub" x="596" y="122" text-anchor="middle">re-sort · split</text>
+<rect class="node" x="698" y="60" width="150" height="84" rx="8"/>
+<text class="node-label" x="773" y="88" text-anchor="middle">5 · Reference</text>
+<text class="node-sub" x="773" y="107" text-anchor="middle">untouched</text>
+<text class="node-sub" x="773" y="122" text-anchor="middle">shards</text>
+<rect class="node ok" x="870" y="60" width="118" height="84" rx="8"/>
+<text class="node-label" x="929" y="88" text-anchor="middle">6 · Commit</text>
+<text class="node-sub" x="929" y="107" text-anchor="middle">one</text>
+<text class="node-sub" x="929" y="122" text-anchor="middle">transaction</text>
+<path class="edge dash" marker-end="url(#arrPost)" d="M150 102 H172"/>
+<path class="edge dash" marker-end="url(#arrPost)" d="M312 102 H334"/>
+<path class="edge dash" marker-end="url(#arrPost)" d="M494 102 H516"/>
+<path class="edge dash" marker-end="url(#arrPost)" d="M676 102 H698"/>
+<path class="edge dash" marker-end="url(#arrPost)" d="M848 102 H870"/>
+<text class="diagram-note" x="80" y="174" text-anchor="middle">schema must match</text>
+<text class="diagram-note" x="242" y="174" text-anchor="middle">metadata only</text>
+<text class="diagram-note" x="414" y="174" text-anchor="middle">only affected</text>
+<text class="diagram-note" x="596" y="174" text-anchor="middle">≤ 512 MiB</text>
+<text class="diagram-note" x="773" y="174" text-anchor="middle">no data copy</text>
+<text class="diagram-note" x="929" y="174" text-anchor="middle">no partial version</text>
+<text class="diagram-note" x="500" y="210" text-anchor="middle">POST cannot change the schema, id column or geometry column; use PUT for that.</text>
 </svg>
-<figcaption>Cell pruning, Parquet row-group statistics and exact evaluation are separate layers. A virtual GeoParquet response replaces a tile pyramid for compatible clients.</figcaption>
+<figcaption>A batch with duplicate ids is rejected. The new version commits atomically, and shards not selected by id or key range are reused as-is.</figcaption>
 </figure>
+</section>
+
+<section id="range" class="mb-5" aria-labelledby="range-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="range-title" class="h3 mb-3">Dynamic view · virtual Range read</h2><span class="c4">C4 dynamic</span></div>
+<p class="text-body-secondary">The served file is logical: leading <code>PAR1</code>, shard payloads and one footer, with offsets that map back to PostgreSQL chunks. There is no separate manifest; clients discover layout from the footer. The server stitches ranges; decoding and filtering happen in the client.</p>
+<figure class="figure">
+<svg viewBox="0 0 1000 240" role="img" aria-labelledby="range-svg-title">
+<title id="range-svg-title">HEAD or GET returns size, ETag and Accept-Ranges. The client reads the last eight bytes for footer length and PAR1, then the synthesized footer. A range maps through virtual_base to shard data_start and data_end and is stitched by the server. The client decodes columns and filters locally.</title>
+<defs><marker id="arrRange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="node" x="12" y="60" width="160" height="84" rx="8"/>
+<text class="node-label" x="92" y="88" text-anchor="middle">1 · HEAD / GET</text>
+<text class="node-sub" x="92" y="107" text-anchor="middle">ETag · length</text>
+<text class="node-sub" x="92" y="122" text-anchor="middle">Accept-Ranges</text>
+<rect class="node" x="200" y="60" width="160" height="84" rx="8"/>
+<text class="node-label" x="280" y="88" text-anchor="middle">2 · Footer tail</text>
+<text class="node-sub" x="280" y="107" text-anchor="middle">last 8 bytes</text>
+<text class="node-sub" x="280" y="122" text-anchor="middle">length + PAR1</text>
+<rect class="node" x="388" y="60" width="160" height="84" rx="8"/>
+<text class="node-label" x="468" y="88" text-anchor="middle">3 · Footer</text>
+<text class="node-sub" x="468" y="107" text-anchor="middle">rebased offsets</text>
+<text class="node-sub" x="468" y="122" text-anchor="middle">row groups</text>
+<rect class="node hot" x="576" y="60" width="190" height="84" rx="8"/>
+<text class="node-label" x="671" y="88" text-anchor="middle">4 · Range map</text>
+<text class="node-sub" x="671" y="107" text-anchor="middle">virtual_base + shard</text>
+<text class="node-sub" x="671" y="122" text-anchor="middle">stitch 206</text>
+<rect class="node ok" x="794" y="60" width="194" height="84" rx="8"/>
+<text class="node-label" x="891" y="88" text-anchor="middle">5 · Client decode</text>
+<text class="node-sub" x="891" y="107" text-anchor="middle">columns · bbox</text>
+<text class="node-sub" x="891" y="122" text-anchor="middle">local filter</text>
+<circle class="packet" cx="576" cy="60" r="4" fill="var(--ok)"/>
+<path class="edge dash" marker-end="url(#arrRange)" d="M172 102 H200"/>
+<path class="edge dash" marker-end="url(#arrRange)" d="M360 102 H388"/>
+<path class="edge dash" marker-end="url(#arrRange)" d="M548 102 H576"/>
+<path class="edge dash" marker-end="url(#arrRange)" d="M766 102 H794"/>
+<text class="diagram-note" x="92" y="174" text-anchor="middle">pins a version</text>
+<text class="diagram-note" x="280" y="174" text-anchor="middle">tail + footer</text>
+<text class="diagram-note" x="468" y="174" text-anchor="middle">one file footer</text>
+<text class="diagram-note" x="671" y="174" text-anchor="middle">server stitches</text>
+<text class="diagram-note" x="891" y="174" text-anchor="middle">no server query</text>
+<text class="diagram-note" x="500" y="210" text-anchor="middle">The byte map is virtual_base plus shard data_start and data_end; the client fetches only the column chunks it needs.</text>
+</svg>
+<figcaption>The footer is the first cold read. The server returns bytes with <code>206</code> and <code>Content-Range</code>; it never evaluates a bbox, filter or count.</figcaption>
+</figure>
+<ul class="list-group list-group-flush">
+<li class="list-group-item bg-transparent"><code>HEAD</code> and <code>GET</code> return <code>Content-Length</code>, <code>Accept-Ranges: bytes</code> and the version <code>ETag</code>. A full response is <code>200</code>; a range response is <code>206</code>.</li>
+<li class="list-group-item bg-transparent">The client reads the trailing eight bytes for footer length and <code>PAR1</code>, then fetches the synthesized footer.</li>
+<li class="list-group-item bg-transparent">Footer offsets are rebased. <code>virtual_base</code> plus shard <code>data_start</code> and <code>data_end</code> translate each virtual range to stored bytes; the server stitches ranges that cross shards.</li>
+<li class="list-group-item bg-transparent">The client fetches only the column chunks it needs, decodes them, then applies its own bbox and attribute filters. There is no server-side predicate evaluation.</li>
+</ul>
 </section>
 
 <section id="howto" class="mb-5" aria-labelledby="howto-title">
-<div class="d-flex align-items-baseline gap-2"><h2 id="howto-title" class="h3 mb-3">How to test a small OSM chunk</h2><span class="c4">Diátaxis how-to</span></div>
-<p class="text-body-secondary">Use one small extract and one layer at a time. This is task guidance, not part of the topology.</p>
+<div class="d-flex align-items-baseline gap-2"><h2 id="howto-title" class="h3 mb-3">How to produce, upload and read</h2><span class="c4">Diátaxis how-to</span></div>
+<p class="text-body-secondary">DuckDB is the external producer. The server never runs DuckDB or GDAL; it accepts only the native 2.0 file that DuckDB writes.</p>
 <div class="row g-4">
 <div class="col-lg-7">
-<ol class="list-group list-group-numbered">
-<li class="list-group-item bg-transparent">Use a city-sized PBF: Monaco (~1 MB) or Andorra (~4 MB). Avoid Île-de-France (387 MB) and Luxembourg (56 MB) for routine runs.</li>
-<li class="list-group-item bg-transparent"><code>prepare.sh</code> uses a 768 MB / 1 CPU DuckDB container with the spatial extension to convert one OSM PBF into per-layer native GeoParquet 2.0 files and a <code>meta.json</code>.</li>
-<li class="list-group-item bg-transparent"><code>serve.sh</code> creates a disposable <code>pgpq_osm_bench</code> database and starts a writable worker on :8094 with <code>GOMEMLIMIT=1GiB</code>, two connections, and migrations. It refuses public ports.</li>
-<li class="list-group-item bg-transparent"><code>run.sh</code> POSTs one prepared 2.0 file, times bbox/filter/id/GeoParquet/overview/numberMatched, verifies both GeoParquet pages with DuckDB, deletes the test collection, then moves on.</li>
-</ol>
-<p class="small text-body-secondary mb-0">Harness measurements: Monaco uploads 0.13–0.21 s, bbox 4–8 ms, id 2–3 ms, GeoParquet 22–29 ms; Andorra uploads 0.20–0.43 s. The test worker runs at 1 GiB. See <code>bench/osm/README.md</code>.</p>
+<h3 class="h6 text-warning">1 · Produce a native 2.0 file</h3>
+<pre>INSTALL spatial;
+LOAD spatial;
+
+COPY (
+  SELECT id, geom, name
+  FROM read_parquet('/data/buildings.parquet')
+) TO '/tmp/buildings-v2.parquet'
+  (FORMAT parquet,
+   GEOPARQUET_VERSION 'V2',
+   COMPRESSION zstd);</pre>
+<p class="small text-body-secondary">Use DuckDB 1.5.6 or newer with the <code>spatial</code> extension. <code>geom</code> must already be a geometry in OGC:CRS84 or EPSG:4326. There is no GDAL container and no server-side conversion.</p>
+
+<h3 class="h6 text-warning mt-4">2 · PUT a replacement</h3>
+<pre>curl -X PUT -T /tmp/buildings-v2.parquet \
+  -H 'Content-Type: application/vnd.apache.parquet' \
+  'http://localhost:8080/v2/collections/buildings'</pre>
+<p class="small text-body-secondary mb-0">Send the same body with <code>POST</code> to upsert by id. A successful write returns JSON with <code>collection</code>, <code>version</code>, <code>features</code>, <code>shards</code>, <code>bytes</code> and <code>etag</code>.</p>
 </div>
 <div class="col-lg-5">
-<pre>just pg-up
-go build -o bin/pgpq ./cmd/pgpq
+<h3 class="h6 text-warning">3 · Read it as one file</h3>
+<pre>INSTALL spatial;
+LOAD spatial;
+INSTALL httpfs;
+LOAD httpfs;
 
-# terminal 2: disposable :8094 worker
-bench/osm/serve.sh
+SELECT id, name
+FROM read_parquet(
+  'http://localhost:8080/v2/collections/buildings.parquet')
+WHERE ST_Intersects(
+  geom,
+  ST_MakeEnvelope(7.40, 43.70, 7.45, 43.76));</pre>
+<p class="small text-body-secondary">DuckDB uses HTTP Range to fetch the footer and the column chunks it needs. The bbox is evaluated locally.</p>
 
-# terminal 1: DuckDB prepare -> POST
-# benchmark -> cleanup
-bench/osm/run.sh \
-  --pbf monaco.osm.pbf \
-  --work /tmp/opencode/bench/osm-monaco \
-  --reps 10</pre>
-<p class="small text-body-secondary mb-0">One layer at a time; one request at a time. DuckDB is capped at 768 MB / 1 CPU and the server at 1 GiB. Country extracts are intentionally out of scope.</p>
+<h3 class="h6 text-warning mt-4">4 · Check headers and ranges</h3>
+<pre>URL=http://localhost:8080/v2/collections/buildings.parquet
+curl -sI "$URL"
+curl -s -H 'Range: bytes=0-3' "$URL" | xxd
+curl -s -H 'Range: bytes=-8' "$URL" | xxd
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'Range: bytes=0-3' "$URL"</pre>
+<p class="small text-body-secondary mb-0">The first range should contain <code>PAR1</code>; the last eight bytes contain the footer length and the trailing <code>PAR1</code>. A plain <code>GET</code> still works, but reads the whole virtual file.</p>
 </div>
 </div>
 </section>
@@ -267,91 +463,126 @@ bench/osm/run.sh \
 <div class="col-lg-7">
 <h3 class="h6 text-warning">HTTP surface</h3>
 <table class="table table-dark table-sm align-middle">
-<thead><tr><th scope="col">Route</th><th scope="col">Purpose</th></tr></thead>
+<thead><tr><th scope="col">Route</th><th scope="col">Method</th><th scope="col">Purpose</th></tr></thead>
 <tbody>
-<tr><td><code>PUT /v2/collections/{id}</code></td><td>replace collection or listed cells; full compaction</td></tr>
-<tr><td><code>POST /v2/collections/{id}</code></td><td>merge one batch into affected L8 cells and parent samples</td></tr>
-<tr><td><code>GET /items</code></td><td>bbox, filter, cursor, limit, overview, numberMatched</td></tr>
-<tr><td><code>GET /items/{id}</code></td><td>exact id lookup</td></tr>
-<tr><td><code>f=geoparquet</code></td><td>filtered GeoParquet 2.0 response</td></tr>
-<tr><td><code>GET /design</code></td><td>this contract</td></tr>
+<tr><td><code>/v2/collections/{id}</code></td><td><code>PUT</code></td><td>Replace from one native GeoParquet 2.0 file; writable only.</td></tr>
+<tr><td><code>/v2/collections/{id}</code></td><td><code>POST</code></td><td>Upsert a batch by id; rewrites overlaps; writable only.</td></tr>
+<tr><td><code>/v2/collections/{id}.parquet</code></td><td><code>GET</code></td><td>Current version as one virtual file; <code>200</code> or <code>206</code>.</td></tr>
+<tr><td><code>/v2/collections/{id}.parquet</code></td><td><code>HEAD</code></td><td>Same path, headers only: size, ETag, <code>Accept-Ranges</code>.</td></tr>
+<tr><td><code>/v2/collections/{id}</code></td><td><code>GET</code></td><td>Collection metadata as JSON.</td></tr>
+<tr><td><code>/v2/collections</code></td><td><code>GET</code></td><td>Collection list as JSON.</td></tr>
+<tr><td><code>/design</code></td><td><code>GET</code></td><td>This contract.</td></tr>
 </tbody>
 </table>
-<h3 class="h6 text-warning mt-4">Cell file</h3>
-<table class="table table-dark table-sm align-middle">
-<tbody>
-<tr><th scope="row">geometry</th><td>native Parquet <code>GEOMETRY</code> / WKB / OGC:CRS84</td></tr>
-<tr><th scope="row">order</th><td><code>(__pgpq_key, id)</code>; 2,048 rows per group</td></tr>
-<tr><th scope="row">compression</th><td>Parquet zstd pages; chunks not recompressed</td></tr>
-<tr><th scope="row">payload</th><td>8,120-byte chunks; <code>STORAGE EXTERNAL</code>, one page inline</td></tr>
-</tbody>
-</table>
+<p class="small text-body-secondary">Parquet responses use <code>application/vnd.apache.parquet</code>, a version ETag of the form <code>pgpq-{id}-v{version}</code> and <code>Cache-Control: no-cache</code>. Status codes: <code>200</code> full body, <code>206</code> range, <code>404</code> unknown collection, <code>409</code> schema conflict on upsert, <code>416</code> unsatisfiable range, <code>422</code> invalid name or upload; writes on a readonly worker return <code>405</code>.</p>
+<p class="small text-body-secondary">There is no CQL, JSON feature response, overview level, id lookup, cursor paging or manifest. Filters and bboxes are client-side.</p>
+
+<h3 class="h6 text-warning mt-4">Collection metadata</h3>
+<p class="small text-body-secondary mb-0"><code>GET /v2/collections/{id}</code> returns <code>name</code>, <code>version</code>, <code>idColumn</code>, <code>geometry</code>, <code>columns</code>, <code>rows</code>, <code>bytes</code>, <code>etag</code> and <code>url</code>. <code>GET /v2/collections</code> returns <code>name</code>, <code>version</code>, <code>idColumn</code>, <code>geometry</code>, <code>rows</code>, <code>bytes</code> and <code>url</code> for each collection under <code>collections</code>.</p>
 </div>
 <div class="col-lg-5">
 <h3 class="h6 text-warning">PostgreSQL schema</h3>
-<pre>pgpq.collections
-  uid, name, version, id_column, geometry, columns_json
-
-pgpq.cells
-  collection_uid, level, cell, cell_id,
-  features, bytes, bounds, key range, zone
-
-pgpq.cell_chunks
-  cell_id, no, data bytea
-
-pgpq.ids
-  collection_uid, hash, cell, row</pre>
-<p class="small text-body-secondary mb-0">Exactly one <code>cells</code> row per collection/level/cell and one chunk row per 8,120-byte slice.</p>
+<pre>pgpq.collections        name, version, id_column,
+                        geometry, columns_json, rows,
+                        bytes, updated
+pgpq.shards             shard_id, bytes, data_start,
+                        data_end, rows, first_key,
+                        last_key, created
+pgpq.collection_shards  collection, version, seq,
+                        shard_id, virtual_base
+pgpq.shard_chunks       shard_id, no, data bytea
+pgpq.virtual_files      collection, version, footer,
+                        footer_start, total_length, etag
+pgpq.ids                collection, hash, id, shard_id</pre>
+<p class="small text-body-secondary mb-0">Shard payloads are 8,120-byte <code>bytea</code> chunks read by primary key; shard bytes are not compressed again. <code>virtual_files</code> caches the footer per version. The small <code>ids</code> index exists only to find upsert candidates.</p>
 </div>
+</div>
+
+<h3 class="h6 text-warning mt-5">Shard lifecycle</h3>
+<figure class="figure">
+<svg viewBox="0 0 1000 190" role="img" aria-labelledby="lifecycle-svg-title">
+<title id="lifecycle-svg-title">A shard moves from staged to committed, then superseded when a newer version exists, then reclaimed when no live version references it.</title>
+<defs><marker id="arrLife" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4c5d72"/></marker></defs>
+<rect class="node" x="20" y="50" width="200" height="80" rx="8"/>
+<text class="node-label" x="120" y="78" text-anchor="middle">Staged</text>
+<text class="node-sub" x="120" y="97" text-anchor="middle">new shard rows</text>
+<text class="node-sub" x="120" y="112" text-anchor="middle">inside write txn</text>
+<rect class="node ok" x="280" y="50" width="200" height="80" rx="8"/>
+<text class="node-label" x="380" y="78" text-anchor="middle">Committed</text>
+<text class="node-sub" x="380" y="97" text-anchor="middle">referenced by version</text>
+<text class="node-sub" x="380" y="112" text-anchor="middle">immutable</text>
+<rect class="node" x="540" y="50" width="200" height="80" rx="8"/>
+<text class="node-label" x="640" y="78" text-anchor="middle">Superseded</text>
+<text class="node-sub" x="640" y="97" text-anchor="middle">newer version exists</text>
+<text class="node-sub" x="640" y="112" text-anchor="middle">old reads still work</text>
+<rect class="node external" x="800" y="50" width="180" height="80" rx="8"/>
+<text class="node-label" x="890" y="78" text-anchor="middle">Reclaimed</text>
+<text class="node-sub" x="890" y="97" text-anchor="middle">no live reference</text>
+<text class="node-sub" x="890" y="112" text-anchor="middle">chunks deleted</text>
+<path class="edge dash" marker-end="url(#arrLife)" d="M220 90 H280"/>
+<path class="edge dash" marker-end="url(#arrLife)" d="M480 90 H540"/>
+<path class="edge dash" marker-end="url(#arrLife)" d="M740 90 H800"/>
+<text class="diagram-note" x="120" y="158" text-anchor="middle">write path</text>
+<text class="diagram-note" x="380" y="158" text-anchor="middle">served version</text>
+<text class="diagram-note" x="640" y="158" text-anchor="middle">version history</text>
+<text class="diagram-note" x="890" y="158" text-anchor="middle">garbage collection</text>
+</svg>
+<figcaption>A committed shard is immutable. A merge rewrites only overlapping shards; untouched shards are referenced by the new version. Oversized results split into pieces targeting at most 512 MiB. Old shards can be reclaimed after no live version references them.</figcaption>
+</figure>
+
+<h3 class="h6 text-warning mt-5">GeoParquet 2.0 contract</h3>
+<table class="table table-dark table-sm align-middle">
+<tbody>
+<tr><th scope="row">geometry</th><td>Native Parquet <code>GEOMETRY</code> or <code>GEOGRAPHY</code> with WKB payload.</td></tr>
+<tr><th scope="row">CRS</th><td>OGC:CRS84 or EPSG:4326 only; no reprojection.</td></tr>
+<tr><th scope="row">version</th><td>Native GeoParquet 2.0 only; 1.1 and converted files are rejected.</td></tr>
+<tr><th scope="row">compression</th><td>zstd Parquet pages; stored shard bytes are not compressed again.</td></tr>
+<tr><th scope="row">row order</th><td>Spatial key, then id.</td></tr>
+<tr><th scope="row">shard target</th><td>Complete shards, targeting at most 512 MiB each.</td></tr>
+<tr><th scope="row">producer</th><td>External DuckDB 1.5.6+ with <code>spatial</code>, writing <code>GEOPARQUET_VERSION 'V2'</code>. No GDAL container.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="explanation" class="mb-5" aria-labelledby="explanation-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="explanation-title" class="h3 mb-3">Explanation</h2><span class="c4">Diátaxis explanation</span></div>
+<p class="text-body-secondary">Why the server stops at bytes, and what that costs.</p>
+<div class="row g-3">
+<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">Synthesized footer</h3><p class="mb-0">Concatenating complete files would leave several footers and wrong offsets. pgpq serves shard payloads unchanged and writes one footer with row groups rebased to virtual positions; the byte map translates ranges back. There is no second copy and no mutation, so standard readers see one file.</p></div></div></div>
+<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">Immutable versions</h3><p class="mb-0">A version lists shard references. Merges write new shards and commit a new version; published shards never mutate. Readers pin one ETag or version, so merges need no locks and cannot tear reads. The pointer advance is one transaction; old shards stay readable while referenced, so rollback is a pointer change.</p></div></div></div>
+<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">No query catalog</h3><p class="mb-0">There is no cells table, overview samples, CQL evaluator or cursor state. Parquet row-group statistics plus client bbox and filter logic replace the server query layer. The only server lookup is the small id → shard index for upsert. That removes many invariants, but the server cannot answer bbox or attribute queries, counts, or GeoJSON.</p></div></div></div>
+<div class="col-md-6 col-xl-3"><div class="card h-100 border-warning"><div class="card-body"><h3 class="h6 text-warning">Footer-size risk</h3><p class="mb-0">The footer is fetched first on almost every cold read, so its size is on the critical path. It grows with shard count and with row groups and column chunks per shard; many small shards can make metadata dominate a small range. Mitigations are larger row groups, bounded shards, cached footers and a footer-bytes term in the size contract. Rebasing column-chunk and page-index offsets is the delicate part.</p></div></div></div>
 </div>
 </section>
 
 <section id="measured" class="mb-5" aria-labelledby="measured-title">
 <div class="d-flex align-items-baseline gap-2"><h2 id="measured-title" class="h3 mb-3">Measured</h2><span class="c4">evidence</span></div>
-<p class="text-body-secondary">Local PostgreSQL 18.6, 6 vCPU, warm cache, localhost HTTP; median of 30 requests after warmup.</p>
+<p class="text-body-secondary">Local PostgreSQL 18 in Docker, local writable worker on :8094, city-sized OSM layers. HEAD and Range numbers are median / p95 after warmup.</p>
 <div class="table-responsive">
 <table class="table table-dark table-striped table-sm align-middle">
-<caption class="text-secondary">Warm read/ingest measurements</caption>
-<thead><tr><th scope="col">Request</th><th scope="col" class="text-end">Median</th><th scope="col" class="text-end">p95</th><th scope="col" class="text-end">Response</th></tr></thead>
+<caption class="text-secondary">Monaco virtual-file measurements</caption>
+<thead><tr><th scope="col">Layer</th><th scope="col" class="text-end">Rows</th><th scope="col" class="text-end">Virtual bytes</th><th scope="col" class="text-end">Footer bytes</th><th scope="col" class="text-end">HEAD</th><th scope="col" class="text-end">Full GET</th><th scope="col" class="text-end">First range</th><th scope="col" class="text-end">Footer range</th></tr></thead>
 <tbody>
-<tr><td>warm100k bbox → JSON</td><td class="text-end">4.3 ms</td><td class="text-end">6.1 ms</td><td class="text-end">1.1 kB</td></tr>
-<tr><td>warm100k filter (32k matches) → JSON</td><td class="text-end">43.6 ms</td><td class="text-end">50.6 ms</td><td class="text-end">32 kB</td></tr>
-<tr><td>warm100k id → JSON</td><td class="text-end">1.6 ms</td><td class="text-end">2.2 ms</td><td class="text-end">407 B</td></tr>
-<tr><td>Luxembourg bbox → JSON</td><td class="text-end">10.5 ms</td><td class="text-end">15.0 ms</td><td class="text-end">33 kB</td></tr>
-<tr><td>Monaco enriched bbox → JSON</td><td class="text-end">20.8 ms</td><td class="text-end">28.4 ms</td><td class="text-end">434 kB</td></tr>
-<tr><td>Monaco enriched filter → JSON</td><td class="text-end">20.2 ms</td><td class="text-end">28.5 ms</td><td class="text-end">434 kB</td></tr>
-<tr><td>L2 overview → JSON</td><td class="text-end">15.3 ms</td><td class="text-end">18.6 ms</td><td class="text-end">325 kB</td></tr>
-<tr><td>Luxembourg bbox → GeoParquet</td><td class="text-end">53.5 ms</td><td class="text-end">63.1 ms</td><td class="text-end">101 kB</td></tr>
-<tr><td>Monaco, 1,000 rows → GeoParquet</td><td class="text-end">143.1 ms</td><td class="text-end">163.7 ms</td><td class="text-end">770 kB</td></tr>
+<tr><td>buildings</td><td class="text-end">4,628</td><td class="text-end">522,785</td><td class="text-end">8,384</td><td class="text-end">2.2 ms</td><td class="text-end">6.1 ms</td><td class="text-end">2.1 ms</td><td class="text-end">2.5 ms</td></tr>
+<tr><td>places</td><td class="text-end">4,928</td><td class="text-end">223,140</td><td class="text-end">~8 KB</td><td class="text-end">1.9 ms</td><td class="text-end">6.1 ms</td><td class="text-end">2.1 ms</td><td class="text-end">2.0 ms</td></tr>
+<tr><td>roads</td><td class="text-end">4,270</td><td class="text-end">382,937</td><td class="text-end">8,459</td><td class="text-end">1.8 ms</td><td class="text-end">4.7 ms</td><td class="text-end">2.1 ms</td><td class="text-end">1.7 ms</td></tr>
 </tbody>
 </table>
 </div>
-<div class="row g-3">
-<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">0.13–0.21 s</div><div class="text-body-secondary">Monaco GeoParquet 2.0 ingest · 4,628 buildings</div></div></div></div>
-<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">0.20–0.43 s</div><div class="text-body-secondary">Andorra GeoParquet 2.0 ingest · 8,833 roads</div></div></div></div>
-<div class="col-md-4"><div class="card h-100"><div class="card-body"><div class="h4">161 MB</div><div class="text-body-secondary">database · 13,343 inline chunks · ~107 MB chunk table</div></div></div></div>
-</div>
-<div class="alert alert-warning mt-4" role="alert"><strong>Heavy cell:</strong> 1,000,000 points, 10.0 MB detail, ingest 19.9 s / 1.39 GB peak; bbox 100 / 1,000: 4.3 / 11.8 ms; filter 11.8 ms; id 10.5 ms; numberMatched 1.9 s; L2 8.5 ms; GeoParquet 11.1 ms. One hourly batch append rewrites the cell in 20.9 s / 1.39 GB.</div>
-</section>
-
-<section id="explanation" class="mb-5" aria-labelledby="explanation-title">
-<div class="d-flex align-items-baseline gap-2"><h2 id="explanation-title" class="h3 mb-3">Explanation</h2><span class="c4">Diátaxis explanation</span></div>
-<div class="row g-3">
-<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">L8 partition</h3><p class="mb-0">A cell is small enough for bbox pruning and large enough to avoid catalog noise. L6/L4/L2 are sampled projections of the same data.</p></div></div></div>
-<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">2,048 rows</h3><p class="mb-0">Row-group statistics balance point lookups against wide scans. More groups lower scan cost but add footer/index overhead.</p></div></div></div>
-<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">Hourly batches</h3><p class="mb-0">One <code>POST</code> per batch rewrites each touched cell once. A 1M-row cell costs about 21 s and 10 MB of movement; per-row updates are intentionally not supported.</p></div></div></div>
-<div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">No tile pyramid</h3><p class="mb-0">The filtered GeoParquet response is the portability boundary. No FGB index, no vector-tile service, no sidecar partition files.</p></div></div></div>
-</div>
+<div class="alert alert-secondary mt-4" role="note"><strong>Fixture scale, not a benchmark.</strong> These city layers fit in one default shard; a test override of <code>PGPQ_SHARD_BYTES=150000</code> split the 4,628 buildings into 5 shards and produced a 533,113-byte virtual file that DuckDB, GDAL and cross-shard Range probes all read correctly. Upload stays at 0.15–0.21 s; one-shard footer metadata is about 8 KB. The open measurements are footer bytes versus 10/100 shards, cold footer fetch on large files, and POST rewrite cost at different overlap ratios.</div>
 </section>
 
 <section id="limits" class="mb-5" aria-labelledby="limits-title">
 <h2 id="limits-title" class="h3 mb-3">Limits</h2>
 <ul class="list-group list-group-flush">
-<li class="list-group-item bg-transparent">Uploads must be native GeoParquet 2.0; the server has no DuckDB, GDAL or converter dependency at runtime.</li>
-<li class="list-group-item bg-transparent">One root geometry column, OGC:CRS84/EPSG:4326 only. Nested schema and multiple geometry columns are deferred.</li>
-<li class="list-group-item bg-transparent">One-file-per-cell append is for hourly batches. Use <code>PUT</code> for a full snapshot; avoid per-row appends.</li>
-<li class="list-group-item bg-transparent">Filtered <code>numberMatched</code> scans surviving row groups; it is not a posting-list count.</li>
-<li class="list-group-item bg-transparent">About 4,145 production Go lines, one migration baseline, no FGB/v1 code.</li>
+<li class="list-group-item bg-transparent">Clients do all filtering, bbox work and counts. There is no server query language, CQL, feature JSON or GeoJSON response.</li>
+<li class="list-group-item bg-transparent">No overviews, id lookup endpoint, cursor paging or manifest. Collection metadata and listing exist; the virtual file is the only feature response.</li>
+<li class="list-group-item bg-transparent">One geometry column and one CRS per collection; no reprojection.</li>
+<li class="list-group-item bg-transparent">Native GeoParquet 2.0 only; no runtime converter, DuckDB, GDAL or cgo.</li>
+<li class="list-group-item bg-transparent">512 MiB is a target ceiling; an unsplittable row group may exceed it, and a single oversized feature is rejected.</li>
+<li class="list-group-item bg-transparent">Upserts depend on the id index; non-id attributes are not indexed.</li>
+<li class="list-group-item bg-transparent">Footer size and cold-read cost are unmeasured; many small shards may make the footer dominate.</li>
+<li class="list-group-item bg-transparent">Writes run only on writable workers; public traffic is readonly. Auth and TLS live in the adjacent proxy.</li>
 </ul>
 </section>
 </div>
@@ -359,8 +590,8 @@ pgpq.ids
 
 <footer class="border-top border-secondary-subtle py-4">
 <div class="container d-flex flex-wrap justify-content-between gap-2">
-<span>pgpq · GeoParquet 2.0 over PostgreSQL</span>
-<span>C4 context/container/component · dynamic flows · Diátaxis reference and explanation · static HTML</span>
+<span>pgpq v2 · virtual GeoParquet 2.0 over PostgreSQL</span>
+<span>C4 context/container/component · three dynamic flows · Diátaxis how-to, reference, explanation · static HTML</span>
 </div>
 </footer>
 </body>

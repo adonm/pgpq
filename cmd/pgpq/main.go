@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/adonm/pgpq/internal/api"
-	"github.com/adonm/pgpq/internal/layer"
+	"github.com/adonm/pgpq/internal/dataset"
 	"github.com/adonm/pgpq/internal/store"
 )
 
@@ -64,10 +64,10 @@ func serve(args []string) {
 	if *readonly {
 		slog.Info("read-only worker")
 	}
-	layers := layer.New(st.Pool)
+	datasets := dataset.New(st.Pool)
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly, Layers: layers}),
+		Handler:           api.NewWithConfig(api.Config{Store: st, ReadOnly: *readonly, Datasets: datasets}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errCh := make(chan error, 1)

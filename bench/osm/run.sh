@@ -18,10 +18,6 @@ options:
   --layers a,b          subset of buildings,places,roads
   --prefix NAME         collection prefix, default osm_
   --reps N              measured requests per endpoint, default 10
-  --limit N             JSON page limit, default 100
-  --parquet-limit N     GeoParquet page limit, default 1000
-  --bbox XMIN,YMIN,XMAX,YMAX
-  --bbox-fraction F     central fraction of each extent, default 0.25
   --force               rebuild intermediate GeoParquet
   --skip-prepare        reuse existing GeoParquet
   --keep                do not delete test collections
@@ -50,10 +46,6 @@ url=${PGPQ_OSM_URL:-http://127.0.0.1:8094}
 layers=
 prefix=${PGPQ_OSM_PREFIX:-osm_}
 reps=10
-limit=100
-parquet_limit=1000
-bbox=
-bbox_fraction=0.25
 force=0
 skip_prepare=0
 keep=0
@@ -68,10 +60,6 @@ while [ $# -gt 0 ]; do
 	--layers) layers=${2:-}; shift 2 ;;
 	--prefix) prefix=${2:-}; shift 2 ;;
 	--reps) reps=${2:-}; shift 2 ;;
-	--limit) limit=${2:-}; shift 2 ;;
-	--parquet-limit) parquet_limit=${2:-}; shift 2 ;;
-	--bbox) bbox=${2:-}; shift 2 ;;
-	--bbox-fraction) bbox_fraction=${2:-}; shift 2 ;;
 	--force) force=1; shift ;;
 	--skip-prepare) skip_prepare=1; shift ;;
 	--keep) keep=1; shift ;;
@@ -138,12 +126,8 @@ args=(
 	--prefix "$prefix"
 	--out-dir "$work/report"
 	--reps "$reps"
-	--limit "$limit"
-	--parquet-limit "$parquet_limit"
-	--bbox-fraction "$bbox_fraction"
 	--stages "$work/stages.json"
 )
-if [ -n "$bbox" ]; then args+=(--bbox "$bbox"); fi
 if [ "$verify" -eq 0 ]; then args+=(--no-verify); fi
 if [ "$keep" -eq 1 ]; then args+=(--keep); fi
 if [ -n "$psql_cmd" ]; then args+=(--psql-cmd "$psql_cmd"); fi

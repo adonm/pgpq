@@ -1,30 +1,28 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
+	"time"
 
-	"github.com/adonm/pgpq/internal/layer"
+	"github.com/adonm/pgpq/internal/dataset"
+	"github.com/adonm/pgpq/internal/geo"
 	"github.com/adonm/pgpq/internal/store"
 )
 
 type Server struct {
-	Store  *store.Store
-	layers *layer.Layer
+	Store    *store.Store
+	datasets *dataset.Manager
 }
 
 type Config struct {
 	Store    *store.Store
 	ReadOnly bool
-	Layers   *layer.Layer
+	Datasets *dataset.Manager
 }
-
-type link struct {
-	Href string `json:"href"`
-	Rel  string `json:"rel"`
-	Type string `json:"type,omitempty"`
-}
-
-const crs84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
 
 func New(st *store.Store) http.Handler {
 	return NewWithConfig(Config{Store: st})
@@ -32,43 +30,130 @@ func New(st *store.Store) http.Handler {
 
 func NewWithConfig(cfg Config) http.Handler {
 	mux := http.NewServeMux()
-	s := &Server{Store: cfg.Store}
-	if cfg.Layers != nil {
-		s.layers = cfg.Layers
-	} else if cfg.Store != nil {
-		s.layers = layer.New(cfg.Store.Pool)
+	s := &Server{Store: cfg.Store, datasets: cfg.Datasets}
+	if s.datasets == nil && cfg.Store != nil {
+		s.datasets = dataset.New(cfg.Store.Pool)
 	}
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
+	mux.HandleFunc("GET /v2/collections", s.listCollections)
+	mux.HandleFunc("GET /v2/collections/{file}", s.getCollection)
 	if !cfg.ReadOnly {
-		mux.HandleFunc("PUT /v2/collections/{id}", s.putLayer)
-		mux.HandleFunc("POST /v2/collections/{id}", s.putLayer)
+		mux.HandleFunc("PUT /v2/collections/{id}", s.writeCollection)
+		mux.HandleFunc("POST /v2/collections/{id}", s.writeCollection)
 	}
-	mux.HandleFunc("GET /v2/collections/{id}/items", s.layerItems)
-	mux.HandleFunc("GET /v2/collections/{id}/items/{featureID}", s.layerItem)
 	mux.HandleFunc("GET /design", s.design)
-	return corsMiddleware(compressionMiddleware(s.observe(rejectUnsupportedQuery(mux))))
+	return corsMiddleware(compressionMiddleware(s.observe(mux)))
 }
 
-func rejectUnsupportedQuery(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		for _, name := range []string{"sortby", "q"} {
-			if query.Has(name) {
-				http.Error(w, name+" is not supported", http.StatusBadRequest)
-				return
-			}
+func (s *Server) writeCollection(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("id")
+	if !store.ValidName(name) {
+		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
+		return
+	}
+	ds, err := geo.ReadDataset(r.Body, geo.Options{IDColumn: r.URL.Query().Get("id_column")})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var result dataset.Result
+	if r.Method == http.MethodPut {
+		result, err = s.datasets.Put(r.Context(), name, ds)
+	} else {
+		result, err = s.datasets.Upsert(r.Context(), name, ds)
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func (s *Server) getCollection(w http.ResponseWriter, r *http.Request) {
+	value := r.PathValue("file")
+	name := strings.TrimSuffix(value, ".parquet")
+	if name == value {
+		s.collectionMeta(w, r, value)
+		return
+	}
+	if !store.ValidName(name) {
+		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
+		return
+	}
+	v, err := s.datasets.Open(r.Context(), name)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.apache.parquet")
+	w.Header().Set("ETag", `"`+v.ETag()+`"`)
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(w, r, name+".parquet", time.Time{}, io.NewSectionReader(v, 0, v.Size()))
+}
+
+func (s *Server) collectionMeta(w http.ResponseWriter, r *http.Request, name string) {
+	if !store.ValidName(name) {
+		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
+		return
+	}
+	c, err := s.datasets.Collection(r.Context(), name)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	v, err := s.datasets.Open(r.Context(), name)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := map[string]any{
+		"name":     c.Name,
+		"version":  c.Version,
+		"idColumn": c.IDColumn,
+		"geometry": c.Geometry,
+		"columns":  c.Columns,
+		"rows":     c.Rows,
+		"bytes":    c.Bytes,
+		"etag":     v.ETag(),
+		"url":      "/v2/collections/" + name + ".parquet",
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+func (s *Server) listCollections(w http.ResponseWriter, r *http.Request) {
+	collections, err := s.datasets.List(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := make([]map[string]any, len(collections))
+	for i, c := range collections {
+		out[i] = map[string]any{
+			"name":     c.Name,
+			"version":  c.Version,
+			"idColumn": c.IDColumn,
+			"geometry": c.Geometry,
+			"rows":     c.Rows,
+			"bytes":    c.Bytes,
+			"url":      "/v2/collections/" + c.Name + ".parquet",
 		}
-		for _, name := range []string{"crs", "bbox-crs"} {
-			if value := query.Get(name); value != "" && value != crs84 {
-				http.Error(w, name+" must be "+crs84, http.StatusBadRequest)
-				return
-			}
-		}
-		if value := query.Get("filter-lang"); value != "" && value != "cql2-text" {
-			http.Error(w, "filter-lang must be cql2-text", http.StatusBadRequest)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"collections": out})
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, dataset.ErrInvalid):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	case errors.Is(err, dataset.ErrConflict):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, store.ErrNotFound):
+		http.Error(w, "collection not found", http.StatusNotFound)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

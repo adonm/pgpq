@@ -1,16 +1,18 @@
 package geo
 
-import (
-	"io"
+type Type uint8
 
-	"github.com/parquet-go/parquet-go"
-
-	"github.com/adonm/pgpq/internal/cql"
+const (
+	String Type = iota
+	JSON
+	Bool
+	Int
+	Double
 )
 
 type Column struct {
 	Name string
-	Type cql.Type
+	Type Type
 }
 
 type Feature struct {
@@ -26,14 +28,4 @@ type Dataset struct {
 	Geometry string
 	IDColumn string
 	Features []Feature
-}
-
-type File struct {
-	reader   io.ReaderAt
-	file     *parquet.File
-	fields   []parquet.Field
-	geometry int
-	key      int
-	attrs    []Column
-	types    []cql.Type
 }

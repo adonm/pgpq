@@ -8,20 +8,19 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 
-	"github.com/adonm/pgpq/internal/cql"
 	"github.com/adonm/pgpq/internal/spatial"
 )
 
 const rowGroupRows = 2048
 
-type cellLayout struct {
+type shardLayout struct {
 	fields   []parquet.Field
 	key      int
 	geometry int
-	types    []cql.Type
+	types    []Type
 }
 
-func EncodeCell(ds Dataset, features []Feature) ([]byte, error) {
+func EncodeShard(ds Dataset, features []Feature) ([]byte, error) {
 	if len(features) == 0 {
 		return nil, invalid("no features to encode")
 	}
@@ -65,9 +64,9 @@ func EncodeCell(ds Dataset, features []Feature) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func layoutOf(ds Dataset, schema *parquet.Schema) cellLayout {
+func layoutOf(ds Dataset, schema *parquet.Schema) shardLayout {
 	fields := schema.Fields()
-	layout := cellLayout{fields: fields, key: -1, geometry: -1, types: make([]cql.Type, len(fields))}
+	layout := shardLayout{fields: fields, key: -1, geometry: -1, types: make([]Type, len(fields))}
 	for i, field := range fields {
 		switch field.Name() {
 		case "__pgpq_key":
@@ -81,7 +80,7 @@ func layoutOf(ds Dataset, schema *parquet.Schema) cellLayout {
 	return layout
 }
 
-func (l cellLayout) row(feature Feature) parquet.Row {
+func (l shardLayout) row(feature Feature) parquet.Row {
 	row := make(parquet.Row, len(l.fields))
 	for column := range l.fields {
 		switch column {
@@ -112,39 +111,39 @@ func FeatureBounds(features []Feature) [4]float64 {
 	return bounds
 }
 
-func nodeOf(typ cql.Type) parquet.Node {
+func nodeOf(typ Type) parquet.Node {
 	switch typ {
-	case cql.Bool:
+	case Bool:
 		return parquet.Leaf(parquet.BooleanType)
-	case cql.Int:
+	case Int:
 		return parquet.Leaf(parquet.Int64Type)
-	case cql.Double:
+	case Double:
 		return parquet.Leaf(parquet.DoubleType)
-	case cql.JSON:
+	case JSON:
 		return parquet.JSON()
 	}
 	return parquet.String()
 }
 
-func typeOf(cols []Column, name string) cql.Type {
+func typeOf(cols []Column, name string) Type {
 	for _, col := range cols {
 		if col.Name == name {
 			return col.Type
 		}
 	}
-	return cql.String
+	return String
 }
 
-func valueOf(typ cql.Type, value any) (parquet.Value, bool) {
+func valueOf(typ Type, value any) (parquet.Value, bool) {
 	if value == nil {
 		return parquet.Value{}, false
 	}
 	switch typ {
-	case cql.Bool:
+	case Bool:
 		if b, ok := value.(bool); ok {
 			return parquet.BooleanValue(b), true
 		}
-	case cql.Int:
+	case Int:
 		switch n := value.(type) {
 		case int:
 			return parquet.Int64Value(int64(n)), true
@@ -157,7 +156,7 @@ func valueOf(typ cql.Type, value any) (parquet.Value, bool) {
 				return parquet.Int64Value(v), true
 			}
 		}
-	case cql.Double:
+	case Double:
 		switch n := value.(type) {
 		case float64:
 			return parquet.DoubleValue(n), true
@@ -166,7 +165,7 @@ func valueOf(typ cql.Type, value any) (parquet.Value, bool) {
 		case int64:
 			return parquet.DoubleValue(float64(n)), true
 		}
-	case cql.JSON:
+	case JSON:
 		switch raw := value.(type) {
 		case json.RawMessage:
 			return parquet.ByteArrayValue(raw), true
