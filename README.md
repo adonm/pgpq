@@ -2,7 +2,7 @@
 
 GeoParquet 2.0 over PostgreSQL.
 
-`pgpq` stores each spatial cell as a native GeoParquet 2.0 file in one `bytea`; Parquet pages are compressed with zstd, so there is no second compression layer. Geometry is Parquet `GEOMETRY` (WKB, OGC:CRS84), so Parquet's own row-group geospatial statistics do the spatial pruning. There is no FlatGeobuf sidecar and no custom spatial index.
+`pgpq` stores each spatial cell as a native GeoParquet 2.0 file split into 8,120-byte inline `bytea` chunks; Parquet pages are compressed with zstd, so there is no second compression layer. Geometry is Parquet `GEOMETRY` (WKB, OGC:CRS84), so Parquet's own row-group geospatial statistics do the spatial pruning. There is no FlatGeobuf sidecar and no custom spatial index.
 
 The upload format is a DuckDB file. A view in the file becomes one collection; `layer_catalog` can supply the view, id column and geometry column. The server exports the view with the DuckDB CLI, splits it into level-8 S2 cells, and writes GeoParquet cells. The core stays cgo-free; DuckDB is an external command, configured by `PGPQ_DUCKDB`.
 
@@ -23,9 +23,10 @@ JSON is the default response. `f=geoparquet` returns a filtered GeoParquet 2.0 p
 ## Storage
 
 - `pgpq.collections`: name, id, geometry column, schema.
-- `pgpq.cells`: one row per collection/level/S2 cell; bounds, key range, zone, and `data bytea`.
+- `pgpq.cells`: one row per collection/level/S2 cell; bounds, key range, zone, size and `cell_id`.
+- `pgpq.cell_chunks`: `(cell_id, no)` primary key with 8,120-byte raw GeoParquet chunks, inline one 8 KB page (`toast_tuple_target=8160`, `STORAGE EXTERNAL`).
 - `pgpq.ids`: hash and `(cell,row)` pointer for exact id lookup.
-- `data` is the GeoParquet file itself with internal zstd page compression, forced to `STORAGE EXTERNAL` so Postgres does not compress it again. Small cells are fetched whole; large cells are read as 64 KiB `substring` ranges from external TOAST.
+- Chunks are primary-key range reads. Parquet pages use zstd internally; chunks are never compressed again.
 - The GeoParquet rows are sorted by `(Hilbert key, id)`. A hidden `__pgpq_key` column drives cursor and row-group pruning.
 - L8 is detail. L6, L4 and L2 keep up to 2,048 sampled features per cell and are built in the write commit.
 
@@ -45,17 +46,17 @@ Warm localhost, PostgreSQL 18.6, 6 vCPU, median of 30 requests:
 
 | Request | Median | p95 | Response |
 | --- | ---: | ---: | ---: |
-| warm100k bbox → JSON | 4.1 ms | 5.1 ms | 1.1 kB |
-| warm100k filter (32k matches) → JSON | 40.1 ms | 45.0 ms | 32 kB |
-| warm100k id → JSON | 1.6 ms | 1.8 ms | 407 B |
-| Luxembourg bbox → JSON | 12.2 ms | 16.3 ms | 33 kB |
-| Monaco enriched bbox → JSON | 21.1 ms | 26.7 ms | 434 kB |
-| Monaco enriched filter → JSON | 23.5 ms | 38.2 ms | 434 kB |
-| L2 overview → JSON | 17.5 ms | 21.5 ms | 325 kB |
-| Luxembourg bbox → GeoParquet | 53.8 ms | 60.4 ms | 101 kB |
-| Monaco bbox, 1,000 rows → GeoParquet | 143.5 ms | 162.0 ms | 770 kB |
+| warm100k bbox → JSON | 4.3 ms | 6.1 ms | 1.1 kB |
+| warm100k filter (32k matches) → JSON | 43.6 ms | 50.6 ms | 32 kB |
+| warm100k id → JSON | 1.6 ms | 2.2 ms | 407 B |
+| Luxembourg bbox → JSON | 10.5 ms | 15.0 ms | 33 kB |
+| Monaco enriched bbox → JSON | 20.8 ms | 28.4 ms | 434 kB |
+| Monaco enriched filter → JSON | 20.2 ms | 28.5 ms | 434 kB |
+| L2 overview → JSON | 15.3 ms | 18.6 ms | 325 kB |
+| Luxembourg bbox → GeoParquet | 53.5 ms | 63.1 ms | 101 kB |
+| Monaco bbox, 1,000 rows → GeoParquet | 143.1 ms | 163.7 ms | 770 kB |
 
-DuckDB ingest: Monaco 12.6 MB / 4,628 features in 1.24–1.27 s; Luxembourg 48.2 MB / 228,273 features in 8.18 s. A 64-byte external-TOAST slice touched 8 buffers versus 142 for the whole cell.
+DuckDB ingest: Monaco 12.6 MB / 4,628 features in 1.24–1.27 s; Luxembourg 48.2 MB / 228,273 features in 8.18 s. The chunk table holds 13,343 rows of 8,120 bytes inline, with no TOAST indirection. Database size is about 212 MB.
 
 ## Quickstart
 
@@ -74,6 +75,6 @@ curl 'http://localhost:8080/v2/collections/buildings/items?bbox=7.4,43.7,7.45,43
 
 ## Status
 
-Pre-alpha. Working today: DuckDB and GeoParquet ingest, GeoParquet 2.0 native geometry/WKB storage, zstd-compressed Parquet bytea cells, S2 cell catalogs, Parquet row-group spatial and attribute pruning, L2/L4/L6 samples, id lookup, cursor paging, JSON/GeoParquet responses, readonly/writable workers and probes.
+Pre-alpha. Working today: DuckDB and GeoParquet ingest, GeoParquet 2.0 native geometry/WKB storage, 8,120-byte inline GeoParquet chunks with internal zstd pages, S2 cell catalogs, Parquet row-group spatial and attribute pruning, L2/L4/L6 samples, id lookup, cursor paging, JSON/GeoParquet responses, readonly/writable workers and probes.
 
 Not in this pass: collection listing/discovery, authentication, generated OpenAPI, and multi-geometry collections.

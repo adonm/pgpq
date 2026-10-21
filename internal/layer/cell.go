@@ -1,7 +1,6 @@
 package layer
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -27,6 +26,7 @@ type cellMeta struct {
 	level    int
 	features int
 	bytes    int64
+	cellID   int64
 	bounds   [4]float64
 	firstKey uint64
 	firstID  string
@@ -47,24 +47,16 @@ func (l *Layer) cellFile(ctx context.Context, coll Collection, meta cellMeta) (*
 	if file, ok := l.cells.Get(key); ok {
 		return file, nil
 	}
-	if meta.bytes == 0 {
-		if err := l.pool.QueryRow(ctx, `select bytes from pgpq.cells where collection_uid = $1 and level = $2 and cell = $3`,
-			coll.UID, meta.level, spatial.ToOrdered(meta.cell)).Scan(&meta.bytes); err != nil {
+	if meta.bytes == 0 || meta.cellID == 0 {
+		if err := l.pool.QueryRow(ctx, `select bytes, cell_id from pgpq.cells where collection_uid = $1 and level = $2 and cell = $3`,
+			coll.UID, meta.level, spatial.ToOrdered(meta.cell)).Scan(&meta.bytes, &meta.cellID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil, ErrStale
 			}
 			return nil, err
 		}
 	}
-	var reader io.ReaderAt = &cellReader{pool: l.pool, ctx: context.WithoutCancel(ctx), uid: coll.UID, level: meta.level, cell: spatial.ToOrdered(meta.cell), size: meta.bytes}
-	if meta.bytes <= 1<<20 {
-		var data []byte
-		if err := l.pool.QueryRow(ctx, `select data from pgpq.cells where collection_uid = $1 and level = $2 and cell = $3`,
-			coll.UID, meta.level, spatial.ToOrdered(meta.cell)).Scan(&data); err != nil {
-			return nil, err
-		}
-		reader = bytes.NewReader(data)
-	}
+	reader := &chunkReader{pool: l.pool, ctx: context.WithoutCancel(ctx), cellID: meta.cellID, size: meta.bytes, cache: make(map[int32][]byte)}
 	file, err := geo.Open(reader, meta.bytes)
 	if err != nil {
 		return nil, err
@@ -81,22 +73,20 @@ func catalogSize(metas []cellMeta) int64 {
 	return n
 }
 
-type cellReader struct {
-	pool  *pgxpool.Pool
-	ctx   context.Context
-	uid   int64
-	level int
-	cell  int64
-	size  int64
-	mu    sync.Mutex
-	cache map[int64][]byte
+type chunkReader struct {
+	pool   *pgxpool.Pool
+	ctx    context.Context
+	cellID int64
+	size   int64
+	mu     sync.Mutex
+	cache  map[int32][]byte
 }
 
-func (r *cellReader) Size() int64 {
+func (r *chunkReader) Size() int64 {
 	return r.size
 }
 
-func (r *cellReader) ReadAt(p []byte, off int64) (int, error) {
+func (r *chunkReader) ReadAt(p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, errors.New("layer: negative offset")
 	}
@@ -106,36 +96,56 @@ func (r *cellReader) ReadAt(p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	first := int32(off / 8120)
+	end := min(off+int64(len(p)), r.size)
+	last := int32((end - 1) / 8120)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.cache == nil {
-		r.cache = make(map[int64][]byte)
-	}
-	written := 0
-	for written < len(p) && off+int64(written) < r.size {
-		at := off + int64(written)
-		start := at / (64 << 10) * (64 << 10)
-		block, ok := r.cache[start]
-		if !ok {
-			length := min(int64(64<<10), r.size-start)
-			var data []byte
-			err := r.pool.QueryRow(r.ctx, `select substring(data from $4 for $5) from pgpq.cells where collection_uid = $1 and level = $2 and cell = $3`,
-				r.uid, r.level, r.cell, start+1, length).Scan(&data)
-			if err != nil {
-				return written, err
-			}
-			block = data
-			r.cache[start] = block
-		}
-		lo := at - start
-		if lo >= int64(len(block)) {
-			return written, io.EOF
-		}
-		copied := copy(p[written:], block[lo:])
-		written += copied
-		if copied == 0 {
+	missing := false
+	for n := first; n <= last; n++ {
+		if _, ok := r.cache[n]; !ok {
+			missing = true
 			break
 		}
+	}
+	if missing {
+		rows, err := r.pool.Query(r.ctx, `select no, data from pgpq.cell_chunks where cell_id = $1 and no between $2 and $3`, r.cellID, first, last)
+		if err != nil {
+			return 0, err
+		}
+		for rows.Next() {
+			var n int32
+			var data []byte
+			if err := rows.Scan(&n, &data); err != nil {
+				rows.Close()
+				return 0, err
+			}
+			r.cache[n] = data
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+	written := 0
+	for n := first; n <= last; n++ {
+		data, ok := r.cache[n]
+		if !ok {
+			return written, io.ErrUnexpectedEOF
+		}
+		lo := int64(0)
+		if n == first {
+			lo = off - int64(n)*8120
+		}
+		hi := int64(len(data))
+		if n == last {
+			hi = min(hi, end-int64(n)*8120)
+		}
+		if lo < 0 || lo > hi {
+			return written, io.ErrUnexpectedEOF
+		}
+		written += copy(p[written:], data[lo:hi])
 	}
 	if written < len(p) {
 		return written, io.EOF

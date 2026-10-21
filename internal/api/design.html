@@ -19,12 +19,12 @@ ol,ul{padding-left:22px}.ok{color:var(--ok)}.bad{color:var(--bad)}.small{font-si
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="i-db" viewBox="0 0 16 16"><ellipse cx="8" cy="3.5" rx="5.5" ry="2.5" fill="none" stroke="currentColor"/><path d="M2.5 3.5v9c0 1.4 2.5 2.5 5.5 2.5s5.5-1.1 5.5-2.5v-9M2.5 8c0 1.4 2.5 2.5 5.5 2.5s5.5-1.1 5.5-2.5" fill="none" stroke="currentColor"/></symbol></defs></svg>
 
 <h1>pgpq v2 <span class="tag">contract</span></h1>
-<p class="lede">PostgreSQL-backed GeoParquet 2.0. One native Parquet geometry column, one GeoParquet <code>bytea</code> per spatial cell, and one virtual GeoParquet response per collection or overview. Parquet pages use zstd internally; the server does not add a second compression layer. Large cells are read as external-TOAST ranges, not whole values.</p>
+<p class="lede">PostgreSQL-backed GeoParquet 2.0. One native Parquet geometry column, one logical GeoParquet file per spatial cell stored as 8,120-byte inline chunks, and one virtual GeoParquet response per collection or overview. Parquet pages use zstd internally; chunks are not compressed again.</p>
 
 <h2>Shape</h2>
 <div class="grid">
 <div class="card"><b>Upload</b><br>DuckDB file. A view becomes a collection; <code>layer_catalog</code> supplies view, id and geometry columns. The writable worker invokes the DuckDB CLI and exports the view.</div>
-<div class="card"><b>Storage</b><br>A GeoParquet 2.0 cell file with native <code>GEOMETRY</code>/WKB, row groups of 2,048 and zstd-compressed Parquet pages, stored as one <code>bytea</code> in <code>pgpq.cells</code>.</div>
+<div class="card"><b>Storage</b><br>A GeoParquet 2.0 cell file with native <code>GEOMETRY</code>/WKB, row groups of 2,048 and zstd-compressed Parquet pages, split into 8,120-byte inline chunks in <code>pgpq.cell_chunks</code>.</div>
 <div class="card"><b>Read</b><br>Catalog bbox/zone pruning, then Parquet row-group geospatial statistics, then exact bbox/filter evaluation. JSON or filtered GeoParquet.</div>
 <div class="card"><b>Tile replacement</b><br><code>items?bbox=…&amp;overview=6&amp;f=geoparquet</code> is a virtual GeoParquet file for that view, filtered at the requested bbox and zoom level.</div>
 </div>
@@ -35,7 +35,7 @@ ol,ul{padding-left:22px}.ok{color:var(--ok)}.bad{color:var(--bad)}.small{font-si
 <li>If <code>layer_catalog</code> exists, read <code>view_name</code>, <code>id_column</code> and <code>geom_column</code>. Otherwise use <code>id_column=</code> and a <code>geometry</code> column.</li>
 <li>Export the view to a Parquet staging file with DuckDB; read it with the same native GeoParquet reader used by the direct GeoParquet compatibility path.</li>
 <li>Assign every feature to a level-8 S2 cell by geometry bounds, sort by Hilbert key and id, and write one GeoParquet file per cell.</li>
-<li>Insert the GeoParquet file as one <code>bytea</code> cell row; Parquet already compressed its pages with zstd. Build L6/L4/L2 samples from the same in-memory feature set and commit them in the same transaction.</li>
+<li>Split the GeoParquet file into 8,120-byte chunks under one generated <code>cell_id</code>; Parquet already compressed its pages with zstd. Build L6/L4/L2 samples from the same in-memory feature set and commit them in the same transaction.</li>
 </ol>
 <p class="muted small">The core is cgo-free. DuckDB is an external command, configured by <code>PGPQ_DUCKDB</code>. Direct GeoParquet 2.0 upload is kept as a compatibility path for migrations.</p>
 
@@ -46,21 +46,23 @@ ol,ul{padding-left:22px}.ok{color:var(--ok)}.bad{color:var(--bad)}.small{font-si
 <tr><td>Attributes</td><td>root primitive columns; bool, int64, double, string, JSON</td></tr>
 <tr><td>Row order</td><td><code>(__pgpq_key, id)</code>; key is the ordered S2 Hilbert key</td></tr>
 <tr><td>Row groups</td><td>2,048 rows; native geospatial bbox statistics per group</td></tr>
-<tr><td>Compression</td><td>Parquet pages zstd-compressed internally; the <code>bytea</code> is not compressed again</td></tr>
+<tr><td>Storage</td><td>8,120-byte chunks, one per 8 KB heap page, inline without TOAST</td></tr>
+<tr><td>Compression</td><td>Parquet pages zstd-compressed internally; chunks are not compressed again</td></tr>
 <tr><td>Metadata</td><td>GeoParquet <code>geo</code> key with version 2.0.0, primary column, WKB and bbox</td></tr>
 </table>
 <p class="muted small">The hidden <code>__pgpq_key</code> column is not returned in GeoJSON. It lets the reader skip row groups before a cursor and keeps each cell deterministic.</p>
 
 <h2>Catalog</h2>
 <pre>pgpq.collections  uid, name, version, id_column, geometry, columns_json
-pgpq.cells        collection_uid, level, cell, features, bounds, key range, zone, data bytea
+pgpq.cells        collection_uid, level, cell, cell_id, features, bytes, bounds, key range, zone
+pgpq.cell_chunks  cell_id, no, data bytea (8,120 bytes inline)
 pgpq.ids          collection_uid, hash, cell, row</pre>
-<p>The catalog carries only scalar pruning data. Reading a cell fetches and decompresses exactly one <code>bytea</code>; no block table and no sidecar file lookup.</p>
+<p>The catalog carries only scalar pruning data. Reading a cell issues primary-key range queries against <code>cell_chunks</code>; each 8,120-byte row is inline, so there is no TOAST indirection and no sidecar file lookup.</p>
 
 <h2>Read path</h2>
 <ol>
 <li>Prune cells with collection bounds and the per-cell numeric zone.</li>
-<li>Parse the footer from a TOAST slice. Small cells are fetched whole; large cells read 64 KiB ranges through <code>substring</code>, so Parquet page/footer ranges stay lazy.</li>
+<li>Fetch the Parquet footer and selected pages as primary-key chunk ranges. The reader caches chunks per immutable cell.</li>
 <li>Skip row groups whose native geospatial bbox or attribute statistics cannot match.</li>
 <li>Read surviving rows, apply exact bbox/filter checks, and stop at the page limit.</li>
 <li>Serialize the page as JSON (default) or GeoParquet 2.0 (<code>f=geoparquet</code>).</li>
@@ -75,7 +77,7 @@ pgpq.ids          collection_uid, hash, cell, row</pre>
 
 <h2>Limits</h2>
 <ul>
-<li>Small cells are fetched whole; large cells use external-TOAST slices. Dense cells should still be sized for the worker memory budget; the writer caps concurrent cells at two.</li>
+<li>Chunks are read by primary-key range; dense cells should still be sized for the worker memory budget; the writer caps concurrent cells at two.</li>
 <li>DuckDB ingest requires the external <code>duckdb</code> binary and the spatial extension. Reading/querying a loaded collection does not.</li>
 <li>Geometry columns must be root columns and use OGC:CRS84/EPSG:4326. Nested schema and multiple geometry columns are not supported yet.</li>
 <li><code>numberMatched</code> with a filter scans surviving row groups; it is not a posting-list count.</li>
@@ -86,26 +88,26 @@ pgpq.ids          collection_uid, hash, cell, row</pre>
 <p class="muted small">Local PostgreSQL 18.6, 6 vCPU, warm cache, localhost HTTP; median of 30 requests after warmup. Payload includes JSON or Parquet bytes.</p>
 <table>
 <tr><th>Request</th><th>Median</th><th>p95</th><th>Response</th></tr>
-<tr><td>warm100k bbox → JSON</td><td>4.1 ms</td><td>5.1 ms</td><td>1.1 kB</td></tr>
-<tr><td>warm100k filter (32k matches) → JSON</td><td>40.1 ms</td><td>45.0 ms</td><td>32 kB</td></tr>
-<tr><td>warm100k id lookup → JSON</td><td>1.6 ms</td><td>1.8 ms</td><td>407 B</td></tr>
-<tr><td>Luxembourg bbox (228k building collection) → JSON</td><td>12.2 ms</td><td>16.3 ms</td><td>33 kB</td></tr>
-<tr><td>Monaco enriched bbox → JSON</td><td>21.1 ms</td><td>26.7 ms</td><td>434 kB</td></tr>
-<tr><td>Monaco enriched filter → JSON</td><td>23.5 ms</td><td>38.2 ms</td><td>434 kB</td></tr>
-<tr><td>warm100k L2 overview → JSON</td><td>17.5 ms</td><td>21.5 ms</td><td>325 kB</td></tr>
-<tr><td>Luxembourg bbox → GeoParquet</td><td>53.8 ms</td><td>60.4 ms</td><td>101 kB</td></tr>
-<tr><td>Monaco bbox, 1,000 rows → GeoParquet</td><td>143.5 ms</td><td>162.0 ms</td><td>770 kB</td></tr>
+<tr><td>warm100k bbox → JSON</td><td>4.3 ms</td><td>6.1 ms</td><td>1.1 kB</td></tr>
+<tr><td>warm100k filter (32k matches) → JSON</td><td>43.6 ms</td><td>50.6 ms</td><td>32 kB</td></tr>
+<tr><td>warm100k id lookup → JSON</td><td>1.6 ms</td><td>2.2 ms</td><td>407 B</td></tr>
+<tr><td>Luxembourg bbox (228k building collection) → JSON</td><td>10.5 ms</td><td>15.0 ms</td><td>33 kB</td></tr>
+<tr><td>Monaco enriched bbox → JSON</td><td>20.8 ms</td><td>28.4 ms</td><td>434 kB</td></tr>
+<tr><td>Monaco enriched filter → JSON</td><td>20.2 ms</td><td>28.5 ms</td><td>434 kB</td></tr>
+<tr><td>warm100k L2 overview → JSON</td><td>15.3 ms</td><td>18.6 ms</td><td>325 kB</td></tr>
+<tr><td>Luxembourg bbox → GeoParquet</td><td>53.5 ms</td><td>63.1 ms</td><td>101 kB</td></tr>
+<tr><td>Monaco bbox, 1,000 rows → GeoParquet</td><td>143.1 ms</td><td>163.7 ms</td><td>770 kB</td></tr>
 </table>
-<p class="muted small">Ingest measured through the public writable endpoint: Monaco DuckDB 12.6 MB / 4,628 features in 1.24–1.27 s (~270 µs/feature); Luxembourg DuckDB 48.2 MB / 228,273 features in 8.18 s (~36 µs/feature). Detail data is 41 MB for 100k warm features, 21 MB for 228k Luxembourg buildings, and 4.8 MB for 4,628 enriched Monaco features. The current PostgreSQL database is about 300 MB.</p>
-<p class="note">Range proof: a 64-byte slice of a 9 MB external cell touched 8 shared buffers; reading the whole value touched 142. The cell reader uses 64 KiB aligned slices and a small per-file cache.</p>
+<p class="muted small">Ingest measured through the public writable endpoint: Monaco DuckDB 12.6 MB / 4,628 features in 1.24–1.27 s (~270 µs/feature); Luxembourg DuckDB 48.2 MB / 228,273 features in 8.18 s (~36 µs/feature). Detail data is 41 MB for 100k warm features, 21 MB for 228k Luxembourg buildings, and 4.8 MB for 4,628 enriched Monaco features. The current PostgreSQL database is about 212 MB.</p>
+<p class="note">Chunk layout follows pgvfs: 8,120 data bytes plus tuple overhead fit <code>toast_tuple_target = 8160</code>, so each row occupies one 8 KB page inline. A cell read is a primary-key range scan over <code>(cell_id, no)</code>.</p>
 
 <h2>Code size</h2>
-<p>About 3,978 production Go lines. The FGB format, block store, fence, prepared bundle, sidecar Parquet and pid index are gone. Remaining bulk is the CQL parser/evaluator and the GeoParquet writer/reader.</p>
+<p>About 4,030 production Go lines. The FGB format, block store, fence, prepared bundle, sidecar Parquet and pid index are gone. Remaining bulk is the CQL parser/evaluator and the GeoParquet writer/reader.</p>
 
 <h2>Decisions</h2>
 <ul>
 <li><span class="tag">built</span> GeoParquet 2.0 native GEOMETRY/WKB cells.</li>
-<li><span class="tag">built</span> One GeoParquet <code>bytea</code> per cell with internal zstd pages; no separate block/file table.</li>
+<li><span class="tag">built</span> One logical GeoParquet file per cell as 8,120-byte inline chunks; no outer zstd.</li>
 <li><span class="tag">built</span> DuckDB upload with external CLI export; direct GeoParquet compatibility.</li>
 <li><span class="tag">built</span> Parquet native bbox/attribute statistics for pruning.</li>
 <li><span class="tag">built</span> JSON and filtered GeoParquet output.</li>

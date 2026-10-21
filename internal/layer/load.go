@@ -37,6 +37,7 @@ type cellRow struct {
 	level    int
 	features int
 	bytes    int64
+	cellID   int64
 	bounds   [4]float64
 	firstKey uint64
 	firstID  string
