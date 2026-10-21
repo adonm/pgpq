@@ -254,7 +254,7 @@ curl 'http://127.0.0.1:8094/v2/collections/buildings/items?bbox=7.41,43.73,7.43,
 
 curl 'http://127.0.0.1:8094/v2/collections/buildings/items?bbox=7.41,43.73,7.43,43.75&limit=1000&f=geoparquet' \
   -o page.parquet</pre>
-<p class="small text-body-secondary mb-0">For a raw PBF, use <code>osmium extract</code> and <code>osmium tags-filter</code> before converting; retain the filtered extract only. The repository harness is the repeatable path once the background OSM iteration lands.</p>
+<p class="small text-body-secondary mb-0">For a raw PBF, use <code>osmium extract</code> and <code>osmium tags-filter</code> before converting; retain the filtered extract only and convert one layer at a time.</p>
 </div>
 </div>
 </section>
