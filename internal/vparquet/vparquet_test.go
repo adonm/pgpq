@@ -525,6 +525,27 @@ func TestBuildVirtualGeoParquet(t *testing.T) {
 	}
 }
 
+func TestBuildSingleShard(t *testing.T) {
+	features := []geo.Feature{
+		pointFeature(t, "a", 1, 7, 8, map[string]any{"n": int64(3)}),
+		pointFeature(t, "b", 2, 9, 10, nil),
+	}
+	data := encodeShard(t, []geo.Column{{Name: "id", Type: geo.String}, {Name: "n", Type: geo.Int}}, features)
+	layout, err := Build([]Shard{{Reader: bytes.NewReader(data), Size: int64(len(data))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.Rows != 2 || len(layout.Segments) != 1 {
+		t.Fatalf("layout = %+v", layout)
+	}
+	assembled := assemble(t, layout, [][]byte{data})
+	dataset, err := geo.ReadDataset(bytes.NewReader(assembled), geo.Options{IDColumn: "id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compareFeatures(t, dataset.Features, features)
+}
+
 func TestBuildRejectsNoShards(t *testing.T) {
 	if _, err := Build(nil); err == nil {
 		t.Fatal("Build accepted no shards")

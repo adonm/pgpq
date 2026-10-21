@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,7 +83,17 @@ func (s *Server) getCollection(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid collection name", http.StatusUnprocessableEntity)
 		return
 	}
-	v, err := s.datasets.Open(r.Context(), name)
+	version, err := requestedVersion(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var v *dataset.VirtualFile
+	if version > 0 {
+		v, err = s.datasets.OpenVersion(r.Context(), name, version)
+	} else {
+		v, err = s.datasets.Open(r.Context(), name)
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -143,6 +154,18 @@ func (s *Server) listCollections(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"collections": out})
+}
+
+func requestedVersion(r *http.Request) (int64, error) {
+	value := r.URL.Query().Get("version")
+	if value == "" {
+		return 0, nil
+	}
+	version, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || version < 1 {
+		return 0, errors.New("version must be a positive integer")
+	}
+	return version, nil
 }
 
 func writeError(w http.ResponseWriter, err error) {

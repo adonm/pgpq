@@ -467,7 +467,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 <tbody>
 <tr><td><code>/v2/collections/{id}</code></td><td><code>PUT</code></td><td>Replace from one native GeoParquet 2.0 file; writable only.</td></tr>
 <tr><td><code>/v2/collections/{id}</code></td><td><code>POST</code></td><td>Upsert a batch by id; rewrites overlaps; writable only.</td></tr>
-<tr><td><code>/v2/collections/{id}.parquet</code></td><td><code>GET</code></td><td>Current version as one virtual file; <code>200</code> or <code>206</code>.</td></tr>
+<tr><td><code>/v2/collections/{id}.parquet?version=N</code></td><td><code>GET</code></td><td>Pinned immutable version; omit the query for the current version. <code>200</code> or <code>206</code>.</td></tr>
 <tr><td><code>/v2/collections/{id}.parquet</code></td><td><code>HEAD</code></td><td>Same path, headers only: size, ETag, <code>Accept-Ranges</code>.</td></tr>
 <tr><td><code>/v2/collections/{id}</code></td><td><code>GET</code></td><td>Collection metadata as JSON.</td></tr>
 <tr><td><code>/v2/collections</code></td><td><code>GET</code></td><td>Collection list as JSON.</td></tr>

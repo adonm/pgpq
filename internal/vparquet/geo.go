@@ -43,16 +43,6 @@ func parseGeo(value string) (*geoDocument, error) {
 		if !strings.EqualFold(encoding, "WKB") {
 			return nil, fmt.Errorf("column %q encoding %q is not WKB", name, encoding)
 		}
-		if bbox, ok := column["bbox"]; ok {
-			if _, err := decodeBBox(bbox); err != nil {
-				return nil, fmt.Errorf("column %q bbox: %w", name, err)
-			}
-		}
-		if types, ok := column["geometry_types"]; ok {
-			if _, valid := decodeGeometryTypes(types); !valid {
-				return nil, fmt.Errorf("column %q geometry_types is not a string array", name)
-			}
-		}
 		columns[name] = column
 	}
 	if _, ok := columns[primary]; !ok {
@@ -204,7 +194,8 @@ func mergeGeoBBox(name string, column map[string]any, shards []shardFile, comple
 
 func mergeGeoTypes(name string, column map[string]any, shards []shardFile, complete bool) {
 	baseTypes, ok := geoTypes(column)
-	if !ok {
+	if !ok || len(baseTypes) == 0 {
+		column["geometry_types"] = []string{}
 		return
 	}
 	if !complete {
@@ -219,13 +210,13 @@ func mergeGeoTypes(name string, column map[string]any, shards []shardFile, compl
 			return
 		}
 		types, ok := geoTypes(other.columns[name])
-		if !ok {
+		if !ok || len(types) == 0 {
 			column["geometry_types"] = []string{}
 			return
 		}
-		for _, name := range types {
-			if !slices.Contains(merged, name) {
-				merged = append(merged, name)
+		for _, geometryType := range types {
+			if !slices.Contains(merged, geometryType) {
+				merged = append(merged, geometryType)
 			}
 		}
 	}
@@ -244,18 +235,11 @@ func geoBBox(column map[string]any) ([]float64, bool) {
 	case []float64:
 		return box, true
 	case []any:
-		values := make([]float64, len(box))
-		for i := range box {
-			number, ok := box[i].(float64)
-			if !ok {
-				return nil, false
-			}
-			values[i] = number
+		values, err := decodeBBox(box)
+		if err != nil {
+			return nil, false
 		}
-		switch len(values) {
-		case 4, 6, 8:
-			return values, true
-		}
+		return values, true
 	}
 	return nil, false
 }

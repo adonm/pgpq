@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/adonm/pgpq/internal/geo"
+	"github.com/adonm/pgpq/internal/store"
 )
 
 const chunkBytes = 8120
@@ -70,6 +71,9 @@ func (r *chunkReader) ReadAt(p []byte, off int64) (int, error) {
 	last := int32((end - 1) / chunkBytes)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.cache) > 4096 {
+		r.cache = make(map[int32][]byte)
+	}
 	missing := false
 	for n := first; n <= last; n++ {
 		if _, ok := r.cache[n]; !ok {
@@ -243,21 +247,28 @@ func (m *Manager) Open(ctx context.Context, name string) (*VirtualFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return m.OpenVersion(ctx, name, coll.Version)
+}
+
+func (m *Manager) OpenVersion(ctx context.Context, name string, version int64) (*VirtualFile, error) {
 	var footer []byte
 	var footerStart, totalLength int64
 	var etag string
-	err = m.pool.QueryRow(ctx, `select footer, footer_start, total_length, etag from pgpq.virtual_files where collection = $1 and version = $2`, name, coll.Version).
+	err := m.pool.QueryRow(ctx, `select footer, footer_start, total_length, etag from pgpq.virtual_files where collection = $1 and version = $2`, name, version).
 		Scan(&footer, &footerStart, &totalLength, &etag)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
-	shards, err := m.readShards(ctx, m.pool, name, coll.Version)
+	shards, err := m.readShards(ctx, m.pool, name, version)
 	if err != nil {
 		return nil, err
 	}
 	return &VirtualFile{
 		collection:  name,
-		version:     coll.Version,
+		version:     version,
 		etag:        etag,
 		footer:      footer,
 		footerStart: footerStart,

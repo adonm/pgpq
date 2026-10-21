@@ -13,7 +13,7 @@ The upload format is native GeoParquet 2.0 only. Geometry must be a Parquet `GEO
 | `PUT /v2/collections/{id}` (writable) | replace a collection from one native GeoParquet 2.0 file |
 | `POST /v2/collections/{id}` (writable) | upsert a batch by id; rewrites only overlapping shards and splits oversized shards |
 | `GET /v2/collections/{id}.parquet` | current version as one virtual Parquet file |
-| `GET`/`HEAD` with `Range` | standard byte ranges, `206`, `Content-Range`, `ETag` |
+| `GET`/`HEAD` with `Range` | standard byte ranges, `206`, `Content-Range`, `ETag`; `?version=N` pins an immutable version |
 | `GET /v2/collections/{id}` | collection metadata and virtual file URL |
 | `GET /v2/collections` | collection list |
 | `GET /healthz`, `/readyz` | probes |
@@ -38,7 +38,7 @@ Rows are sorted by `(spatial key, id)`. A `PUT` writes a new version. A `POST` r
 2. Return `Content-Length`, `Accept-Ranges`, `ETag` and the requested byte ranges.
 3. Map virtual offsets through `virtual_base` to shard data.
 4. The client reads the footer, selects row groups using Parquet statistics, and fetches only those ranges.
-5. The client decodes geometry and applies its own bbox/filter logic.
+5. The client decodes geometry and applies its own bbox/filter logic. Use `?version=N` when a reader must pin one immutable snapshot.
 
 ## Measured
 
