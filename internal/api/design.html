@@ -165,7 +165,7 @@
 
     <section id="heavy" class="mb-5" aria-labelledby="heavy-title">
       <h2 id="heavy-title" class="h3 mb-3">Heavy cell result</h2>
-      <div class="alert alert-danger" role="alert"><strong>One-file append is the current bottleneck.</strong> A one-row append to a 1M-row cell rewrote the whole 10 MB cell in 20.9 s and used 1.39 GB RSS. Queries are fine; partial updates are not.</div>
+      <div class="alert alert-warning" role="alert"><strong>Hourly batch model.</strong> A one-row append to a 1M-row cell rewrites the whole 10 MB cell in 20.9 s and uses 1.39 GB RSS. That is acceptable for one batch per cell per hour, not for per-row updates.</div>
       <div class="row g-4">
         <div class="col-lg-6">
           <table class="table table-dark table-sm">
@@ -183,9 +183,9 @@
         </div>
         <div class="col-lg-6">
           <div class="card h-100"><div class="card-body">
-            <h3 class="h6 text-warning">Next: fragment compaction</h3>
-            <p>Keep one L8 cell identity, but allow a small base file plus sorted delta files. Appends write only the new rows; reads merge fragments by <code>(key,id)</code>; a compaction threshold merges them back into one 2,048-row-group base. This preserves the catalog shape and moves the cost from every insert to an occasional compaction.</p>
-            <p class="mb-0">Until that exists, a full <code>PUT</code> is the predictable compaction path for dense cells.</p>
+            <h3 class="h6 text-warning">Batch writes</h3>
+            <p>Send one <code>POST</code> per hourly batch. Each touched cell is read, merged, sorted and rewritten once; untouched cells are not rewritten. The catalog stays one row per cell and there are no small-file fragments to compact.</p>
+            <p class="mb-0">Size the writable worker for the largest cell in the batch: a 1M-row cell needs about 1.4 GB peak. Fragment compaction is deferred until the update cadence or cell size makes a 21 s rewrite too expensive.</p>
           </div></div>
         </div>
       </div>
@@ -315,7 +315,7 @@
       <div class="alert alert-warning" role="status">DuckDB ingest requires the external <code>duckdb</code> binary and spatial extension; the server never links DuckDB. A cell is decompressed logically through Parquet ranges, and dense cells should be sized for the worker memory budget.</div>
       <ul class="list-group list-group-flush">
         <li class="list-group-item bg-transparent">One geometry column, root-level attributes, OGC:CRS84/EPSG:4326 only.</li>
-        <li class="list-group-item bg-transparent">One-file-per-cell append is correct but too expensive for dense cells; fragment compaction is the next storage change.</li>
+        <li class="list-group-item bg-transparent">One-file-per-cell append is intended for hourly batches; use <code>PUT</code> for a full snapshot and avoid per-row appends.</li>
         <li class="list-group-item bg-transparent">Filtered <code>numberMatched</code> scans surviving row groups; it is not a posting-list count.</li>
         <li class="list-group-item bg-transparent">About 4,145 production Go lines. The remaining bulk is CQL and the GeoParquet reader/writer.</li>
       </ul>

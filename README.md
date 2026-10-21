@@ -75,9 +75,9 @@ One L8 cell with 1,000,000 points, generated in DuckDB:
 | numberMatched over 1M rows | 1.9 s |
 | overview L2 page | 8.5 ms |
 | bbox, 100 rows → GeoParquet | 11.1 ms |
-| one-row append | **20.9 s, 1.39 GB peak; rewrites the 10 MB cell** |
+| one-row append (hourly batch) | **20.9 s, 1.39 GB peak; rewrites the 10 MB cell** |
 
-The query numbers are good, but one-file-per-cell append is not acceptable for a dense cell: it reads, merges, and rewrites the whole cell. The next storage change is the DuckLake-style fragment step: append a small sorted delta file, merge fragments on read, and compact when the fragment count or delta size crosses a threshold. The current catalog and 8,120-byte inline chunks stay.
+The query numbers are good. The one-file-per-cell rewrite is acceptable under the intended **hourly batch** model: one `POST` per batch, each touched cell rewritten once. Do not append per row. A 1M-row cell moves 10 MB and takes ~21 s per batch; the catalog stays one row per cell with no fragment backlog. Fragment compaction remains optional if the update cadence tightens or cells grow much larger.
 
 ## Quickstart
 
