@@ -1,6 +1,8 @@
 package geo
 
 import (
+	"io"
+
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/adonm/pgpq/internal/cql"
@@ -27,7 +29,7 @@ type Dataset struct {
 }
 
 type File struct {
-	data       []byte
+	reader     io.ReaderAt
 	file       *parquet.File
 	fields     []parquet.Field
 	geometry   int

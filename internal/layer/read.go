@@ -188,7 +188,7 @@ func (l *Layer) catalogFor(ctx context.Context, coll Collection, level int, cell
 }
 
 func (l *Layer) catalogQuery(ctx context.Context, coll Collection, level int, cells []uint64) ([]cellMeta, error) {
-	query := `select cell, features, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pgpq.cells where collection_uid = $1 and level = $2`
+	query := `select cell, features, bytes, minx, miny, maxx, maxy, first_key, first_id, last_key, last_id, zone from pgpq.cells where collection_uid = $1 and level = $2`
 	args := []any{coll.UID, level}
 	if cells != nil {
 		query += ` and cell = any($3)`
@@ -204,7 +204,7 @@ func (l *Layer) catalogQuery(ctx context.Context, coll Collection, level int, ce
 	for rows.Next() {
 		var meta cellMeta
 		var cell, firstKey, lastKey int64
-		if err := rows.Scan(&cell, &meta.features, &meta.bounds[0], &meta.bounds[1], &meta.bounds[2], &meta.bounds[3], &firstKey, &meta.firstID, &lastKey, &meta.lastID, &meta.zone); err != nil {
+		if err := rows.Scan(&cell, &meta.features, &meta.bytes, &meta.bounds[0], &meta.bounds[1], &meta.bounds[2], &meta.bounds[3], &firstKey, &meta.firstID, &lastKey, &meta.lastID, &meta.zone); err != nil {
 			return nil, err
 		}
 		meta.level = level

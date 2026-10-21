@@ -10,10 +10,10 @@ import (
 	"github.com/adonm/pgpq/internal/spatial"
 )
 
-var cellColumns = []string{"collection_uid", "level", "cell", "features", "minx", "miny", "maxx", "maxy", "first_key", "first_id", "last_key", "last_id", "zone", "data"}
+var cellColumns = []string{"collection_uid", "level", "cell", "features", "bytes", "minx", "miny", "maxx", "maxy", "first_key", "first_id", "last_key", "last_id", "zone", "data"}
 
 func cellValues(uid int64, row cellRow) []any {
-	return []any{uid, row.level, spatial.ToOrdered(row.cell), row.features, row.bounds[0], row.bounds[1], row.bounds[2], row.bounds[3],
+	return []any{uid, row.level, spatial.ToOrdered(row.cell), row.features, row.bytes, row.bounds[0], row.bounds[1], row.bounds[2], row.bounds[3],
 		spatial.ToOrdered(row.firstKey), row.firstID, spatial.ToOrdered(row.lastKey), row.lastID, row.zone, row.data}
 }
 

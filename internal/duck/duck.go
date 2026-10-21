@@ -67,7 +67,11 @@ func catalog(ctx context.Context, dbPath, name, view string) (catalogRow, error)
 			return rows[0], nil
 		}
 	}
-	query = fmt.Sprintf(`select table_name as view_name, '' as id_column, 'geometry' as geom_column from information_schema.tables where table_name = %s limit 1`, quote(name))
+	lookup := name
+	if view != "" {
+		lookup = view
+	}
+	query = fmt.Sprintf(`select table_name as view_name, '' as id_column, 'geometry' as geom_column from information_schema.tables where table_name = %s limit 1`, quote(lookup))
 	raw, err = output(ctx, dbPath, query)
 	if err != nil {
 		return row, err

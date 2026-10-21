@@ -25,7 +25,7 @@ JSON is the default response. `f=geoparquet` returns a filtered GeoParquet 2.0 p
 - `pgpq.collections`: name, id, geometry column, schema.
 - `pgpq.cells`: one row per collection/level/S2 cell; bounds, key range, zone, and `data bytea`.
 - `pgpq.ids`: hash and `(cell,row)` pointer for exact id lookup.
-- `data` is the GeoParquet file itself with internal zstd page compression, forced to `STORAGE EXTERNAL` so Postgres does not compress it again.
+- `data` is the GeoParquet file itself with internal zstd page compression, forced to `STORAGE EXTERNAL` so Postgres does not compress it again. Small cells are fetched whole; large cells are read as 64 KiB `substring` ranges from external TOAST.
 - The GeoParquet rows are sorted by `(Hilbert key, id)`. A hidden `__pgpq_key` column drives cursor and row-group pruning.
 - L8 is detail. L6, L4 and L2 keep up to 2,048 sampled features per cell and are built in the write commit.
 
@@ -38,6 +38,24 @@ JSON is the default response. `f=geoparquet` returns a filtered GeoParquet 2.0 p
 5. Return JSON or a filtered GeoParquet 2.0 file.
 
 The result is a virtual GeoParquet dataset per collection/overview without a separate tile pyramid or FGB index.
+
+## Measured
+
+Warm localhost, PostgreSQL 18.6, 6 vCPU, median of 30 requests:
+
+| Request | Median | p95 | Response |
+| --- | ---: | ---: | ---: |
+| warm100k bbox → JSON | 4.1 ms | 5.1 ms | 1.1 kB |
+| warm100k filter (32k matches) → JSON | 40.1 ms | 45.0 ms | 32 kB |
+| warm100k id → JSON | 1.6 ms | 1.8 ms | 407 B |
+| Luxembourg bbox → JSON | 12.2 ms | 16.3 ms | 33 kB |
+| Monaco enriched bbox → JSON | 21.1 ms | 26.7 ms | 434 kB |
+| Monaco enriched filter → JSON | 23.5 ms | 38.2 ms | 434 kB |
+| L2 overview → JSON | 17.5 ms | 21.5 ms | 325 kB |
+| Luxembourg bbox → GeoParquet | 53.8 ms | 60.4 ms | 101 kB |
+| Monaco bbox, 1,000 rows → GeoParquet | 143.5 ms | 162.0 ms | 770 kB |
+
+DuckDB ingest: Monaco 12.6 MB / 4,628 features in 1.24–1.27 s; Luxembourg 48.2 MB / 228,273 features in 8.18 s. A 64-byte external-TOAST slice touched 8 buffers versus 142 for the whole cell.
 
 ## Quickstart
 

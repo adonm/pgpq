@@ -1,7 +1,6 @@
 package geo
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"math"
@@ -18,13 +17,13 @@ type Stats struct {
 	Max   *float64
 }
 
-func Open(data []byte) (*File, error) {
-	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+func Open(reader io.ReaderAt, size int64) (*File, error) {
+	file, err := parquet.OpenFile(reader, size)
 	if err != nil {
 		return nil, errors.New("geopq: cell file unreadable")
 	}
 	fields := file.Schema().Fields()
-	f := &File{data: data, file: file, fields: fields, geometry: -1, key: -1}
+	f := &File{reader: reader, file: file, fields: fields, geometry: -1, key: -1}
 	for i, field := range fields {
 		switch field.Name() {
 		case "__pgpq_key":
@@ -168,7 +167,7 @@ func (f *File) RowGroups(groups []int, idColumn string) ([]Feature, error) {
 }
 
 func (f *File) FeatureAt(row int, idColumn string) (Feature, error) {
-	reader := parquet.NewReader(bytes.NewReader(f.data))
+	reader := parquet.NewReader(f.reader)
 	defer reader.Close()
 	if err := reader.SeekToRow(int64(row)); err != nil {
 		return Feature{}, err

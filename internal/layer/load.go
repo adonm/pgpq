@@ -36,6 +36,7 @@ type cellRow struct {
 	cell     uint64
 	level    int
 	features int
+	bytes    int64
 	bounds   [4]float64
 	firstKey uint64
 	firstID  string
@@ -192,6 +193,7 @@ func (l *Layer) writeCell(ctx context.Context, name string, ds geo.Dataset, cell
 		cell:     cell,
 		level:    level,
 		features: len(entries),
+		bytes:    int64(len(raw)),
 		bounds:   bounds,
 		firstKey: entries[0].key,
 		firstID:  entries[0].id,

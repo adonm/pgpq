@@ -33,7 +33,7 @@ func TestCellRoundTrip(t *testing.T) {
 	if !bytes.HasPrefix(data, []byte("PAR1")) {
 		t.Fatal("cell is not a Parquet file")
 	}
-	file, err := Open(data)
+	file, err := Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatal(err)
 	}
