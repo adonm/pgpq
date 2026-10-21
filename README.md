@@ -12,7 +12,8 @@ GeoParquet 2.0 input is also accepted directly for loader compatibility.
 
 | Path | Content |
 | --- | --- |
-| `PUT /v2/collections/{id}` (writable) | load a DuckDB file; `view=` selects a view, `id_column=` overrides the id, `cells=` scopes a load. GeoParquet 2.0 bodies are accepted directly. |
+| `PUT /v2/collections/{id}` (writable) | replace a collection from a DuckDB file; `view=` selects a view, `id_column=` overrides the id, `cells=` scopes a load. GeoParquet 2.0 bodies are accepted directly. |
+| `POST /v2/collections/{id}` (writable) | merge/append into existing L8 cells; touched cells and their parent samples are rewritten and sorted |
 | `GET /v2/collections/{id}/items` | `bbox`, CQL2-text property filters, `limit`, cursor paging, `overview=0\|2\|4\|6`, `numberMatched=true`, and `f=geoparquet` or `Accept: application/vnd.apache.parquet` |
 | `GET /v2/collections/{id}/items/{featureID}` | one feature by stored id |
 | `GET /healthz`, `/readyz` | probes |
@@ -27,6 +28,7 @@ JSON is the default response. `f=geoparquet` returns a filtered GeoParquet 2.0 p
 - `pgpq.cell_chunks`: `(cell_id, no)` primary key with 8,120-byte raw GeoParquet chunks, inline one 8 KB page (`toast_tuple_target=8160`, `STORAGE EXTERNAL`).
 - `pgpq.ids`: hash and `(cell,row)` pointer for exact id lookup.
 - Chunks are primary-key range reads. Parquet pages use zstd internally; chunks are never compressed again.
+- One GeoParquet file per S2 L8 cell, row groups of 2,048, rows in `(__pgpq_key, id)` order. `POST` merges an insert into the affected cells; there are no small-file fragments to compact later.
 - The GeoParquet rows are sorted by `(Hilbert key, id)`. A hidden `__pgpq_key` column drives cursor and row-group pruning.
 - L8 is detail. L6, L4 and L2 keep up to 2,048 sampled features per cell and are built in the write commit.
 
@@ -56,7 +58,7 @@ Warm localhost, PostgreSQL 18.6, 6 vCPU, median of 30 requests:
 | Luxembourg bbox → GeoParquet | 53.5 ms | 63.1 ms | 101 kB |
 | Monaco bbox, 1,000 rows → GeoParquet | 143.1 ms | 163.7 ms | 770 kB |
 
-DuckDB ingest: Monaco 12.6 MB / 4,628 features in 1.24–1.27 s; Luxembourg 48.2 MB / 228,273 features in 8.18 s. The chunk table holds 13,343 rows of 8,120 bytes inline, with no TOAST indirection. Database size is about 212 MB.
+DuckDB ingest: Monaco 12.6 MB / 4,628 features in 1.24–1.27 s; Luxembourg 48.2 MB / 228,273 features in 8.18 s. A one-row append rewrote one Monaco cell and its parents in 0.86 s; repeating the same 4,628-row append kept the count at 4,628. The chunk table holds 13,343 rows of 8,120 bytes inline, with no TOAST indirection. Database size is about 212 MB.
 
 ## Quickstart
 

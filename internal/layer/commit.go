@@ -17,7 +17,7 @@ func cellValues(uid int64, row cellRow) []any {
 		spatial.ToOrdered(row.firstKey), row.firstID, spatial.ToOrdered(row.lastKey), row.lastID, row.zone}
 }
 
-func (l *Layer) commit(ctx context.Context, name string, ds geo.Dataset, cells []uint64, rows []cellRow, groups map[uint64][]entry) (LoadResult, error) {
+func (l *Layer) commit(ctx context.Context, name string, ds geo.Dataset, cells []uint64, rows []cellRow, detail map[uint64][]geo.Feature, replaceAll bool) (LoadResult, error) {
 	columns, err := encodeColumns(ds.Columns)
 	if err != nil {
 		return LoadResult{}, err
@@ -38,7 +38,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds geo.Dataset, cells [
 		Scan(&uid, &version, &storedID, &storedGeometry, &stored); err != nil {
 		return LoadResult{}, err
 	}
-	if cells != nil {
+	if !replaceAll {
 		schema, err := decodeColumns(stored)
 		if err != nil {
 			return LoadResult{}, err
@@ -49,8 +49,8 @@ func (l *Layer) commit(ctx context.Context, name string, ds geo.Dataset, cells [
 	}
 	touched := cells
 	if touched == nil {
-		touched = make([]uint64, 0, len(groups))
-		for cell := range groups {
+		touched = make([]uint64, 0, len(detail))
+		for cell := range detail {
 			touched = append(touched, cell)
 		}
 	}
@@ -65,7 +65,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds geo.Dataset, cells [
 	}
 	slices.Sort(replace)
 	replace = slices.Compact(replace)
-	if cells == nil {
+	if replaceAll {
 		if err := deleteAll(ctx, tx, uid); err != nil {
 			return LoadResult{}, err
 		}
@@ -114,7 +114,7 @@ func (l *Layer) commit(ctx context.Context, name string, ds geo.Dataset, cells [
 			return LoadResult{}, err
 		}
 	}
-	if err := replaceIDs(ctx, tx, uid, groups); err != nil {
+	if err := replaceIDs(ctx, tx, uid, detail); err != nil {
 		return LoadResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `update pgpq.collections set version = version + 1, id_column = $2, geometry = $3, columns_json = $4 where name = $1`,
@@ -153,11 +153,11 @@ func deleteAll(ctx context.Context, tx pgx.Tx, uid int64) error {
 	return err
 }
 
-func replaceIDs(ctx context.Context, tx pgx.Tx, uid int64, groups map[uint64][]entry) error {
+func replaceIDs(ctx context.Context, tx pgx.Tx, uid int64, groups map[uint64][]geo.Feature) error {
 	var values [][]any
-	for cell, entries := range groups {
-		for row := range entries {
-			values = append(values, []any{uid, int64(entries[row].hash), spatial.ToOrdered(cell), row})
+	for cell, features := range groups {
+		for row, feature := range features {
+			values = append(values, []any{uid, int64(idHash(feature.ID)), spatial.ToOrdered(cell), row})
 		}
 	}
 	if len(values) == 0 {

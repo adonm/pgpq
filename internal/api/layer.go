@@ -47,7 +47,8 @@ func (s *Server) putLayer(w http.ResponseWriter, r *http.Request) {
 		layerError(w, err)
 		return
 	}
-	result, err := s.layers.Load(r.Context(), name, ds, cells)
+	appendMode := r.Method == http.MethodPost || r.URL.Query().Get("append") == "true"
+	result, err := s.layers.Load(r.Context(), name, ds, cells, appendMode)
 	if err != nil {
 		layerError(w, err)
 		return

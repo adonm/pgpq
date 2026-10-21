@@ -51,6 +51,7 @@
     <a class="navbar-brand fw-semibold" href="#top">pgpq <span class="badge text-bg-warning align-middle">v2</span></a>
     <ul class="nav nav-pills gap-2">
       <li class="nav-item"><a class="nav-link" href="#flow">Flow</a></li>
+      <li class="nav-item"><a class="nav-link" href="#writes">Writes</a></li>
       <li class="nav-item"><a class="nav-link" href="#storage">Storage</a></li>
       <li class="nav-item"><a class="nav-link" href="#reads">Reads</a></li>
       <li class="nav-item"><a class="nav-link" href="#measured">Measured</a></li>
@@ -68,6 +69,7 @@
         <span class="badge text-bg-success">DuckDB upload</span>
         <span class="badge text-bg-success">GeoParquet 2.0</span>
         <span class="badge text-bg-success">inline 8,120 B chunks</span>
+        <span class="badge text-bg-success">append-compacted L8 cells</span>
         <span class="badge text-bg-secondary">no build step</span>
         <span class="badge text-bg-secondary">cgo-free core</span>
       </div>
@@ -122,6 +124,40 @@
               <p class="mb-0">No extensions, no object store, no sidecar files. Readers need only <code>SELECT</code>; writes are ordinary transactions.</p>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="writes" class="mb-5" aria-labelledby="writes-title">
+      <h2 id="writes-title" class="h3 mb-3">Writes and compaction</h2>
+      <div class="row g-4 align-items-stretch">
+        <div class="col-lg-7">
+          <div class="card h-100">
+            <div class="card-body">
+              <table class="table table-dark table-sm align-middle mb-3">
+                <thead><tr><th scope="col">Method</th><th scope="col">Semantics</th></tr></thead>
+                <tbody>
+                  <tr><td><code>PUT</code></td><td>replace the collection or the listed cells; full compaction</td></tr>
+                  <tr><td><code>POST</code></td><td>merge into affected L8 cells; rewrite only those cells and parent samples</td></tr>
+                </tbody>
+              </table>
+              <p class="mb-0">A cell is always one GeoParquet file with 2,048-row groups, sorted by <code>(Hilbert key, id)</code>. An append is a synchronous compaction: read the old cell, merge by id, sort, write a new cell file and new chunk rows, replace the catalog pointer, and delete the old chunks in the same transaction. There is no small-file backlog.</p>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-5">
+          <figure class="figure h-100 m-0">
+            <svg viewBox="0 0 520 240" role="img" aria-labelledby="write-svg-title">
+              <title id="write-svg-title">An append merges incoming rows with one existing L8 cell, sorts the complete cell, and replaces its file and parent samples.</title>
+              <rect class="node" x="16" y="34" width="130" height="62" rx="7"/><text class="flow-label" x="81" y="60" text-anchor="middle">new rows</text><text class="flow-sub" x="81" y="78" text-anchor="middle">DuckDB / GeoParquet</text>
+              <rect class="node" x="16" y="140" width="130" height="62" rx="7"/><text class="flow-label" x="81" y="166" text-anchor="middle">L8 cell</text><text class="flow-sub" x="81" y="184" text-anchor="middle">old GeoParquet</text>
+              <rect class="node hot pulse" x="214" y="84" width="130" height="66" rx="7"/><text class="flow-label" x="279" y="108" text-anchor="middle">merge + sort</text><text class="flow-sub" x="279" y="126" text-anchor="middle">(key, id)</text>
+              <rect class="node" x="410" y="34" width="94" height="62" rx="7"/><text class="flow-label" x="457" y="60" text-anchor="middle">new cell</text><text class="flow-sub" x="457" y="78" text-anchor="middle">8,120 chunks</text>
+              <rect class="node" x="410" y="140" width="94" height="62" rx="7"/><text class="flow-label" x="457" y="166" text-anchor="middle">parents</text><text class="flow-sub" x="457" y="184" text-anchor="middle">L6/L4/L2</text>
+              <path class="flow-line" d="M146 65 H214 M146 171 H214 M344 108 H410 M457 108 V140"/>
+            </svg>
+            <figcaption>Only touched L8 cells and their parent samples are rewritten. Untouched cells stay in place.</figcaption>
+          </figure>
         </div>
       </div>
     </section>
@@ -240,6 +276,7 @@
         <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">Native geometry</h3><p class="mb-0">Parquet <code>GEOMETRY</code>/WKB, OGC:CRS84. One root geometry column.</p></div></div></div>
         <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">One zstd layer</h3><p class="mb-0">Parquet pages compress internally. Chunks are raw bytes, never compressed again.</p></div></div></div></div>
         <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">Chunked cell</h3><p class="mb-0">8,120 bytes per chunk, one 8 KB page inline, primary-key range reads.</p></div></div></div></div>
+        <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">S2 L8 compaction</h3><p class="mb-0">L8 is the partition; 2,048-row groups sorted by spatial key. Appends rewrite only touched cells.</p></div></div></div>
         <div class="col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><h3 class="h6 text-warning">No build HTML</h3><p class="mb-0">This page is one static file served directly. Bootstrap is a CDN stylesheet; diagrams are inline SVG/CSS.</p></div></div></div></div>
       </div>
     </section>
@@ -250,7 +287,7 @@
       <ul class="list-group list-group-flush">
         <li class="list-group-item bg-transparent">One geometry column, root-level attributes, OGC:CRS84/EPSG:4326 only.</li>
         <li class="list-group-item bg-transparent">Filtered <code>numberMatched</code> scans surviving row groups; it is not a posting-list count.</li>
-        <li class="list-group-item bg-transparent">About 4,026 production Go lines. The remaining bulk is CQL and the GeoParquet reader/writer.</li>
+        <li class="list-group-item bg-transparent">About 4,145 production Go lines. The remaining bulk is CQL and the GeoParquet reader/writer.</li>
       </ul>
     </section>
   </main>
