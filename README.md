@@ -60,6 +60,25 @@ Warm localhost, PostgreSQL 18.6, 6 vCPU, median of 30 requests:
 
 DuckDB ingest: Monaco 12.6 MB / 4,628 features in 1.24–1.27 s; Luxembourg 48.2 MB / 228,273 features in 8.18 s. A one-row append rewrote one Monaco cell and its parents in 0.86 s; repeating the same 4,628-row append kept the count at 4,628. The chunk table holds 13,343 rows of 8,120 bytes inline, with no TOAST indirection. Database size is about 212 MB.
 
+## Heavy cell
+
+One L8 cell with 1,000,000 points, generated in DuckDB:
+
+| Operation | Result |
+| --- | ---: |
+| DuckDB upload | 19.9 s, 1.39 GB peak RSS |
+| Stored detail cell | 10.0 MB, 489 row groups of 2,048 |
+| bbox, 100 rows → JSON | 4.3 ms |
+| bbox, 1,000 rows → JSON | 11.8 ms |
+| attribute filter, 100 rows → JSON | 11.8 ms |
+| id lookup | 10.5 ms |
+| numberMatched over 1M rows | 1.9 s |
+| overview L2 page | 8.5 ms |
+| bbox, 100 rows → GeoParquet | 11.1 ms |
+| one-row append | **20.9 s, 1.39 GB peak; rewrites the 10 MB cell** |
+
+The query numbers are good, but one-file-per-cell append is not acceptable for a dense cell: it reads, merges, and rewrites the whole cell. The next storage change is the DuckLake-style fragment step: append a small sorted delta file, merge fragments on read, and compact when the fragment count or delta size crosses a threshold. The current catalog and 8,120-byte inline chunks stay.
+
 ## Quickstart
 
 ```sh

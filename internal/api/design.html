@@ -54,6 +54,7 @@
       <li class="nav-item"><a class="nav-link" href="#writes">Writes</a></li>
       <li class="nav-item"><a class="nav-link" href="#storage">Storage</a></li>
       <li class="nav-item"><a class="nav-link" href="#reads">Reads</a></li>
+      <li class="nav-item"><a class="nav-link" href="#heavy">Heavy</a></li>
       <li class="nav-item"><a class="nav-link" href="#measured">Measured</a></li>
     </ul>
   </nav>
@@ -158,6 +159,34 @@
             </svg>
             <figcaption>Only touched L8 cells and their parent samples are rewritten. Untouched cells stay in place.</figcaption>
           </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="heavy" class="mb-5" aria-labelledby="heavy-title">
+      <h2 id="heavy-title" class="h3 mb-3">Heavy cell result</h2>
+      <div class="alert alert-danger" role="alert"><strong>One-file append is the current bottleneck.</strong> A one-row append to a 1M-row cell rewrote the whole 10 MB cell in 20.9 s and used 1.39 GB RSS. Queries are fine; partial updates are not.</div>
+      <div class="row g-4">
+        <div class="col-lg-6">
+          <table class="table table-dark table-sm">
+            <caption class="text-secondary">1M points in one L8 cell</caption>
+            <tbody>
+              <tr><th scope="row">DuckDB ingest</th><td class="text-end">19.9 s · 1.39 GB peak</td></tr>
+              <tr><th scope="row">detail file</th><td class="text-end">10.0 MB · 489 row groups</td></tr>
+              <tr><th scope="row">bbox 100 / 1,000</th><td class="text-end">4.3 / 11.8 ms</td></tr>
+              <tr><th scope="row">filter / id</th><td class="text-end">11.8 / 10.5 ms</td></tr>
+              <tr><th scope="row">numberMatched</th><td class="text-end">1.9 s</td></tr>
+              <tr><th scope="row">L2 / GeoParquet 100</th><td class="text-end">8.5 / 11.1 ms</td></tr>
+              <tr><th scope="row">one-row append</th><td class="text-end text-danger">20.9 s · 1.39 GB</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col-lg-6">
+          <div class="card h-100"><div class="card-body">
+            <h3 class="h6 text-warning">Next: fragment compaction</h3>
+            <p>Keep one L8 cell identity, but allow a small base file plus sorted delta files. Appends write only the new rows; reads merge fragments by <code>(key,id)</code>; a compaction threshold merges them back into one 2,048-row-group base. This preserves the catalog shape and moves the cost from every insert to an occasional compaction.</p>
+            <p class="mb-0">Until that exists, a full <code>PUT</code> is the predictable compaction path for dense cells.</p>
+          </div></div>
         </div>
       </div>
     </section>
@@ -286,6 +315,7 @@
       <div class="alert alert-warning" role="status">DuckDB ingest requires the external <code>duckdb</code> binary and spatial extension; the server never links DuckDB. A cell is decompressed logically through Parquet ranges, and dense cells should be sized for the worker memory budget.</div>
       <ul class="list-group list-group-flush">
         <li class="list-group-item bg-transparent">One geometry column, root-level attributes, OGC:CRS84/EPSG:4326 only.</li>
+        <li class="list-group-item bg-transparent">One-file-per-cell append is correct but too expensive for dense cells; fragment compaction is the next storage change.</li>
         <li class="list-group-item bg-transparent">Filtered <code>numberMatched</code> scans surviving row groups; it is not a posting-list count.</li>
         <li class="list-group-item bg-transparent">About 4,145 production Go lines. The remaining bulk is CQL and the GeoParquet reader/writer.</li>
       </ul>
