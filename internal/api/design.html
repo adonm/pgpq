@@ -235,26 +235,28 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <div class="row g-4">
 <div class="col-lg-7">
 <ol class="list-group list-group-numbered">
-<li class="list-group-item bg-transparent">Use a city-sized PBF, not a country extract. Monaco (~1 MB) or Andorra (~4 MB) is enough; avoid Île-de-France and Luxembourg for routine tests.</li>
-<li class="list-group-item bg-transparent">Prepare a DuckDB file with one view per layer and a <code>layer_catalog</code> row for each: view, id, geometry. Keep buildings, places and roads in separate views.</li>
-<li class="list-group-item bg-transparent">Run one test worker on :8094 with <code>GOMEMLIMIT=1GiB</code> and the DuckDB CLI path. Do not point tests at public :8080/:8081.</li>
-<li class="list-group-item bg-transparent">Load one view, run bbox/filter/id/GeoParquet checks, delete the test collection, then move to the next layer. Never run all layers concurrently.</li>
+<li class="list-group-item bg-transparent">Use a city-sized PBF: Monaco (~1 MB) or Andorra (~4 MB). Avoid Île-de-France (387 MB) and Luxembourg (56 MB) for routine runs.</li>
+<li class="list-group-item bg-transparent"><code>prepare.sh</code> converts one OSM PBF to per-layer GeoParquet 2.0 through a 768 MB / 1 CPU GDAL container; <code>build.sh</code> assembles a DuckDB file with one view per layer and a <code>layer_catalog</code>.</li>
+<li class="list-group-item bg-transparent"><code>serve.sh</code> creates a disposable <code>pgpq_osm_bench</code> database and starts a writable worker on :8094 with <code>GOMEMLIMIT=1GiB</code>, two connections, and migrations. It refuses public ports.</li>
+<li class="list-group-item bg-transparent"><code>run.sh</code> loads one layer, times bbox/filter/id/GeoParquet/overview/numberMatched, verifies both GeoParquet pages with GDAL, deletes the test collection, then moves on.</li>
 </ol>
+<p class="small text-body-secondary mb-0">Harness measurements: Monaco uploads 0.23–0.28 s, bbox 4–9 ms, id 2–3 ms, GeoParquet 27–34 ms; Andorra uploads 0.31–0.61 s. The test worker peaked at 228 MB RSS. See <code>bench/osm/README.md</code>.</p>
 </div>
 <div class="col-lg-5">
-<pre>PGPQ_DUCKDB=/path/to/duckdb \
-GOMEMLIMIT=1GiB bin/pgpq serve \
-  --addr 127.0.0.1:8094
+<pre>export PGPQ_DUCKDB=/path/to/duckdb
+just pg-up
+go build -o bin/pgpq ./cmd/pgpq
 
-curl -X POST -T layers.duckdb \
-  -H 'Content-Type: application/vnd.duckdb' \
-  'http://127.0.0.1:8094/v2/collections/buildings?view=layer_buildings'
+# terminal 2: disposable :8094 worker
+bench/osm/serve.sh
 
-curl 'http://127.0.0.1:8094/v2/collections/buildings/items?bbox=7.41,43.73,7.43,43.75&limit=100'
-
-curl 'http://127.0.0.1:8094/v2/collections/buildings/items?bbox=7.41,43.73,7.43,43.75&limit=1000&f=geoparquet' \
-  -o page.parquet</pre>
-<p class="small text-body-secondary mb-0">For a raw PBF, use <code>osmium extract</code> and <code>osmium tags-filter</code> before converting; retain the filtered extract only and convert one layer at a time.</p>
+# terminal 1: prepare -> DuckDB -> POST
+# benchmark -> cleanup
+bench/osm/run.sh \
+  --pbf monaco.osm.pbf \
+  --work /tmp/opencode/bench/osm-monaco \
+  --reps 10</pre>
+<p class="small text-body-secondary mb-0">One layer at a time; one request at a time. GDAL is capped at 768 MB, DuckDB at 512 MB/1 thread, and the server at 1 GiB. Country extracts are intentionally out of scope.</p>
 </div>
 </div>
 </section>

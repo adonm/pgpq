@@ -79,6 +79,17 @@ One L8 cell with 1,000,000 points, generated in DuckDB:
 
 The query numbers are good. The one-file-per-cell rewrite is acceptable under the intended **hourly batch** model: one `POST` per batch, each touched cell rewritten once. Do not append per row. A 1M-row cell moves 10 MB and takes ~21 s per batch; the catalog stays one row per cell with no fragment backlog. Fragment compaction remains optional if the update cadence tightens or cells grow much larger.
 
+## OSM benchmark harness
+
+`bench/osm/` loads one small OSM PBF as separate layers, one layer at a time. It uses capped GDAL and DuckDB processes, a disposable PostgreSQL database, a test worker on `:8094`, GDAL-verifies every GeoParquet response, and cleans up through SQL. Start with [bench/osm/README.md](bench/osm/README.md).
+
+```sh
+bench/osm/serve.sh
+bench/osm/run.sh --pbf monaco.osm.pbf --work /tmp/opencode/bench/osm-monaco --reps 10
+```
+
+Monaco and Andorra were measured end to end; the harness never targets public `:8080`/`:8081`. Luxembourg and Île-de-France are out of scope for routine runs.
+
 ## Quickstart
 
 ```sh

@@ -1,0 +1,5 @@
+# name|osm_layer|where|select|filter|id_sql|assert_field
+# One small PBF at a time; one layer per GDAL and DuckDB pass.
+buildings|multipolygons|building IS NOT NULL|osm_id,osm_way_id,name,building,amenity,landuse,other_tags|building IS NOT NULL|printf('b:%s:%s', coalesce(osm_id,''), coalesce(osm_way_id,''))|building
+places|points||osm_id,name,place,man_made,barrier,highway,ref,address,other_tags|place IS NOT NULL|printf('p:%s', osm_id)|place
+roads|lines|highway IS NOT NULL|osm_id,name,highway,other_tags|highway IS NOT NULL|printf('r:%s', osm_id)|highway
