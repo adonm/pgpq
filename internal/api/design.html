@@ -52,6 +52,7 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 <li class="nav-item"><a class="nav-link" href="#components">Components</a></li>
 <li class="nav-item"><a class="nav-link" href="#ingest">Ingest flow</a></li>
 <li class="nav-item"><a class="nav-link" href="#read">Read flow</a></li>
+<li class="nav-item"><a class="nav-link" href="#howto">How to test</a></li>
 <li class="nav-item"><a class="nav-link" href="#reference">Reference</a></li>
 <li class="nav-item"><a class="nav-link" href="#measured">Measured</a></li>
 </ul>
@@ -226,6 +227,36 @@ pre{color:#dbe8ff;background:var(--code);border:1px solid var(--line);border-rad
 </svg>
 <figcaption>Cell pruning, Parquet row-group statistics and exact evaluation are separate layers. A virtual GeoParquet response replaces a tile pyramid for compatible clients.</figcaption>
 </figure>
+</section>
+
+<section id="howto" class="mb-5" aria-labelledby="howto-title">
+<div class="d-flex align-items-baseline gap-2"><h2 id="howto-title" class="h3 mb-3">How to test a small OSM chunk</h2><span class="c4">Diátaxis how-to</span></div>
+<p class="text-body-secondary">Use one small extract and one layer at a time. This is task guidance, not part of the topology.</p>
+<div class="row g-4">
+<div class="col-lg-7">
+<ol class="list-group list-group-numbered">
+<li class="list-group-item bg-transparent">Use a city-sized PBF, not a country extract. Monaco (~1 MB) or Andorra (~4 MB) is enough; avoid Île-de-France and Luxembourg for routine tests.</li>
+<li class="list-group-item bg-transparent">Prepare a DuckDB file with one view per layer and a <code>layer_catalog</code> row for each: view, id, geometry. Keep buildings, places and roads in separate views.</li>
+<li class="list-group-item bg-transparent">Run one test worker on :8094 with <code>GOMEMLIMIT=1GiB</code> and the DuckDB CLI path. Do not point tests at public :8080/:8081.</li>
+<li class="list-group-item bg-transparent">Load one view, run bbox/filter/id/GeoParquet checks, delete the test collection, then move to the next layer. Never run all layers concurrently.</li>
+</ol>
+</div>
+<div class="col-lg-5">
+<pre>PGPQ_DUCKDB=/path/to/duckdb \
+GOMEMLIMIT=1GiB bin/pgpq serve \
+  --addr 127.0.0.1:8094
+
+curl -X POST -T layers.duckdb \
+  -H 'Content-Type: application/vnd.duckdb' \
+  'http://127.0.0.1:8094/v2/collections/buildings?view=layer_buildings'
+
+curl 'http://127.0.0.1:8094/v2/collections/buildings/items?bbox=7.41,43.73,7.43,43.75&limit=100'
+
+curl 'http://127.0.0.1:8094/v2/collections/buildings/items?bbox=7.41,43.73,7.43,43.75&limit=1000&f=geoparquet' \
+  -o page.parquet</pre>
+<p class="small text-body-secondary mb-0">For a raw PBF, use <code>osmium extract</code> and <code>osmium tags-filter</code> before converting; retain the filtered extract only. The repository harness is the repeatable path once the background OSM iteration lands.</p>
+</div>
+</div>
 </section>
 
 <section id="reference" class="mb-5" aria-labelledby="reference-title">
