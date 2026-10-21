@@ -245,9 +245,8 @@ type decodedRow struct {
 	geometry []byte
 }
 
-func readRows(t *testing.T, reader *parquet.Reader) []decodedRow {
+func rowColumnIndexes(t *testing.T, fields []parquet.Field) (int, int) {
 	t.Helper()
-	fields := reader.Schema().Fields()
 	idColumn := -1
 	geometryColumn := -1
 	for i := range fields {
@@ -261,25 +260,35 @@ func readRows(t *testing.T, reader *parquet.Reader) []decodedRow {
 	if idColumn < 0 || geometryColumn < 0 {
 		t.Fatalf("schema lacks id or geometry: %v", fields)
 	}
+	return idColumn, geometryColumn
+}
+
+func decodeRow(row parquet.Row, idColumn, geometryColumn int) decodedRow {
+	var decoded decodedRow
+	for _, value := range row {
+		switch int(value.Column()) {
+		case idColumn:
+			if !value.IsNull() {
+				decoded.id = string(value.ByteArray())
+			}
+		case geometryColumn:
+			if !value.IsNull() {
+				decoded.geometry = append([]byte(nil), value.ByteArray()...)
+			}
+		}
+	}
+	return decoded
+}
+
+func readRows(t *testing.T, reader *parquet.Reader) []decodedRow {
+	t.Helper()
+	idColumn, geometryColumn := rowColumnIndexes(t, reader.Schema().Fields())
 	var rows []decodedRow
 	buffer := make([]parquet.Row, 128)
 	for {
 		n, err := reader.ReadRows(buffer)
 		for i := 0; i < n; i++ {
-			var row decodedRow
-			for _, value := range buffer[i] {
-				switch int(value.Column()) {
-				case idColumn:
-					if !value.IsNull() {
-						row.id = string(value.ByteArray())
-					}
-				case geometryColumn:
-					if !value.IsNull() {
-						row.geometry = append([]byte(nil), value.ByteArray()...)
-					}
-				}
-			}
-			rows = append(rows, row)
+			rows = append(rows, decodeRow(buffer[i], idColumn, geometryColumn))
 		}
 		if errors.Is(err, io.EOF) {
 			break
@@ -292,6 +301,17 @@ func readRows(t *testing.T, reader *parquet.Reader) []decodedRow {
 		}
 	}
 	return rows
+}
+
+func readCurrentRow(t *testing.T, reader *parquet.Reader) decodedRow {
+	t.Helper()
+	idColumn, geometryColumn := rowColumnIndexes(t, reader.Schema().Fields())
+	buffer := make([]parquet.Row, 1)
+	n, err := reader.ReadRows(buffer)
+	if n != 1 {
+		t.Fatalf("read %d rows: %v", n, err)
+	}
+	return decodeRow(buffer[0], idColumn, geometryColumn)
 }
 
 func TestBuildVirtualGeoParquet(t *testing.T) {
@@ -523,6 +543,18 @@ func TestBuildVirtualGeoParquet(t *testing.T) {
 			t.Fatalf("virtual row %d geometry changed", i)
 		}
 	}
+	seekReader := parquet.NewReader(virtualFile)
+	seeks := []int64{0, 1, 2, 2 + int64(len(featuresB)) - 1, wantRows - 1}
+	for _, rowIndex := range seeks {
+		if err := seekReader.SeekToRow(rowIndex); err != nil {
+			t.Fatalf("seek %d: %v", rowIndex, err)
+		}
+		row := readCurrentRow(t, seekReader)
+		if row.id != want[rowIndex].ID || !bytes.Equal(row.geometry, want[rowIndex].Geometry) {
+			t.Fatalf("seek %d read id %q", rowIndex, row.id)
+		}
+	}
+	seekReader.Close()
 }
 
 func TestBuildSingleShard(t *testing.T) {

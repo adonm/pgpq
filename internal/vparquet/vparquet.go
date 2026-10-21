@@ -64,7 +64,7 @@ func Build(shards []Shard) (Layout, error) {
 		RowGroups:        make(thrift.Slice[format.RowGroup], 0, rowGroupCount(opened)),
 		KeyValueMetadata: mergeKeyValues(opened[0].meta.KeyValueMetadata, geoValue, hasGeo),
 		CreatedBy:        opened[0].meta.CreatedBy,
-		ColumnOrders:     slices.Clone(opened[0].meta.ColumnOrders),
+		ColumnOrders:     columnOrders(opened),
 	}
 	segments := make([]Segment, 0, len(opened))
 	dataLength := int64(len(magic))
@@ -120,6 +120,15 @@ func rowGroupCount(shards []shardFile) int {
 		total += len(shards[i].meta.RowGroups)
 	}
 	return total
+}
+
+func columnOrders(shards []shardFile) thrift.Slice[format.ColumnOrder] {
+	for i := range shards {
+		if len(shards[i].meta.ColumnOrders) > 0 {
+			return slices.Clone(shards[i].meta.ColumnOrders)
+		}
+	}
+	return nil
 }
 
 func invalid(message string, args ...any) error {
